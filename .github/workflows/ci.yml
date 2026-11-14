@@ -84,11 +84,15 @@ jobs:
     # Three shards per OS. One job ran every test binary (`--no-fail-fast`) one after the
     # other: 59, 66 and 75 minutes in the run of 2026-11-14, 37 to 42 of them executing tests.
     # The packages are split by measured run time (about 17 minutes each):
-    #   a: the built-in modules' tests, their build, the API, the PKI crate;
-    #   b: XML, xtask, the server, the protocol crate, the daemon, plus the checks of this job;
+    #   a: the built-in modules' tests (and their second pass without markers), their build,
+    #      the API, the PKI crate;
+    #   b: XML, xtask, the server, the protocol crate, plus the checks of this job (the first
+    #      run measured b at 33 minutes on Linux with the second pass, a at 15);
     #   c: every other package of the workspace (`--exclude` of the two lists, so a new package
     #      lands here and nothing is dropped). The UI parity tests run the `oncl` binary that
-    #      this very `cargo test` builds, so oncl-ui and oncl-cli stay together, in c.
+    #      this very `cargo test` builds, so oncl-ui and oncl-cli stay together, in c; the
+    #      daemon's `maintenance_e2e` (Windows) runs `oncl-winget-harness`, built by
+    #      oncl-winget-setup, so the daemon and that crate stay together, in c as well.
     strategy:
       fail-fast: false
       matrix:
@@ -167,12 +171,12 @@ jobs:
           fi
           # The packages of the shards (see `strategy` above).
           shard_a=(-p oncl-builtin-tests -p oncl-builtins-build -p oncl-api -p oncl-pki)
-          shard_b=(-p oncl-xml -p xtask -p oncl-server -p oncl-protocol -p openncalayer)
+          shard_b=(-p oncl-xml -p xtask -p oncl-server -p oncl-protocol)
           case "${{ matrix.shard }}" in
             a) scope=("${shard_a[@]}") ;;
             b) scope=("${shard_b[@]}") ;;
             c) scope=(--workspace)
-               for p in oncl-builtin-tests oncl-builtins-build oncl-api oncl-pki oncl-xml xtask oncl-server oncl-protocol openncalayer; do scope+=(--exclude "$p"); done ;;
+               for p in oncl-builtin-tests oncl-builtins-build oncl-api oncl-pki oncl-xml xtask oncl-server oncl-protocol; do scope+=(--exclude "$p"); done ;;
           esac
           cargo xtask fetch-fixtures
           # The built-in modules' benchmarks (`bench_*`) run in release, in the `bench` job.
@@ -192,7 +196,7 @@ jobs:
       # modules run in the same interpreter on every OS, so this second pass (11 minutes) runs
       # on Linux only.
       - name: Built-in modules without markers
-        if: runner.os == 'Linux' && matrix.shard == 'b'
+        if: runner.os == 'Linux' && matrix.shard == 'a'
         shell: bash
         run: ONCL_TEST_NO_MARKERS=1 cargo test -p oncl-builtin-tests -- --skip bench_
       # The daemon as releases build it (no `e2e-prompter`, no `token-emulator`): the token
@@ -491,8 +495,9 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
-      # Saved from main only (a copy per pull request and per tag filled the repository's 10 GB
-      # of cache and evicted the test jobs' caches), and only when the key was not an exact hit.
+      # Saved from main only, and only when the key was not an exact hit. Measured on
+      # 2026-11-14: one copy of this cache per ref (pull request, branch, tag), 12.8 GB of
+      # caches against the repository's 10 GB limit.
       - name: Save the Windows 7 build cache
         if: ${{ github.ref == 'refs/heads/main' && steps.win7-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
