@@ -14,11 +14,14 @@ on:
 permissions:
   contents: read
 
-# A newer push to a pull request cancels the older run of the same pull request; a run on
-# main (and the scheduled and manual ones) always finishes.
+# A newer push to a pull request cancels the older run of the same pull request. Every other
+# run (a push to main, the scheduled and the manual ones) has its own group, the commit: with
+# one group per branch GitHub cancels a run that is still waiting behind the running one as
+# soon as a newer one is queued (seen on 2026-11-14: the run of a merge commit never started
+# and was cancelled one second after the next merge), and a commit on main is left unchecked.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
