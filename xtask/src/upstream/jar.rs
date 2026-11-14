@@ -451,4 +451,31 @@ mod tests {
         );
         assert_ne!(cert_ref(&root), cert_ref(&leaf));
     }
+
+    #[test]
+    fn no_signer_is_recorded_when_its_certificate_is_not_in_the_block() {
+        let (mut cms, _, leaf) = block("Publisher");
+        // The SignerInfo names the signer by issuer and serial number; its serial is the
+        // last occurrence of the leaf's in the block (the certificate comes first). Change
+        // it (same length), so that the SignerInfo names a certificate the block lacks.
+        let serial = leaf.tbs_certificate().serial_number().as_bytes().to_vec();
+        let at = cms
+            .windows(serial.len())
+            .rposition(|w| w == serial.as_slice())
+            .expect("serial in the SignerInfo");
+        let in_certificate = cms
+            .windows(serial.len())
+            .position(|w| w == serial.as_slice())
+            .expect("serial in the certificate");
+        assert!(
+            at > in_certificate,
+            "two occurrences: certificate and SignerInfo"
+        );
+        *cms[at..at + serial.len()].last_mut().unwrap() ^= 1;
+
+        assert!(signer_certificate(&cms).is_none());
+        let mut entries = BTreeMap::new();
+        entries.insert("META-INF/PUBLISHER.RSA".to_owned(), cms);
+        assert!(jar_facts(&entries, 0, &[]).signers.is_empty());
+    }
 }
