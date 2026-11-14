@@ -30,13 +30,24 @@ pub const REQUIRED: [&str; 13] = [
     "404.html",
 ];
 
-/// The external places a page may link to (`<a href>` only), as prefixes: the project's
-/// repository (releases, the `upstream` branch, issues, the README) and its AUR package.
-/// Another one needs a reason here.
-pub const EXTERNAL_ALLOWED: [&str; 2] = [
+/// The external places a page may link to (`<a href>` only): the project's repository
+/// (releases, the `upstream` branch, issues, the README), its AUR package and the project's
+/// Telegram chat. An entry ending in `/` is a prefix; any other entry is that page itself or
+/// something below it (`<entry>/…`), never another name that merely starts with it. Another
+/// one needs a reason here.
+pub const EXTERNAL_ALLOWED: [&str; 3] = [
     "https://github.com/arynyklas/OpenNCALayer/",
     "https://aur.archlinux.org/packages/openncalayer-bin",
+    "https://t.me/OpenNCALayer",
 ];
+
+/// Whether `value` is the allowed place `entry` or lies below it (see [`EXTERNAL_ALLOWED`]).
+fn allowed_by(entry: &str, value: &str) -> bool {
+    match value.strip_prefix(entry) {
+        Some(rest) => entry.ends_with('/') || rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
 
 /// The catalog pages: each row of the ports' table carries the bundle's symbolic name.
 const CATALOGS: [&str; 3] = [
@@ -408,7 +419,7 @@ fn check_link(
         if link.tag != "a" || link.attr != "href" {
             return Err(format!("{what}: external resources are not allowed"));
         }
-        if !EXTERNAL_ALLOWED.iter().any(|p| value.starts_with(p)) {
+        if !EXTERNAL_ALLOWED.iter().any(|p| allowed_by(p, value)) {
             return Err(format!("{what}: external link outside the allowed places"));
         }
         None
@@ -629,11 +640,16 @@ mod tests {
     fn external_link_outside_allowlist_is_rejected() {
         let body = "<a href=\"https://github.com/arynyklas/OpenNCALayer/releases\">ok</a>\
                     <a href=\"https://aur.archlinux.org/packages/openncalayer-bin\">ok</a>\
+                    <a href=\"https://t.me/OpenNCALayer\">ok</a>\
+                    <a href=\"https://t.me/OpenNCALayer/12\">ok</a>\
                     <a href=\"https://github.com/arynyklas/OpenNCALayer-other/\">no</a>\
+                    <a href=\"https://aur.archlinux.org/packages/openncalayer-bin-evil\">no</a>\
+                    <a href=\"https://t.me/OpenNCALayerFake\">no</a>\
+                    <a href=\"https://t.me/OpenNCALayer_chat\">no</a>\
                     <a href=\"https://example.com/\">no</a>";
         let dir = site(&[("index.html", page("ru", body))]);
         let errors = problems(&dir);
-        assert_eq!(errors.matches("outside the allowed").count(), 2, "{errors}");
+        assert_eq!(errors.matches("outside the allowed").count(), 5, "{errors}");
     }
 
     #[test]

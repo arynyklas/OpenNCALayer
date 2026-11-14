@@ -21,6 +21,8 @@ use crate::windows::Desktop;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The project's repository.
 pub const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+/// The project's chat (a Telegram group, not a channel).
+pub const CHAT: &str = "https://t.me/OpenNCALayer";
 
 /// The third-party licences, as `cargo xtask licenses` writes them.
 const THIRD_PARTY: &str = include_str!("../assets/THIRD-PARTY.txt");
@@ -187,6 +189,7 @@ fn create(desktop: &Desktop, tab: i32) -> Result<(), PlatformError> {
     ui.set_version(VERSION.into());
     ui.set_commit(desktop.about.commit.as_str().into());
     ui.set_repository(REPOSITORY.into());
+    ui.set_chat(CHAT.into());
     ui.set_bundles(items(
         desktop
             .about
@@ -212,7 +215,8 @@ fn create(desktop: &Desktop, tab: i32) -> Result<(), PlatformError> {
         ui.set_selected_crate(0);
         show_crate(&ui, 0);
     }
-    ui.on_open_repository(open_repository);
+    ui.on_open_repository(|| open_in_browser(REPOSITORY, "the repository"));
+    ui.on_open_chat(|| open_in_browser(CHAT, "the project chat"));
     ui.on_dismiss(close);
     ui.window().on_close_requested(|| {
         close();
@@ -242,18 +246,18 @@ fn show_crate(ui: &AboutWindow, i: i32) {
     ui.set_crate_texts(licences.texts_of(i).into());
 }
 
-/// Opens the repository in the default browser, off the event loop (a browser may take its
-/// time to start).
-fn open_repository() {
+/// Opens `url` (named `what` in the log) in the default browser, off the event loop (a
+/// browser may take its time to start).
+fn open_in_browser(url: &'static str, what: &'static str) {
     let opened = std::thread::Builder::new()
         .name("browser".into())
-        .spawn(|| {
-            if let Err(e) = webbrowser::open(REPOSITORY) {
-                tracing::warn!(error = %e, "cannot open the repository in a browser");
+        .spawn(move || {
+            if let Err(e) = webbrowser::open(url) {
+                tracing::warn!(error = %e, "cannot open {what} in a browser");
             }
         });
     if let Err(e) = opened {
-        tracing::warn!(error = %e, "cannot open the repository in a browser");
+        tracing::warn!(error = %e, "cannot open {what} in a browser");
     }
 }
 
