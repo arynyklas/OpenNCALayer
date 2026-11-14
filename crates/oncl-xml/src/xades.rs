@@ -43,9 +43,6 @@ const SHA256_URI: &str = "http://www.w3.org/2001/04/xmlenc#sha256";
 /// Timeout of each OCSP request of [`XadesLevel::Lt`].
 const OCSP_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Timeout of each CRL download of [`XadesLevel::Lt`].
-const CRL_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// How much a XAdES signature carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum XadesLevel {
@@ -339,7 +336,7 @@ fn revocation_values(
         let Some(url) = ocsp::ocsp_url(cert) else {
             // A CA naming no responder (as the NCA's intermediates): its CRL.
             let (crls, status) =
-                crl::fetch_for(cert, issuer, http, CRL_TIMEOUT, now).map_err(|error| {
+                crl::fetch_for(cert, issuer, http, crl::TIMEOUT, now).map_err(|error| {
                     XadesError::Crl {
                         subject: subject.clone(),
                         url: crl::crl_urls(cert).into_iter().next().unwrap_or_default(),

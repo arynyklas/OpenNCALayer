@@ -49,7 +49,10 @@ use x509_cert::ext::pkix::{
 
 pub use x509_cert::crl::CertificateList;
 
-/// Timeout of a CRL download.
+/// Timeout of a CRL download, connecting included: 30 s, not the 5 s of
+/// [`crate::ocsp::TIMEOUT`], because the CRLs of the NCA CAs run to megabytes. Every CRL
+/// download of the SDK uses it: path revocation of the validator, XAdES-LT completion. The
+/// key chooser downloads none, so its 6 s OCSP budget does not involve it.
 pub const TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Largest accepted CRL: 64 MiB. The NCA CRLs of end-entity certificates run to tens of
