@@ -53,7 +53,7 @@ id = "openssl"
 tool = "OpenSSL"
 version = "3."
 match_version = "prefix"
-role = "RSA CMS/CAdES verification with full path validation, raw signatures, X.509 and PKCS#12 reading, RFC 3161 token verification"
+role = "RSA CMS/CAdES verification with full path validation, raw signatures, X.509 and PKCS#12 reading, RFC 3161 token verification, CMS encryption/decryption of RSA recipients (cms -encrypt / -decrypt, both directions)"
 
 [[oracle]]
 id = "pyhanko"
@@ -95,7 +95,7 @@ tool = "Kalkan JCE provider kalkancrypt + kalkancrypt_xmldsig (Java verifier xta
 version = "kalkancrypt 0.7.8 + kalkancrypt_xmldsig 0.5.2"
 match_version = "exact"
 pin = "jar sha256 5588f9ae (kalkancrypt) and 6bb88c85 (kalkancrypt_xmldsig), full values in the artifact entries; JDK 17+ source launcher"
-role = "independent GOST R 34.10-2004 / 34.10-2015-512 verifier of signatures produced by oncl and NCANode: raw, JWS ECGOST3410-2015-512, WS-Security XMLDSig (signature value and reference digests judged apart); LOCAL-ONLY, not reproducible in CI"
+role = "independent GOST R 34.10-2004 / 34.10-2015-512 verifier of signatures produced by oncl and NCANode: raw, JWS ECGOST3410-2015-512, WS-Security XMLDSig (signature value and reference digests judged apart); and the CMS envelope maker/reader (RSA key transport with DES-EDE3-CBC only: it has no GOST envelope); LOCAL-ONLY, not reproducible in CI"
 local_only = true
 
 [[oracle.artifact]]
@@ -238,6 +238,16 @@ routes = []
 [[capability]]
 id = "timestamp"
 title = "RFC 3161 acquire/verify against the loopback TSA"
+routes = []
+
+[[capability]]
+id = "cms.encrypt"
+title = "CMS encryption (EnvelopedData / AuthEnvelopedData) for RSA recipients, library level"
+routes = []
+
+[[capability]]
+id = "cms.decrypt"
+title = "CMS decryption of envelopes made by OpenSSL and Kalkan, library level"
 routes = []
 
 [[capability]]
@@ -1596,9 +1606,9 @@ expected = "crypto=ok ours=Invalid/sig=Passed/chain=Failed/validity=Passed/ts=Fa
 # `Profile(SigningTimeForbidden)`, no `ades_level`, verdict Invalid); a fresh Linux
 # `platform-interop` run has not yet confirmed the full grade string.
 [[excluded]]
-id = "envelope"
-title = "CMS encryption/decryption (envelope), RSA and KZ GOST profiles"
-reason = "G01/G02 (the KZ GOST encryption backend) is the one external blocker of the platform: no encrypt/decrypt implementation exists in oncl, so there is nothing to judge; no RSA-only substitute is claimed"
+id = "envelope-gost"
+title = "CMS encryption/decryption with a KZ GOST profile (GOST 34.310-2004 / 34.10-2015 recipients)"
+reason = "no KZ GOST CMS envelope profile is proven: the Kalkan provider has no key agreement, no GOST content cipher and no GOST recipient in its CMS layer (row envelope-kalkan-gost-refused records its refusal), so no independent tool writes or reads such an envelope; oncl refuses a GOST recipient with a named reason and invents no profile (fixtures/platform/envelope/profiles.toml)"
 
 [[case]]
 id = "wsse-sign-rsa"
@@ -2127,3 +2137,43 @@ profile = "rsa"
 oracles = ["asn1crypto", "cryptography"]
 what = "cheap reproduction of D6: a 128 MiB classic-xref PDF of about 8000 pages with 16 KiB content streams, signed adbe.pkcs7.detached; independent ByteRange decomposition; one flipped bit rejected"
 expected = "size=0.1GiB crypto=ok ours=Valid decomposition=streamed ByteRange sha256 = messageDigest, RSA over signedAttrs ok, range covers the file altered=rejected by oncl and the independent ByteRange digest"
+
+[[case]]
+id = "envelope-openssl-opens-ours-rsa-oaep"
+capability = "cms.encrypt"
+profile = "rsa"
+oracles = ["openssl"]
+what = "oncl encrypts for two RSA recipients (RSAES-OAEP SHA-256 with AES-256-GCM as AuthEnvelopedData and with AES-256-CBC as EnvelopedData; known length as DER and unknown length as indefinite BER; 0 bytes to 3 MiB); OpenSSL cms -decrypt returns the plaintext for each recipient and refuses a GCM envelope with a changed tag or ciphertext byte"
+expected = "ours=encrypted openssl-gcm=ok/2-recipients openssl-cbc=ok/2-recipients tamper-gcm=rejected"
+
+[[case]]
+id = "envelope-ours-opens-openssl-rsa-oaep"
+capability = "cms.decrypt"
+profile = "rsa"
+oracles = ["openssl"]
+what = "OpenSSL cms -encrypt with RSAES-OAEP SHA-256 for two recipients (AES-128/192/256-CBC, AES-128/256-GCM, DER and -stream BER, 0 bytes to 3 MiB); oncl decrypts with the default options, reports GCM as authenticated and CBC as unauthenticated, and refuses a GCM envelope with a changed tag leaving nothing staged"
+expected = "openssl=encrypted ours-cbc=ok/unauthenticated ours-gcm=ok/authenticated tamper-gcm=rejected"
+
+[[case]]
+id = "envelope-ours-opens-openssl-rsa-pkcs1-legacy"
+capability = "cms.decrypt"
+profile = "rsa"
+oracles = ["openssl"]
+what = "OpenSSL cms -encrypt with its default RSAES-PKCS1-v1_5 key transport (AES-256-CBC and AES-256-GCM): oncl refuses it by default and decrypts it with the explicit legacy opt-in, reporting it as legacy"
+expected = "ours-default=UnsupportedProfile ours-legacy=ok"
+
+[[case]]
+id = "envelope-ours-opens-kalkan-rsa-3des-legacy"
+capability = "cms.decrypt"
+profile = "rsa"
+oracles = ["kalkan"]
+what = "Kalkan CMSEnvelopedDataGenerator makes an EnvelopedData for an RSA recipient (PKCS#1 v1.5, DES-EDE3-CBC, 3 MiB); Kalkan reads its own message; oncl refuses it by default and decrypts it as legacy; Kalkan cannot open oncl's RSAES-OAEP envelopes (AuthEnvelopedData and CBC)"
+expected = "kalkan-makes=ok kalkan-opens-own=ok ours-default=UnsupportedProfile ours-legacy=ok/rsa-pkcs1+des-ede3 kalkan-opens-ours=refused+refused"
+
+[[case]]
+id = "envelope-kalkan-gost-refused"
+capability = "cms.encrypt"
+profile = "gost2015"
+oracles = ["kalkan"]
+what = "the evidence that no KZ GOST envelope profile can be proven: Kalkan makes an envelope for an RSA certificate and refuses one for a GOST 2015-512 and for a GOST 2004 certificate; oncl refuses a GOST recipient with the reason"
+expected = "kalkan-rsa=ok kalkan-gost2015=refused kalkan-gost2004=refused ours-gost=refused/GostKey"

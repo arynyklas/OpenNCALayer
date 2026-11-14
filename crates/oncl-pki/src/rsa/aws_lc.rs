@@ -68,3 +68,21 @@ pub(super) fn decrypt(
     out.truncate(len);
     Ok(out)
 }
+pub(super) fn decrypt_pkcs1_v15(
+    pkcs8: &[u8],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, KeyError> {
+    let key = rsa::PrivateDecryptingKey::from_pkcs8(pkcs8).map_err(|_| KeyError::BackendFailure)?;
+    let key = rsa::Pkcs1PrivateDecryptingKey::new(key).map_err(|_| KeyError::BackendFailure)?;
+    if ciphertext.len() != key.key_size_bytes() {
+        return Err(KeyError::DecryptionFailed);
+    }
+    let mut out = Zeroizing::new(vec![0; key.min_output_size()]);
+    let len = key
+        .decrypt(ciphertext, &mut out)
+        .map_err(|_| KeyError::DecryptionFailed)?
+        .len();
+    out[len..].fill(0);
+    out.truncate(len);
+    Ok(out)
+}

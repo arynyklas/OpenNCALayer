@@ -50,3 +50,7 @@ pub(crate) fn decrypt(pkcs8: &[u8], ciphertext: &[u8], label: &[u8]) -> Result<V
     let mut plaintext = plaintext;
     Ok(std::mem::take(&mut *plaintext))
 }
+pub(crate) fn decrypt_pkcs1_v15(pkcs8: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>, KeyError> {
+    let mut plaintext: Zeroizing<Vec<u8>> = native::decrypt_pkcs1_v15(pkcs8, ciphertext)?;
+    Ok(std::mem::take(&mut *plaintext))
+}

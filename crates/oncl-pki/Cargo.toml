@@ -24,9 +24,11 @@ extra-roots = ["dep:webpki-root-certs"]
 aes.workspace = true
 base64.workspace = true
 cbc.workspace = true
+ctr.workspace = true
 der.workspace = true
 des.workspace = true
 getrandom.workspace = true
+ghash.workspace = true
 gost94.workspace = true
 hmac.workspace = true
 # Response heads of plain HTTP sent through a proxy (`http::forward`).
@@ -77,6 +79,10 @@ oncl-registry = { path = "../oncl-registry", features = ["testing"] }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `listen` with a backlog of 0: a local address whose connections never complete.
 libc.workspace = true
+
+[[test]]
+name = "envelope"
+required-features = ["testing"]
 
 [[test]]
 name = "tsp"

@@ -113,7 +113,9 @@ refused), and `overload-slot-release` passed on the strength of a late client on
 
 ## Limits of the proof (state them in every report)
 
-* Encryption/decryption (G01/G02) is externally blocked: no case, no substitute.
+* Encryption/decryption (G01/G02): the RSA profiles exist at library level only (`oncl_pki::cms::envelope`, rows `envelope-*`
+  of the interop matrix); no CLI, HTTP or SDK-facade surface. No KZ GOST profile is proven (Kalkan has none: see
+  `[[excluded]] envelope-gost`), and no RSA result is claimed for it.
 * The standalone `oncl-server` uses system PC/SC only and this stand has no virtual reader: per-device APDU
   overlap is measured on the same service library hosted by `platform-token-host` with a counting
   software card. It is labelled as such and is not the standalone binary.
