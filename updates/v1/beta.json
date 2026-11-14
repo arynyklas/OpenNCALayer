@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "channel": "beta",
-  "seq": 3,
-  "generated": "2026-11-13T17:24:59Z",
-  "expires": "2026-12-13T17:24:59Z",
+  "seq": 4,
+  "generated": "2026-11-14T13:31:17Z",
+  "expires": "2026-12-14T13:31:17Z",
   "core": [
     {
       "version": "0.1.0-alpha.7",
@@ -880,6 +880,28 @@
         "ru": "Simourg SimBASE (порт OpenNCALayer)",
         "kk": "Simourg SimBASE (OpenNCALayer порты)",
         "en": "Simourg SimBASE (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.onaidocs",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261114/io.github.arynyklas.openncalayer.port.onaidocs-1.0.0-beta.1.onclp",
+      "sha256": "705a7e356466d9a5b3bd99ae0805329e6895fed950635f5c16d6a81a4a51730d",
+      "size": 194378,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.onaidocs.SignBundle"
+      ],
+      "replaces": {
+        "symname": "onaidocs-sign-bundle",
+        "version": "1.1.0"
+      },
+      "name": {
+        "ru": "OnaiDocs (порт OpenNCALayer)",
+        "kk": "OnaiDocs (OpenNCALayer порты)",
+        "en": "OnaiDocs (OpenNCALayer port)"
       },
       "rollout": 100,
       "revoked": false
