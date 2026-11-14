@@ -401,6 +401,9 @@ pub fn error_code_from_byte(byte: u8) -> Option<ApiErrorCode> {
 }
 /// The journal number of the failure a key use ended with.
 fn outcome_error_code(outcome: &KeyUseOutcome) -> u8 {
+    if outcome.succeeded {
+        return ERROR_CODE_NONE;
+    }
     outcome.error.map_or(ERROR_CODE_NONE, |code| {
         error_code_byte(crate::service::api_code(code))
     })
@@ -447,7 +450,7 @@ fn encode(record: &AuditEvent, identity: [u8; 16]) -> [u8; 160] {
         AppliedState::Unknown => 2,
     };
     bytes[107] = u8::from(record.succeeded);
-    bytes[127] = if record.kind == RecordKind::Final {
+    bytes[127] = if record.kind == RecordKind::Final && !record.succeeded {
         record.error_code
     } else {
         ERROR_CODE_NONE
@@ -512,6 +515,8 @@ fn decode(bytes: &[u8; 160], identity: [u8; 16]) -> io::Result<AuditEvent> {
     // this reader does not know is "unknown", not damage, so a newer table is readable.
     let error_code = match (bytes[104], bytes[127]) {
         (_, ERROR_CODE_NONE) => ERROR_CODE_NONE,
+        // A success has no cause: a code on one is damage, as in `encode`.
+        (2, _) if bytes[107] == 1 => return Err(damaged()),
         (2, byte) if byte <= ERROR_CODE_COUNT => byte,
         (2, _) => ERROR_CODE_UNKNOWN,
         _ => return Err(damaged()),

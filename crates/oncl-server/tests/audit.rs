@@ -2752,3 +2752,62 @@ fn an_unknown_error_number_reads_as_unknown_and_damage_is_still_caught() {
         oncl_server::audit::ERROR_CODE_COUNT
     );
 }
+
+#[test]
+fn recovery_in_the_same_process_keeps_the_code_of_an_outcome_it_knew() {
+    let temp = tempfile::tempdir().unwrap();
+    let guard = DurableAuditGuard::create(config(&temp.path().join("audit"))).unwrap();
+    let ctx = context();
+    let key = KeyId::new("key").unwrap();
+    let _bound = binding(&guard, &ctx, &key);
+    let receipt = guard.before_use(&event(&ctx, &key)).unwrap();
+    // The FINAL cannot be written: the process still knows how the use ended.
+    guard.inject_fault(FaultPoint::BeforeWrite);
+    let outcome = KeyUseOutcome {
+        applied: AppliedState::Applied,
+        succeeded: false,
+        error: Some(ErrorCode::DeadlineExceeded),
+    };
+    assert!(guard.finish(receipt, outcome).is_err());
+    guard.recover().unwrap();
+    let last = guard
+        .records()
+        .unwrap()
+        .into_iter()
+        .rfind(|r| r.kind.is_final())
+        .unwrap();
+    assert_eq!(last.applied, AppliedState::Applied);
+    assert_eq!(last.error_code, 5, "the known cause, not an invented one");
+}
+
+#[test]
+fn a_success_never_has_a_code_in_either_direction() {
+    // Writing: a code on a success outcome is not written.
+    let temp = tempfile::tempdir().unwrap();
+    let guard = DurableAuditGuard::create(config(&temp.path().join("audit"))).unwrap();
+    let ctx = context();
+    let key = KeyId::new("key").unwrap();
+    let _bound = binding(&guard, &ctx, &key);
+    let receipt = guard.before_use(&event(&ctx, &key)).unwrap();
+    guard
+        .finish(
+            receipt,
+            KeyUseOutcome {
+                applied: AppliedState::Applied,
+                succeeded: true,
+                error: Some(ErrorCode::KeyFailure),
+            },
+        )
+        .unwrap();
+    let last = guard
+        .records()
+        .unwrap()
+        .into_iter()
+        .rfind(|r| r.kind.is_final())
+        .unwrap();
+    assert_eq!(last.error_code, 0);
+    // Reading: a FINAL that says succeeded and carries a code is damage (checksum correct).
+    let (_t, guard, file, original) = failed_use_journal();
+    std::fs::write(&file, patched(&original, 2, true, |f| f[107] = 1)).unwrap();
+    assert!(guard.records().is_err());
+}
