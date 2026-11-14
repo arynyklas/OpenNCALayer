@@ -88,7 +88,17 @@ impl Process {
             config_path,
         }
     }
-    pub fn stop(mut self) {
+    /// Stops the server gracefully; its stderr must be empty.
+    pub fn stop(self) {
+        self.finish(false);
+    }
+    /// As [`Self::stop`], for a test that itself ends requests (a client that goes away, a
+    /// deadline): the server logs each (`abort_log`), so those lines, and only those, may
+    /// be on stderr.
+    pub fn stop_after_aborts(self) {
+        self.finish(true);
+    }
+    fn finish(mut self, aborts_allowed: bool) {
         self.child.stdin.take().unwrap().write_all(b"\n").unwrap();
         let output = self.child.wait_with_output_ref();
         assert!(output.0.success(), "standalone exit failure");
@@ -96,13 +106,11 @@ impl Process {
             output.1.trim(),
             "stopped: owned listener and workers released"
         );
-        // A request the server did not finish (a client that went away, a deadline) is
-        // logged: `abort_log`. Anything else on stderr is unexpected.
         assert!(
             output
                 .2
                 .lines()
-                .all(|line| line.starts_with("oncl-server: request aborted: ")),
+                .all(|line| aborts_allowed && line.starts_with("oncl-server: request aborted: ")),
             "unexpected standalone stderr: {}",
             output.2
         );
