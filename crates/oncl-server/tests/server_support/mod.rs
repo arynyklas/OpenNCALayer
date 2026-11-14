@@ -96,7 +96,16 @@ impl Process {
             output.1.trim(),
             "stopped: owned listener and workers released"
         );
-        assert!(output.2.is_empty(), "unexpected standalone stderr");
+        // A request the server did not finish (a client that went away, a deadline) is
+        // logged: `abort_log`. Anything else on stderr is unexpected.
+        assert!(
+            output
+                .2
+                .lines()
+                .all(|line| line.starts_with("oncl-server: request aborted: ")),
+            "unexpected standalone stderr: {}",
+            output.2
+        );
         assert!(
             std::net::TcpStream::connect(self.address).is_err(),
             "owned listener leaked"

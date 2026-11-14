@@ -1,6 +1,7 @@
 pub(crate) mod operations;
 
 use crate::{
+    abort_log,
     audit::{AuditBinding, AuditConfig, AuditHealth, DurableAuditGuard},
     auth::{AccessPolicy, Principal},
     config::{Exposure, ServerConfig, invalid, normalized_peer},
@@ -780,19 +781,28 @@ impl ServiceHost {
 }
 impl HashHost for ServiceHost {
     fn hash(&self, metadata: RequestMetadata, body: Body) -> ResponseFuture {
-        self.telemetry
-            .begin(ObservedRoute::Hash)
-            .observe(self.hash_unobserved(metadata, body))
+        abort_log::watch(
+            "hash",
+            self.telemetry
+                .begin(ObservedRoute::Hash)
+                .observe(self.hash_unobserved(metadata, body)),
+        )
     }
     fn operations(&self, metadata: RequestMetadata, body: Body) -> ResponseFuture {
-        self.telemetry
-            .begin(ObservedRoute::Operations)
-            .observe(self.dispatch_operations(metadata, body, operations::Route::Operations))
+        abort_log::watch(
+            "operations",
+            self.telemetry
+                .begin(ObservedRoute::Operations)
+                .observe(self.dispatch_operations(metadata, body, operations::Route::Operations)),
+        )
     }
     fn batch(&self, metadata: RequestMetadata, body: Body) -> ResponseFuture {
-        self.telemetry
-            .begin(ObservedRoute::Batch)
-            .observe(self.dispatch_operations(metadata, body, operations::Route::Batch))
+        abort_log::watch(
+            "batch",
+            self.telemetry
+                .begin(ObservedRoute::Batch)
+                .observe(self.dispatch_operations(metadata, body, operations::Route::Batch)),
+        )
     }
     fn openapi(&self, metadata: RequestMetadata) -> ResponseFuture {
         let result = self.principal(&metadata).map(|_| {
