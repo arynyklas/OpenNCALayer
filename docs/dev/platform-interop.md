@@ -48,7 +48,7 @@ export ONCL_KALKAN_JAR=$N/bundle1/version0.0/bundle.jar ONCL_KALKAN_XMLDSIG_JAR=
 cargo xtask platform-interop --out target/platform-interop --case wsse-sign-gost --case wsse-tamper-gost --case jws-gost2015-independent --case x509-sign-ours-gost --case x509-sign-ncanode-gost --case plugin-sign-raw-gost
 ```
 
-Без переменной, с отсутствующим файлом, с другим sha256 или с негодной JVM каждая из 12 строк — `BLOCKED` с причиной, которая называет переменную, закреплённый хеш и найденный (так прогон выглядит в CI). Строка, которую судил Kalkan, помечена в отчёте как `oracle: kalkan (local-only, not reproducible in CI)`: её результат воспроизводит только машина с этими jar-ами, а не CI. Если Kalkan отвергнет подпись, сделанную `oncl`, это находка, а не повод править проверяющего: сначала порядок байтов, выбор хеша, каноникализация, набор параметров кривой (ГОСТ 2004 — кривая НУЦ `Pkigovkz2004A`).
+Без переменной, с отсутствующим файлом, с другим sha256 или с негодной JVM каждая из этих 12 строк и обе строки `envelope-*` с Kalkan — `BLOCKED` с причиной, которая называет переменную, закреплённый хеш и найденный (так прогон выглядит в CI). Строка, которую судил Kalkan, помечена в отчёте как `oracle: kalkan (local-only, not reproducible in CI)`: её результат воспроизводит только машина с этими jar-ами, а не CI. Если Kalkan отвергнет подпись, сделанную `oncl`, это находка, а не повод править проверяющего: сначала порядок байтов, выбор хеша, каноникализация, набор параметров кривой (ГОСТ 2004 — кривая НУЦ `Pkigovkz2004A`).
 
 ## Шифрование CMS (envelope)
 
