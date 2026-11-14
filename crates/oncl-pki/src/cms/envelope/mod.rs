@@ -42,6 +42,14 @@
 //! a failed or unauthenticated-so-far message may be published. The caller publishes (renames
 //! the staged file to its final name) only after `Ok`.
 //!
+//! This is weaker than "no plaintext leaves before the tag is verified", and says so: the
+//! library does write unverified plaintext into the sink it is given (a 1 GiB message
+//! cannot be held in memory until its tag at the end is read). The guarantee holds only if
+//! the sink is a real staging area: a temporary file in an owner-only directory that nothing
+//! else reads and that is renamed to its final name after `Ok`, or deleted by `discard`. The
+//! library has no file sink of its own yet; a caller that passes anything else (a network
+//! stream, a visible file) releases unauthenticated plaintext.
+//!
 //! # Memory
 //!
 //! Both directions work on a 64 KiB window. The only structures kept whole are the header
@@ -319,6 +327,15 @@ pub enum EnvelopeError {
     /// The operating system random generator failed.
     #[error("random generator failure")]
     Random,
+    /// RSAES-OAEP encryption of the content-encryption key for a recipient failed: why. A
+    /// key that passed the certificate checks does not normally do this.
+    #[error("encrypting the content-encryption key for recipient {index}: {reason}")]
+    KeyTransport {
+        /// Index in the recipient list.
+        index: usize,
+        /// What the RSA implementation said.
+        reason: String,
+    },
     /// The input could not be read: why.
     #[error("reading the input: {0}")]
     Source(String),
@@ -575,7 +592,7 @@ pub fn encrypt<R: Read, W: Write>(
     // Recipient infos.
     let key_algorithm = oaep_sha256_algorithm()?;
     let mut infos = Vec::with_capacity(keys.len());
-    for (cert, key) in spec.recipients.iter().zip(&keys) {
+    for (index, (cert, key)) in spec.recipients.iter().zip(&keys).enumerate() {
         let tbs = cert.tbs_certificate();
         let rid = IssuerAndSerialNumber {
             issuer: tbs.issuer().clone(),
@@ -588,7 +605,10 @@ pub fn encrypt<R: Read, W: Write>(
                 rsa::Oaep::new::<rsa::sha2::Sha256>(),
                 &cek[..],
             )
-            .map_err(|_| EnvelopeError::Random)?;
+            .map_err(|e| EnvelopeError::KeyTransport {
+                index,
+                reason: e.to_string(),
+            })?;
         infos.push(
             KeyTransRecipientInfo {
                 version: 0,

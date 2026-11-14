@@ -367,8 +367,9 @@ mod tests {
     #[test]
     fn gcm_matches_the_gcm_specification_test_cases() {
         // Test cases 2, 3, 14 and 15 of "The Galois/Counter Mode of Operation" (McGrew,
-        // Viega), the cases without additional data; each in whole and in odd pieces, so
-        // that the partial-block carry is exercised.
+        // Viega), and case 13 at the end: the cases without additional data (1-3 AES-128,
+        // 13-15 AES-256); each in whole and in odd pieces, so that the partial-block carry
+        // is exercised.
         let plaintext = hex(concat!(
             "d9313225f88406e5a55909c5aff5269a86a7a9531534f7da2e4c303d8a318a72",
             "1c3c0c95956809532fcf0e2449a6b525b16aedf5aa0de657ba637b391aafd255"
