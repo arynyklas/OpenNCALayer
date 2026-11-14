@@ -33,6 +33,7 @@ fn done() -> KeyUseOutcome {
     KeyUseOutcome {
         applied: AppliedState::Applied,
         succeeded: true,
+        error: None,
     }
 }
 fn journal(path: &std::path::Path) -> std::path::PathBuf {
@@ -1238,6 +1239,7 @@ fn original_context_event_constructor_cannot_swap_another_pending_use() {
     let outcome = KeyUseOutcome {
         applied: AppliedState::NotApplied,
         succeeded: false,
+        error: None,
     };
     assert!(guard.finish(wrong, outcome).is_err());
     assert_eq!(
@@ -1705,6 +1707,7 @@ fn authorised_plugin_use_records_identity_facts_and_final_without_secrets() {
             KeyUseOutcome {
                 applied: AppliedState::Unknown,
                 succeeded: false,
+                error: None,
             },
         )
         .unwrap();
@@ -1758,7 +1761,14 @@ fn final_states_of_a_plugin_use_are_honest_in_all_three_cases() {
         let receipt = guard.before_use(&plugin_event(&ctx, &key, b"x")).unwrap();
         let succeeded = applied == AppliedState::Applied;
         guard
-            .finish(receipt, KeyUseOutcome { applied, succeeded })
+            .finish(
+                receipt,
+                KeyUseOutcome {
+                    applied,
+                    succeeded,
+                    error: None,
+                },
+            )
             .unwrap();
         assert_eq!(
             guard.plugin_records().unwrap()[0].finished,
@@ -2543,4 +2553,202 @@ fn a_journal_refusal_does_not_spend_a_once_only_grant() {
     let receipt = guard.before_use(&plugin_event(&ctx, &key, b"doc")).unwrap();
     assert!(*policy.0.lock().unwrap(), "accepted by the journal: spent");
     guard.finish(receipt, done()).unwrap();
+}
+
+/// A journal with one failed key use (`KeyFailure`, number 18): its directory, the guard,
+/// the journal file and its bytes.
+fn failed_use_journal() -> (
+    tempfile::TempDir,
+    DurableAuditGuard,
+    std::path::PathBuf,
+    Vec<u8>,
+) {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("audit");
+    let guard = DurableAuditGuard::create(config(&path)).unwrap();
+    let ctx = context();
+    let key = KeyId::new("key").unwrap();
+    let _bound = binding(&guard, &ctx, &key);
+    let receipt = guard.before_use(&event(&ctx, &key)).unwrap();
+    guard
+        .finish(
+            receipt,
+            KeyUseOutcome {
+                applied: AppliedState::Applied,
+                succeeded: false,
+                error: Some(ErrorCode::KeyFailure),
+            },
+        )
+        .unwrap();
+    let file = journal(&path);
+    let bytes = std::fs::read(&file).unwrap();
+    (temp, guard, file, bytes)
+}
+
+/// `bytes` with `change` applied to the frames of `kind` (frame byte 104), each sealed again
+/// with a correct checksum when `seal` says so.
+fn patched(bytes: &[u8], kind: u8, seal: bool, change: impl Fn(&mut [u8])) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    for frame in out.as_chunks_mut::<{ FRAME_BYTES as usize }>().0 {
+        if frame[104] == kind {
+            change(frame);
+            if seal {
+                let mut hash = oncl_pki::digest::HashState::new(oncl_pki::key::HashAlg::Sha256);
+                hash.update(&frame[..128]);
+                frame[128..].copy_from_slice(hash.finish().as_bytes());
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn a_final_carries_the_journal_number_of_the_typed_cause() {
+    use oncl_core::ErrorCode as Core;
+    // Every core code, with the number of the API code it maps to (frame byte 127).
+    let table = [
+        (Core::PermissionDenied, 1u8),
+        (Core::InteractionRequired, 2),
+        (Core::InvalidInput, 3),
+        (Core::SecretRequired, 3),
+        (Core::CapacityExceeded, 4),
+        (Core::DeadlineExceeded, 5),
+        (Core::Cancelled, 6),
+        (Core::InputLimit, 7),
+        (Core::ContainerLimit, 7),
+        (Core::FramingLimit, 8),
+        (Core::MissingTemporaryStore, 9),
+        (Core::MemoryLimit, 10),
+        (Core::TempLimit, 11),
+        (Core::MetadataLimit, 12),
+        (Core::OutputLimit, 13),
+        (Core::AuditFailed, 14),
+        (Core::MissingKeyProvider, 15),
+        (Core::MissingMetadataProvider, 15),
+        (Core::MissingValidationServices, 15),
+        (Core::MissingCadesConfiguration, 15),
+        (Core::KeyNotFound, 16),
+        (Core::ValidationRequired, 17),
+        (Core::Io, 18),
+        (Core::UnsupportedAlgorithm, 18),
+        (Core::KeyFailure, 18),
+    ];
+    for (core, number) in table {
+        let temp = tempfile::tempdir().unwrap();
+        let guard = DurableAuditGuard::create(config(&temp.path().join("audit"))).unwrap();
+        let ctx = context();
+        let key = KeyId::new("key").unwrap();
+        let _bound = binding(&guard, &ctx, &key);
+        let receipt = guard.before_use(&event(&ctx, &key)).unwrap();
+        guard
+            .finish(
+                receipt,
+                KeyUseOutcome {
+                    applied: AppliedState::Applied,
+                    succeeded: false,
+                    error: Some(core),
+                },
+            )
+            .unwrap();
+        let records = guard.records().unwrap();
+        let last = records.iter().find(|r| r.kind.is_final()).unwrap();
+        assert_eq!(last.error_code, number, "{core:?}");
+        assert!(!last.succeeded);
+        assert!(
+            records
+                .iter()
+                .filter(|r| !r.kind.is_final())
+                .all(|r| r.error_code == oncl_server::audit::ERROR_CODE_NONE),
+            "only a FINAL has a code"
+        );
+    }
+}
+
+#[test]
+fn a_success_and_a_recovery_final_carry_no_code() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("audit");
+    let guard = DurableAuditGuard::create(config(&path)).unwrap();
+    let ctx = context();
+    let key = KeyId::new("key").unwrap();
+    let bound = binding(&guard, &ctx, &key);
+    let receipt = guard.before_use(&event(&ctx, &key)).unwrap();
+    guard.finish(receipt, done()).unwrap();
+    let finals: Vec<_> = guard
+        .records()
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.kind.is_final())
+        .collect();
+    assert_eq!(finals.len(), 1);
+    assert_eq!(finals[0].error_code, 0);
+    // The journal bytes of a success keep the byte reserved by the earlier format at zero,
+    // so a journal written before the field existed reads the same way.
+    let bytes = std::fs::read(journal(&path)).unwrap();
+    assert!(
+        bytes
+            .chunks(FRAME_BYTES as usize)
+            .all(|frame| frame[127] == 0)
+    );
+    // A use left open (the process ended) is closed by recovery without a cause.
+    let other = context();
+    let other_bound = binding(&guard, &other, &key);
+    let open = guard.before_use(&event(&other, &key)).unwrap();
+    drop((guard, bound, other_bound, open));
+    let reopened = DurableAuditGuard::open(config(&path)).unwrap();
+    reopened.recover().unwrap();
+    let recovered = reopened
+        .records()
+        .unwrap()
+        .into_iter()
+        .rfind(|r| r.kind.is_final())
+        .unwrap();
+    assert_eq!(recovered.applied, AppliedState::Unknown);
+    assert_eq!(recovered.error_code, 0);
+}
+
+#[test]
+fn an_unknown_error_number_reads_as_unknown_and_damage_is_still_caught() {
+    use oncl_server::audit::{ERROR_CODE_UNKNOWN, error_code_byte, error_code_from_byte};
+    let kind_final = 2;
+    let kind_begin = 1;
+    // The cause as written.
+    let (_t, guard, file, original) = failed_use_journal();
+    let last = |guard: &DurableAuditGuard| {
+        guard
+            .records()
+            .unwrap()
+            .into_iter()
+            .rfind(|r| r.kind.is_final())
+            .unwrap()
+            .error_code
+    };
+    assert_eq!(last(&guard), 18);
+    // A number a newer server may write: unknown, not damage (checksum correct).
+    for number in [ERROR_CODE_UNKNOWN, 20, 77] {
+        let image = patched(&original, kind_final, true, |f| f[127] = number);
+        std::fs::write(&file, image).unwrap();
+        assert_eq!(last(&guard), ERROR_CODE_UNKNOWN, "number {number}");
+    }
+    // A damaged frame is still damage: the number changed without the checksum.
+    let broken = patched(&original, kind_final, false, |f| f[127] = 3);
+    std::fs::write(&file, &broken).unwrap();
+    assert!(guard.records().is_err());
+    assert_eq!(guard.health(), AuditHealth::Failed);
+    // And a code in a frame that is not a FINAL is damage even with a correct checksum.
+    let (_t, guard, file, original) = failed_use_journal();
+    let image = patched(&original, kind_begin, true, |f| f[127] = 3);
+    std::fs::write(&file, image).unwrap();
+    assert!(guard.records().is_err());
+    // The table and its inverse agree, and the numbers are the published ones.
+    for number in 1..=oncl_server::audit::ERROR_CODE_COUNT {
+        let code = error_code_from_byte(number).unwrap();
+        assert_eq!(error_code_byte(code), number);
+    }
+    assert_eq!(error_code_from_byte(0), None);
+    assert_eq!(error_code_from_byte(ERROR_CODE_UNKNOWN), None);
+    assert_eq!(
+        error_code_byte(oncl_api::error::ErrorCode::Internal),
+        oncl_server::audit::ERROR_CODE_COUNT
+    );
 }

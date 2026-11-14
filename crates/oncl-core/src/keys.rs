@@ -523,10 +523,14 @@ impl KeyUseReceipt {
         self.correlation
     }
 }
+/// How one private-key use ended, as the guard records it.
 #[derive(Clone, Copy, Debug)]
 pub struct KeyUseOutcome {
     pub applied: AppliedState,
     pub succeeded: bool,
+    /// The typed cause when the use failed (never inferred from a message); `None` on
+    /// success or when a guard records an outcome it did not see fail (a refusal, recovery).
+    pub error: Option<crate::ErrorCode>,
 }
 pub trait KeyUseGuard: Send + Sync {
     fn before_use(&self, event: &KeyUseEvent) -> Result<KeyUseReceipt, OperationError>;
@@ -757,6 +761,7 @@ impl AuthorizedSigner<'_> {
             KeyUseOutcome {
                 applied,
                 succeeded: result.is_ok(),
+                error: result.as_ref().err().map(OperationError::code),
             },
         ) {
             self.ctx
