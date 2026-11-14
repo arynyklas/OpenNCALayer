@@ -48,7 +48,7 @@
 Это делает ассистент, вы принимаете результат.
 
 1. Переписать коммиты с чужим автором на `aryn@sek.su` (проверка: `git log --format='%h %ae|%ce %G?' origin/main..HEAD`), перебазировать ветку на `origin/main` и заново прогнать ворота из строки 1 таблицы.
-2. Отправить ветку **без PR**, чтобы запустить CI: `git push origin feat/platform-sdk-apps` [не проверено: публичное действие]. На обычный пуш ветки запускаются `ci.yml` и `privacy.yml`; `index-check.yml`, `release.yml`, `plugins.yml` не запускаются (триггеры — раздел 7 ниже). Последующие пуши — обычные (без `--force`).
+2. Открыть PR из ветки в `main` (достаточно черновика), чтобы запустить CI: `git push origin feat/platform-sdk-apps`, затем `gh pr create --draft`. `ci.yml` и `privacy.yml` запускаются на событие `pull_request` и на пуш в `main`; обычный пуш ветки без PR их больше не запускает (раньше каждый PR гонял весь CI дважды: по пушу и по PR). Новый пуш в PR отменяет предыдущий запуск того же PR. `index-check.yml`, `release.yml`, `plugins.yml` на ветке не запускаются (триггеры — раздел 7 ниже). Последующие пуши — обычные (без `--force`).
 3. Дождаться зелёного `ci.yml` на всех ногах: `test` (ubuntu-24.04, windows-2025, macos-15), `win7` (x64, x86), `windows-package`, `macos-universal`, `linux-appimage`, `builtins-x86`, `ext-e2e`, `tokens-vpcd`, `actionlint`, `fmt`, `clippy`, `deny`, `site`, `extension`. Ноги `live` и `bench` на пуш не запускаются (по расписанию или вручную). Любой красный результат — стоп: исправление и снова ворота.
 4. Проверить, что privacy дошла до конца: `privacy.yml` без секрета `PRIVACY_DENYLIST` пишет notice и проходит; структура проверяется всегда. Ваш приватный список проверяет хук `pre-push` вашего checkout (`release.md`, §9).
 
