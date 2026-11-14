@@ -51,7 +51,7 @@ impl Server {
     }
 
     fn text(&self) -> String {
-        String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned()
+        snapshot(&self.stderr)
     }
 
     /// Waits (at most `LIMIT`) until the server has logged an aborted request.
@@ -79,8 +79,7 @@ impl Server {
             .unwrap();
         self.process.child.wait().unwrap();
         self.reader.join().unwrap();
-        let text = String::from_utf8_lossy(&self.stderr.lock().unwrap()).into_owned();
-        text
+        snapshot(&self.stderr)
     }
 
     fn head(&self, path: &str, content_type: &str, length: usize) -> String {
@@ -102,6 +101,10 @@ impl Server {
             .unwrap();
         stream
     }
+}
+
+fn snapshot(stderr: &Mutex<Vec<u8>>) -> String {
+    String::from_utf8_lossy(&stderr.lock().unwrap()).into_owned()
 }
 
 fn fields(line: &str) -> BTreeMap<&str, &str> {
