@@ -1,5 +1,5 @@
 id = "io.github.arynyklas.openncalayer.port.efactoring"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 min_core = "0.1.0-alpha.7"
 modules = ["EFactoringSign"]
 
