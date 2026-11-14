@@ -81,15 +81,26 @@ jobs:
 
   test:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
+    # Three shards per OS. One job ran every test binary (`--no-fail-fast`) one after the
+    # other: 59, 66 and 75 minutes in the run of 2026-11-14, 37 to 42 of them executing tests.
+    # The packages are split by measured run time (about 17 minutes each):
+    #   a: the built-in modules' tests (and their second pass without markers), their build,
+    #      the API, the PKI crate;
+    #   b: XML, xtask, the server, the protocol crate, plus the checks of this job (the first
+    #      run measured b at 33 minutes on Linux with the second pass, a at 15);
+    #   c: every other package of the workspace (`--exclude` of the two lists, so a new package
+    #      lands here and nothing is dropped). The UI parity tests run the `oncl` binary that
+    #      this very `cargo test` builds, so oncl-ui and oncl-cli stay together, in c; the
+    #      daemon's `maintenance_e2e` (Windows) runs `oncl-winget-harness`, built by
+    #      oncl-winget-setup, so the daemon and that crate stay together, in c as well.
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, windows-2025, macos-15]
+        shard: [a, b, c]
+    name: test (${{ matrix.os }}, ${{ matrix.shard }})
     runs-on: ${{ matrix.os }}
-    # Test, then the built-in modules again without markers, plus the build: the first run
-    # that went through every test binary (`--no-fail-fast`) needed 50 to 60 minutes for the
-    # Test step alone, and 60 minutes cancelled the windows-2025 job in the middle of it.
-    timeout-minutes: 120
+    timeout-minutes: 90
     env:
       # Line tables keep file:line in backtraces; full debug info makes linking the test
       # binaries (above all on Windows) and the cache much slower.
@@ -106,9 +117,13 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/pinned-toolchains
+      # One cache per OS for the three shards (`shared-key`); only shard b saves it: its
+      # dependency closure contains the others' (a is 4 GB, b 9, c 10 of the 19 GB build), and
+      # three saves of the same key would race and store whichever shard finished first.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: test-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 'b' }}
           cache-on-failure: true
       # Every platform's packages: the licences tests (`committed_licenses_are_fresh`,
       # `committed_plugin_licenses_are_fresh`) and the SDK's inventory test
@@ -116,7 +131,7 @@ jobs:
       # of every platform) read them offline. Their result does not depend on the host, so
       # they run on Linux alone, where the fetch takes seconds (close to a minute on Windows).
       - name: Fetch packages
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: |
           cargo fetch --locked
           cargo fetch --locked --manifest-path plugins/Cargo.toml
@@ -154,6 +169,15 @@ jobs:
             skip=(--skip committed_licenses_are_fresh --skip committed_plugin_licenses_are_fresh
               --skip committed_inventory_is_current_and_a_stale_copy_is_detected)
           fi
+          # The packages of the shards (see `strategy` above).
+          shard_a=(-p oncl-builtin-tests -p oncl-builtins-build -p oncl-api -p oncl-pki)
+          shard_b=(-p oncl-xml -p xtask -p oncl-server -p oncl-protocol)
+          case "${{ matrix.shard }}" in
+            a) scope=("${shard_a[@]}") ;;
+            b) scope=("${shard_b[@]}") ;;
+            c) scope=(--workspace)
+               for p in oncl-builtin-tests oncl-builtins-build oncl-api oncl-pki oncl-xml xtask oncl-server oncl-protocol; do scope+=(--exclude "$p"); done ;;
+          esac
           cargo xtask fetch-fixtures
           # The built-in modules' benchmarks (`bench_*`) run in release, in the `bench` job.
           # Ignored tests this job does not run: the two that write more than 4 GiB of real
@@ -162,7 +186,7 @@ jobs:
           # on PATH). Every other ignored test runs here, fixtures and oracles included: the
           # parity tests of oncl-ui run the `oncl` binary that this very `cargo test` builds
           # (target/debug/oncl). A missing oracle fails them.
-          cargo test --workspace --all-features --no-fail-fast -- --include-ignored --skip live_ --skip zola_ --skip bench_ \
+          cargo test "${scope[@]}" --all-features --no-fail-fast -- --include-ignored --skip live_ --skip zola_ --skip bench_ \
             --skip offset_over_4gib --skip common_region_replay_crosses_four_gib \
             --skip external_dense_pdf_signs_and_verifies --skip serve_a_synthetic_authority_until_stdin_closes \
             --skip smoke_data_dir --skip real_winget_validates_the_emitted_manifests \
@@ -172,25 +196,21 @@ jobs:
       # modules run in the same interpreter on every OS, so this second pass (11 minutes) runs
       # on Linux only.
       - name: Built-in modules without markers
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'a'
         shell: bash
         run: ONCL_TEST_NO_MARKERS=1 cargo test -p oncl-builtin-tests -- --skip bench_
       # The daemon as releases build it (no `e2e-prompter`, no `token-emulator`): the token
       # emulator's variable changes nothing.
       - name: Daemon without the test features
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: cargo test -p openncalayer --lib release_build_ignores_emulator_var
-      # The `clippy` job runs on Linux and never sees `cfg(windows)` code (oncl-ui foreground).
-      - name: Clippy (Windows-only code)
-        if: runner.os == 'Windows'
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       # The app-local DLLs of the Windows 7 builds are workspace members; on Windows their
       # tests build them.
       - name: Build the Windows 7 app-local DLLs
-        if: runner.os != 'Windows'
+        if: runner.os != 'Windows' && matrix.shard == 'a'
         run: cargo build -p oncl-win7shim-combase -p oncl-win7shim-winrt-error
       - name: CMS interop with OpenSSL
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: cargo xtask interop-openssl
       # Offline and read-only (about 3 s): the SDK's dependency closure against the forbidden
       # crates. `cargo xtask sdk smoke` (packs and builds the chain, about 75 s warm) stays a
@@ -202,10 +222,10 @@ jobs:
       # binaries; this fails if it ever reaches the normal tree (`for_tests` constructors forge
       # key-use approvals).
       - name: No testing feature in release programs
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: cargo xtask check-release-features
       - name: SDK dependency closure
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: cargo xtask sdk closure
       # Offline and read-only (under 1 s warm): the lint of the `[[operations]]` of every
       # `plugins/*/plugin.toml` against the modules the Test step above built (the port tests
@@ -214,13 +234,33 @@ jobs:
       # `plugin_ports_manual` (docs/dev/plugins-manual-tests.md): its `#[ignore]`d tests are
       # among those `--include-ignored` runs in the Test step, so nothing there is skipped.
       - name: Plugin operations lint
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'c'
         run: cargo xtask plugin-ops-check --require-wasm --wasm-dir target/plugin-ports/wasm32-unknown-unknown/release
       # The tags are needed: it compares the ports with the last `plugins-*` tag
       # (docs/dev/plugin-version-check.md); without one it only prints a NOTICE.
       - name: Plugin versions bumped
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.shard == 'b'
         run: cargo xtask plugin-version-check
+
+  # The `clippy` job runs on Linux and never sees `cfg(windows)` code (oncl-ui foreground):
+  # this one lints it next to the test shards instead of after them (6 minutes).
+  clippy-windows:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/pinned-toolchains
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: clippy-windows
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-on-failure: true
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # The built-in modules' limits in a 32-bit process, where their memory is smallest.
   builtins-x86:
@@ -455,8 +495,9 @@ jobs:
             | tee -a "$GITHUB_STEP_SUMMARY" || status=$?
           echo '```' >> "$GITHUB_STEP_SUMMARY"
           exit "$status"
-      # Saved from main only (a copy per pull request and per tag filled the repository's 10 GB
-      # of cache and evicted the test jobs' caches), and only when the key was not an exact hit.
+      # Saved from main only, and only when the key was not an exact hit. Measured on
+      # 2026-11-14: one copy of this cache per ref (pull request, branch, tag), 12.8 GB of
+      # caches against the repository's 10 GB limit.
       - name: Save the Windows 7 build cache
         if: ${{ github.ref == 'refs/heads/main' && steps.win7-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@v6
