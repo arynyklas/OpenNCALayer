@@ -23,7 +23,7 @@ pub const SCHEMA: u32 = 1;
 
 /// The largest state file, read or written: a client that wrote a file it cannot read back
 /// would reset itself every run.
-pub const MAX_STATE_LEN: u64 = 1 << 20;
+pub const MAX_STATE_LEN: u64 = 2 << 20;
 
 /// What the client trusts, apart from its built-in root.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

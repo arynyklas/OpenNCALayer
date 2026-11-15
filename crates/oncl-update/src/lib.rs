@@ -39,6 +39,10 @@ pub use state::{PendingHealth, State};
 
 use tuf::TufError;
 
+/// What [`TufError::TooLarge`] says of the saved state: a state that cannot be written is
+/// tried again, a file of the repository that is too large is refused.
+const STATE: &str = "the TUF state";
+
 /// Why an index or a package is refused, or the repository that holds the index.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
@@ -87,8 +91,9 @@ pub enum UpdateError {
     /// be saved ([`UpdateError::retry_soon`] tells which of these is worth trying again).
     #[error("the update repository: {0}")]
     Tuf(#[source] TufError),
-    /// The channel has no index in the repository (404, or no entry for it in the targets
-    /// metadata): nothing has been released into it yet.
+    /// The channel has no index in the repository: the repository was never published to this
+    /// client (no timestamp accepted yet, and 404 for it), or the accepted targets metadata
+    /// has no entry for the channel. Any other 404 is a refusal ([`UpdateError::Tuf`]).
     #[error("the {0} channel has no update index yet")]
     NotPublished(Channel),
     /// A file could not be read.
@@ -98,11 +103,14 @@ pub enum UpdateError {
 
 impl UpdateError {
     /// `error`, which the TUF client gave for the index of `channel`, as this crate's error:
-    /// a repository (or targets entry) that is not there is [`UpdateError::NotPublished`],
-    /// everything else is [`UpdateError::Tuf`].
+    /// a channel without an entry in the targets is [`UpdateError::NotPublished`], everything
+    /// else is [`UpdateError::Tuf`]. (A 404 for the timestamp of a repository never published
+    /// to this client is also "not published", but only the caller knows the saved state: it
+    /// builds [`UpdateError::NotPublished`] itself.) A 404 anywhere else is a refusal: a
+    /// published repository does not lose files.
     pub fn from_tuf(error: TufError, channel: Channel) -> UpdateError {
         match error {
-            TufError::NotFound(_) | TufError::NoSuchTarget(_) => UpdateError::NotPublished(channel),
+            TufError::NoSuchTarget(_) => UpdateError::NotPublished(channel),
             other => UpdateError::Tuf(other),
         }
     }
@@ -113,11 +121,17 @@ impl UpdateError {
     /// expired or rolled-back role, a signature, a hash, a length) stays refused until the
     /// next ordinary check, and a channel not published is not tried again soon either.
     pub fn retry_soon(&self) -> bool {
+        if let UpdateError::Tuf(TufError::TooLarge { what, .. }) = self {
+            return what == STATE;
+        }
         matches!(
             self,
             UpdateError::Io(_)
                 | UpdateError::Tuf(
-                    TufError::Fetch(_) | TufError::Store(_) | TufError::RootChainTooLong(_)
+                    TufError::Fetch(_)
+                        | TufError::NotFound(_)
+                        | TufError::Store(_)
+                        | TufError::RootChainTooLong(_)
                 )
         )
     }
@@ -137,9 +151,11 @@ mod tests {
                 UpdateError::NotPublished(Channel::Beta)
             )
         };
-        assert!(not_published(TufError::NotFound(
+        // A 404 is not "not published" here: a published repository does not lose files.
+        assert!(!not_published(TufError::NotFound(
             "metadata/timestamp.json".into()
         )));
+        assert!(UpdateError::from_tuf(TufError::NotFound("x".into()), Channel::Beta).retry_soon());
         assert!(not_published(TufError::NoSuchTarget(
             "indexes/beta.json".into()
         )));
@@ -149,6 +165,15 @@ mod tests {
         assert!(retry(TufError::Fetch("no answer".into())));
         assert!(retry(TufError::Store(std::io::Error::other("disk"))));
         assert!(retry(TufError::RootChainTooLong(128)));
+        // A state too large to be written is tried again; a file of the repository is refused.
+        assert!(retry(TufError::TooLarge {
+            what: "the TUF state".into(),
+            limit: 1
+        }));
+        assert!(!retry(TufError::TooLarge {
+            what: "snapshot".into(),
+            limit: 1
+        }));
         // Answered and refused: not soon.
         let at = datetime!(2026-11-15 12:00 UTC);
         for refused in [

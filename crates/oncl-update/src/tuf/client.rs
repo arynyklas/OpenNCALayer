@@ -147,6 +147,8 @@ pub struct TufClient<F, S> {
     /// The root built into the program.
     anchor: Root,
     limits: Limits,
+    /// Why the last refresh that reset the saved state did (also when it then failed).
+    last_reset: Option<String>,
 }
 
 impl<F: Fetcher, S: Store> TufClient<F, S> {
@@ -172,6 +174,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             store,
             anchor: root,
             limits,
+            last_reset: None,
         })
     }
 
@@ -199,6 +202,12 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         trust_anchor
             .map(|root| TufClient::new(root, fetcher, store, limits))
             .transpose()
+    }
+
+    /// Why the last refresh that reset the saved state did so, if one did, whether or not it
+    /// went on to succeed (it is logged as a warning when it happens).
+    pub fn last_reset(&self) -> Option<&str> {
+        self.last_reset.as_deref()
     }
 
     /// The store.
@@ -247,6 +256,10 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                 self.anchor.clone()
             }
         };
+        if let Some(why) = &reset {
+            tracing::warn!(reason = %why, "the saved TUF state was reset to the built-in root");
+            self.last_reset = Some(why.clone());
+        }
         if reset.is_some() {
             state.root_version = root.version;
             self.store.overwrite(&state)?;

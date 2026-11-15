@@ -16,11 +16,14 @@
 //! refused (an expired or rolled-back role, a signature, a hash) at `warn`.
 
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use oncl_pki::http::HttpTransport;
-use oncl_update::tuf::{Fetcher, FileStore, HttpFetcher, Limits, Response, TufClient, TufError};
+use oncl_update::tuf::{
+    Fetcher, FileStore, HttpFetcher, Limits, Response, Store, TufClient, TufError, layout,
+};
 use oncl_update::{Channel, Index, MAX_INDEX_LEN, UpdateError};
 use time::OffsetDateTime;
 use tracing::{info, warn};
@@ -86,7 +89,18 @@ impl Repository {
         base: &str,
         transport: Arc<dyn HttpTransport>,
     ) -> Option<Arc<Repository>> {
-        let Some(anchor) = oncl_update::embedded_root() else {
+        Repository::from_root(oncl_update::embedded_root(), data_dir, base, transport)
+    }
+
+    /// [`Repository::open`] for the root `root`, if there is one: none (nothing asked of the
+    /// network), logged, is no root or a root that is not usable.
+    pub fn from_root(
+        root: Option<&[u8]>,
+        data_dir: &Path,
+        base: &str,
+        transport: Arc<dyn HttpTransport>,
+    ) -> Option<Arc<Repository>> {
+        let Some(anchor) = root else {
             info!("the update trust root is not built into this build: updates are off");
             return None;
         };
@@ -167,21 +181,45 @@ impl Repository {
         last_seq: Option<u64>,
         timeout: Duration,
     ) -> Result<VerifiedIndex, UpdateError> {
-        let now = OffsetDateTime::now_utc();
-        let mut client = self.client.lock().unwrap_or_else(PoisonError::into_inner);
+        // The deadline counts from the call, the wait for a refresh running included: a caller
+        // with ten seconds does not wait twenty for another's download and then take its own.
+        let deadline = Instant::now() + timeout;
+        let mut client = loop {
+            match self.client.try_lock() {
+                Ok(client) => break client,
+                Err(TryLockError::Poisoned(e)) => break e.into_inner(),
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return Err(UpdateError::Tuf(TufError::Fetch(
+                            "another check of the update repository is running: no time left"
+                                .to_owned(),
+                        )));
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        };
         *client
             .fetcher()
             .deadline
             .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Instant::now() + timeout;
+            .unwrap_or_else(PoisonError::into_inner) = deadline;
+        let now = OffsetDateTime::now_utc();
+        // Nothing accepted yet: a repository that is not there is not published (to this
+        // client); once one was, a missing file is a refusal.
+        let never_published = self
+            .offline
+            .store()
+            .load()
+            .map(|state| state.timestamp.is_none())
+            .unwrap_or(false);
         let of_channel = |e| UpdateError::from_tuf(e, channel);
-        let trusted = client.refresh(now).map_err(of_channel)?;
-        if let Some(why) = trusted.state_was_reset() {
-            warn!(
-                reason = why,
-                "the saved update trust state was reset to the built-in root"
-            );
-        }
+        let trusted = client.refresh(now).map_err(|e| match e {
+            TufError::NotFound(path) if never_published && path == layout::TIMESTAMP_PATH => {
+                UpdateError::NotPublished(channel)
+            }
+            e => of_channel(e),
+        })?;
         let bytes = client
             .download_target(&trusted, &channel.target_path(), MAX_INDEX_LEN, now)
             .map_err(of_channel)?;

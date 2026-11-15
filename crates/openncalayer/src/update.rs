@@ -58,11 +58,13 @@ pub const FIRST_CHECK: (Duration, Duration) = (minutes(2), minutes(10));
 pub const CHECK_EVERY: (Duration, Duration) = (hours(6), hours(24));
 /// A check that could not download the index is tried again this soon.
 pub const RETRY_AFTER: (Duration, Duration) = (minutes(30), hours(2));
-/// The longest the index and its signature may take to download, together.
-pub const INDEX_TIMEOUT: Duration = Duration::from_secs(20);
+/// The longest one read of the update repository may take: the next root, the timestamp,
+/// snapshot and targets metadata and the index (five requests in a row, a wait for another
+/// check's refresh included), together.
+pub const INDEX_TIMEOUT: Duration = Duration::from_secs(30);
 /// The longest a package download may take.
 pub const DOWNLOAD_TIMEOUT: Duration = minutes(30);
-/// The longest a rollback at the start (the index and the package) may hold up the
+/// The longest a rollback at the start (the repository read and the package) may hold up the
 /// daemon's start; then the daemon starts, and its updater's thread tries again with
 /// [`DOWNLOAD_TIMEOUT`].
 pub const STARTUP_BUDGET: Duration = Duration::from_secs(15);

@@ -2042,3 +2042,37 @@ fn an_offline_check_needs_an_unexpired_root() {
         "{e:?}"
     );
 }
+
+#[test]
+fn the_reason_of_a_reset_is_kept_when_the_refresh_then_fails() {
+    let k = keys(1);
+    let (_, anchor) = standard(&k);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Files::in_data_dir(dir.path());
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    std::fs::write(store.path(), b"nope").unwrap();
+    // The repository has nothing: the refresh fails after it reset the state.
+    let none = MemoryFetcher::new();
+    let mut c = TufClient::new(&anchor, &none, store, Limits::default()).unwrap();
+    assert!(c.last_reset().is_none());
+    assert!(c.refresh(T0).is_err());
+    assert!(
+        c.last_reset().unwrap().contains("not readable"),
+        "{:?}",
+        c.last_reset()
+    );
+}
+
+#[test]
+fn the_state_limit_is_the_same_for_reading_and_writing_and_a_file_at_it_is_not_too_large() {
+    use super::store::MAX_STATE_LEN;
+    assert_eq!(MAX_STATE_LEN, 2 << 20);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Files::in_data_dir(dir.path());
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    for (len, larger) in [(MAX_STATE_LEN, false), (MAX_STATE_LEN + 1, true)] {
+        std::fs::write(store.path(), vec![b' '; len as usize]).unwrap();
+        let e = store.load().unwrap_err().to_string();
+        assert_eq!(e.contains("larger than"), larger, "{len}: {e}");
+    }
+}

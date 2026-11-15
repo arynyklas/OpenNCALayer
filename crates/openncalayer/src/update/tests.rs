@@ -35,6 +35,10 @@ impl FakeTransport {
         lock(&self.bodies).insert(url.to_owned(), (status, body.to_vec()));
     }
 
+    pub(crate) fn reply_of(&self, url: &str) -> (u16, Vec<u8>) {
+        lock(&self.bodies)[url].clone()
+    }
+
     pub(crate) fn asked(&self) -> Vec<(String, u64, bool)> {
         lock(&self.asked).clone()
     }

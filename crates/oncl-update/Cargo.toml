@@ -28,6 +28,8 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# The reason a saved state was reset is logged when it happens.
+tracing.workspace = true
 time = { workspace = true, features = ["serde", "formatting", "parsing"] }
 # The signing keys the repository tools generate are wiped when dropped.
 zeroize.workspace = true

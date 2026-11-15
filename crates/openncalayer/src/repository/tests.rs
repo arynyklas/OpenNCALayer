@@ -208,33 +208,32 @@ fn a_rolled_back_timestamp_is_refused_by_every_handle_on_the_state() {
 
 #[test]
 fn what_each_handle_saves_the_other_keeps() {
-    let (server, transport, dir) = (
-        Server::new(),
-        Arc::new(FakeTransport::default()),
-        tempfile::tempdir().unwrap(),
-    );
+    // `a` is in the middle of a refresh (it has accepted timestamp 1, and holds its state in
+    // memory) when `b` takes a newer publication and saves it. What `a` saves next must not
+    // lower what `b` saved: the saved versions are the highest of both.
+    let server = Arc::new(Server::new());
+    let transport = Arc::new(FakeTransport::default());
+    let dir = tempfile::tempdir().unwrap();
     server.publish(&transport, Channel::Stable, &index(Channel::Stable, 1));
-    let (a, b) = (
-        repository(&server, dir.path(), &transport),
-        repository(&server, dir.path(), &transport),
-    );
-    a.index(Channel::Stable, None, TIMEOUT).unwrap();
-    let second = index(Channel::Stable, 2);
-    server.publish(&transport, Channel::Stable, &second);
-    b.index(Channel::Stable, None, TIMEOUT).unwrap();
-    // `a` saves nothing newer than it knew (the repository is as `b` left it), and it does
-    // not undo what `b` saved: the versions on disk are the highest of both.
-    a.index(Channel::Stable, None, TIMEOUT).unwrap();
+    let a = repository(&server, dir.path(), &transport);
+    let b = Arc::new(repository(&server, dir.path(), &transport));
+    let (s, t, b2) = (Arc::clone(&server), Arc::clone(&transport), Arc::clone(&b));
+    transport.during(&url("metadata/1.snapshot.json"), move || {
+        s.publish(&t, Channel::Stable, &index(Channel::Stable, 2));
+        b2.index(Channel::Stable, None, TIMEOUT).unwrap();
+    });
+    // `a`'s own save of its older snapshot merges into the newer state it learns of, and it is
+    // then refused (its targets are older than `b`'s) instead of lowering anything.
+    let e = a.index(Channel::Stable, None, TIMEOUT).unwrap_err();
+    assert!(e.to_string().contains("was trusted before"), "{e}");
     let saved = FileStore::in_data_dir(dir.path()).load().unwrap();
-    let timestamp = saved.timestamp.unwrap();
-    assert_eq!(timestamp.version, 1_000_001);
-    assert_eq!(saved.targets, Some(2));
-    // Both see the index that is current, kept offline.
-    for handle in [&a, &b] {
-        handle
-            .verify_kept(Channel::Stable, &second, OffsetDateTime::now_utc())
-            .unwrap();
-    }
+    assert_eq!(saved.timestamp.unwrap().version, 1_000_001, "b's timestamp");
+    assert_eq!(saved.snapshot.unwrap().version, 2, "b's snapshot");
+    assert_eq!(
+        saved.targets,
+        Some(2),
+        "b's targets, which a's older ones did not lower"
+    );
 }
 
 #[test]
@@ -343,20 +342,98 @@ fn a_kept_index_is_checked_offline_against_the_saved_targets() {
 }
 
 #[test]
-fn without_the_trust_root_built_in_there_is_no_repository() {
+fn a_file_missing_from_a_published_repository_is_a_refusal_not_a_missing_channel() {
+    let (server, transport, dir) = (
+        Server::new(),
+        Arc::new(FakeTransport::default()),
+        tempfile::tempdir().unwrap(),
+    );
+    server.publish(&transport, Channel::Stable, &index(Channel::Stable, 1));
+    let r = repository(&server, dir.path(), &transport);
+    r.index(Channel::Stable, None, TIMEOUT).unwrap();
+    let file = url(&server.repo().index_file_path(Channel::Stable));
+    for missing in [
+        timestamp_url(),
+        url("metadata/1.snapshot.json"),
+        url("metadata/1.targets.json"),
+        file,
+    ] {
+        let saved = transport.reply_of(&missing);
+        transport.reply(&missing, 404, b"");
+        let e = r.index(Channel::Stable, None, TIMEOUT).unwrap_err();
+        assert!(matches!(&e, UpdateError::Tuf(_)), "{missing}: {e}");
+        assert!(e.retry_soon(), "{missing}: the short interval");
+        transport.reply(&missing, saved.0, &saved.1);
+    }
+    r.index(Channel::Stable, None, TIMEOUT).unwrap();
+    // The same 404 for the timestamp on a state that has accepted nothing: not published.
+    let fresh = tempfile::tempdir().unwrap();
+    transport.reply(&timestamp_url(), 404, b"");
+    assert!(matches!(
+        repository(&server, fresh.path(), &transport).index(Channel::Stable, None, TIMEOUT),
+        Err(UpdateError::NotPublished(Channel::Stable))
+    ));
+}
+
+#[test]
+fn a_caller_waiting_for_another_check_keeps_to_its_own_deadline() {
+    let (server, transport, dir) = (
+        Server::new(),
+        Arc::new(FakeTransport::default()),
+        tempfile::tempdir().unwrap(),
+    );
+    server.publish(&transport, Channel::Stable, &index(Channel::Stable, 1));
+    let r = Arc::new(repository(&server, dir.path(), &transport));
+    // While the first check is at its first request, a second one, with 300 ms, asks.
+    let (r2, outcome) = (Arc::clone(&r), Arc::new(Mutex::new(None)));
+    let o = Arc::clone(&outcome);
+    transport.during(&refresh_url(), move || {
+        let started = std::time::Instant::now();
+        let e = r2
+            .index(Channel::Stable, None, Duration::from_millis(300))
+            .unwrap_err();
+        *o.lock().unwrap() = Some((e, started.elapsed()));
+    });
+    r.index(Channel::Stable, None, TIMEOUT).unwrap();
+    let (e, waited) = outcome.lock().unwrap().take().unwrap();
+    assert!(
+        e.retry_soon() && e.to_string().contains("no time left"),
+        "{e}"
+    );
+    assert!(
+        waited >= Duration::from_millis(300) && waited < Duration::from_secs(5),
+        "{waited:?}"
+    );
+}
+
+#[test]
+fn no_usable_root_means_no_repository_and_nothing_asked() {
     let dir = tempfile::tempdir().unwrap();
-    let transport: Arc<dyn HttpTransport> = Arc::new(FakeTransport::default());
-    let opened = Repository::open(dir.path(), BASE, transport);
-    assert_eq!(opened.is_none(), oncl_update::embedded_root().is_none());
-    // A base that is not HTTPS is no repository either.
-    let transport: Arc<dyn HttpTransport> = Arc::new(FakeTransport::default());
+    let transport = Arc::new(FakeTransport::default());
+    let open = |root: Option<&[u8]>| {
+        Repository::from_root(
+            root,
+            dir.path(),
+            BASE,
+            Arc::clone(&transport) as Arc<dyn HttpTransport>,
+        )
+    };
+    assert!(open(None).is_none(), "no root built in");
+    assert!(
+        open(Some(b"not a root")).is_none(),
+        "a root that is not one"
+    );
+    assert!(transport.asked().is_empty());
     let server = Server::new();
+    assert!(open(Some(&server.anchor())).is_some());
+    // A base that is not HTTPS is no repository either.
+    let other: Arc<dyn HttpTransport> = Arc::new(FakeTransport::default());
     assert!(
         Repository::with_anchor(
             &server.anchor(),
             dir.path(),
             "http://example.org/tuf",
-            transport
+            other
         )
         .is_err()
     );
