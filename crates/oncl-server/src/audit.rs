@@ -1,5 +1,6 @@
 //! Fixed-size, checksummed local journal. Checksums detect damaged frames, not
 //! malicious owner edits; this is neither a hash chain nor nonrepudiation.
+use oncl_api::error::ErrorCode as ApiErrorCode;
 use oncl_core::keys::{
     AppliedState, KeyId, KeyUseEvent, KeyUseGuard, KeyUseOutcome, KeyUseReceipt,
 };
@@ -134,6 +135,12 @@ pub struct AuditEvent {
     pub unix_millis: u64,
     pub applied: AppliedState,
     pub succeeded: bool,
+    /// How a `Final` failed, as one byte (frame byte 127): [`ERROR_CODE_NONE`] when it did
+    /// not fail, the cause is not known, or the FINAL was written by recovery without one;
+    /// `1..=`[`ERROR_CODE_COUNT`] the stable number of an `oncl_api` error code
+    /// ([`error_code_byte`]); [`ERROR_CODE_UNKNOWN`] a number this reader does not know.
+    /// Zero in every other kind of frame.
+    pub error_code: u8,
     pub action: Option<Action>,
     /// Observed byte boundary in a Recovery record's `use_id` segment, or in
     /// this FINAL's segment when completing a previously durable recovery probe.
@@ -327,11 +334,79 @@ fn blank(kind: RecordKind) -> AuditEvent {
         unix_millis: 0,
         applied: AppliedState::NotApplied,
         succeeded: false,
+        error_code: ERROR_CODE_NONE,
         action: None,
         repair_from: 0,
         repair_to: 0,
         chunk: None,
     }
+}
+/// `Final.error_code`: no code (success, unknown cause, or a FINAL recovery wrote).
+pub const ERROR_CODE_NONE: u8 = 0;
+/// `Final.error_code` of the highest number in [`error_code_byte`]'s table.
+pub const ERROR_CODE_COUNT: u8 = 19;
+/// `Final.error_code` read from a number outside the table (written by a newer server).
+pub const ERROR_CODE_UNKNOWN: u8 = 255;
+/// The stable number of an API error code in the journal. Never derived from the enum's
+/// order: a number is never reused or changed, and a new code gets the next one (and a new
+/// arm here, which the compiler demands).
+pub fn error_code_byte(code: ApiErrorCode) -> u8 {
+    match code {
+        ApiErrorCode::PermissionDenied => 1,
+        ApiErrorCode::InteractionRequired => 2,
+        ApiErrorCode::InvalidRequest => 3,
+        ApiErrorCode::CapacityExceeded => 4,
+        ApiErrorCode::DeadlineExceeded => 5,
+        ApiErrorCode::Cancelled => 6,
+        ApiErrorCode::InputLimit => 7,
+        ApiErrorCode::FramingLimit => 8,
+        ApiErrorCode::MissingTemporaryStore => 9,
+        ApiErrorCode::MemoryLimit => 10,
+        ApiErrorCode::TempLimit => 11,
+        ApiErrorCode::MetadataLimit => 12,
+        ApiErrorCode::OutputLimit => 13,
+        ApiErrorCode::AuditUnavailable => 14,
+        ApiErrorCode::MissingConfiguration => 15,
+        ApiErrorCode::KeyNotFound => 16,
+        ApiErrorCode::ValidationFailed => 17,
+        ApiErrorCode::OperationFailed => 18,
+        ApiErrorCode::Internal => 19,
+    }
+}
+/// The API error code of a journal number; `None` for [`ERROR_CODE_NONE`], for
+/// [`ERROR_CODE_UNKNOWN`] and for any number outside the table.
+pub fn error_code_from_byte(byte: u8) -> Option<ApiErrorCode> {
+    Some(match byte {
+        1 => ApiErrorCode::PermissionDenied,
+        2 => ApiErrorCode::InteractionRequired,
+        3 => ApiErrorCode::InvalidRequest,
+        4 => ApiErrorCode::CapacityExceeded,
+        5 => ApiErrorCode::DeadlineExceeded,
+        6 => ApiErrorCode::Cancelled,
+        7 => ApiErrorCode::InputLimit,
+        8 => ApiErrorCode::FramingLimit,
+        9 => ApiErrorCode::MissingTemporaryStore,
+        10 => ApiErrorCode::MemoryLimit,
+        11 => ApiErrorCode::TempLimit,
+        12 => ApiErrorCode::MetadataLimit,
+        13 => ApiErrorCode::OutputLimit,
+        14 => ApiErrorCode::AuditUnavailable,
+        15 => ApiErrorCode::MissingConfiguration,
+        16 => ApiErrorCode::KeyNotFound,
+        17 => ApiErrorCode::ValidationFailed,
+        18 => ApiErrorCode::OperationFailed,
+        19 => ApiErrorCode::Internal,
+        _ => return None,
+    })
+}
+/// The journal number of the failure a key use ended with.
+fn outcome_error_code(outcome: &KeyUseOutcome) -> u8 {
+    if outcome.succeeded {
+        return ERROR_CODE_NONE;
+    }
+    outcome.error.map_or(ERROR_CODE_NONE, |code| {
+        error_code_byte(crate::service::api_code(code))
+    })
 }
 fn encode(record: &AuditEvent, identity: [u8; 16]) -> [u8; 160] {
     let mut bytes = [0; 160];
@@ -375,6 +450,11 @@ fn encode(record: &AuditEvent, identity: [u8; 16]) -> [u8; 160] {
         AppliedState::Unknown => 2,
     };
     bytes[107] = u8::from(record.succeeded);
+    bytes[127] = if record.kind == RecordKind::Final && !record.succeeded {
+        record.error_code
+    } else {
+        ERROR_CODE_NONE
+    };
     bytes[108..116].copy_from_slice(&record.repair_from.to_le_bytes());
     bytes[116..124].copy_from_slice(&record.repair_to.to_le_bytes());
     if let Some(item) = record.batch_item {
@@ -393,7 +473,7 @@ fn check_version(bytes: &[u8; 160]) -> io::Result<()> {
 }
 fn decode(bytes: &[u8; 160], identity: [u8; 16]) -> io::Result<AuditEvent> {
     check_version(bytes)?;
-    if bytes[8..24] != identity || bytes[128..] != checksum(&bytes[..128]) || bytes[127] != 0 {
+    if bytes[8..24] != identity || bytes[128..] != checksum(&bytes[..128]) {
         return Err(damaged());
     }
     let word =
@@ -401,7 +481,7 @@ fn decode(bytes: &[u8; 160], identity: [u8; 16]) -> io::Result<AuditEvent> {
     if bytes[104] == 4 {
         let (index, count) = (bytes[106], bytes[107]);
         if bytes[105] != 0
-            || bytes[124..127] != [0; 3]
+            || bytes[124..128] != [0; 4]
             || count == 0
             || usize::from(count) > MAX_CHUNKS
             || index >= count
@@ -431,6 +511,16 @@ fn decode(bytes: &[u8; 160], identity: [u8; 16]) -> io::Result<AuditEvent> {
     if batch_item.is_some() && !matches!(bytes[104], 1 | 2) {
         return Err(damaged());
     }
+    // Byte 127 was reserved (always 0): only a FINAL has a meaning for it, and a number
+    // this reader does not know is "unknown", not damage, so a newer table is readable.
+    let error_code = match (bytes[104], bytes[127]) {
+        (_, ERROR_CODE_NONE) => ERROR_CODE_NONE,
+        // A success has no cause: a code on one is damage, as in `encode`.
+        (2, _) if bytes[107] == 1 => return Err(damaged()),
+        (2, byte) if byte <= ERROR_CODE_COUNT => byte,
+        (2, _) => ERROR_CODE_UNKNOWN,
+        _ => return Err(damaged()),
+    };
     Ok(AuditEvent {
         kind: match bytes[104] {
             0 => RecordKind::Header,
@@ -465,6 +555,7 @@ fn decode(bytes: &[u8; 160], identity: [u8; 16]) -> io::Result<AuditEvent> {
             1 => true,
             _ => return Err(damaged()),
         },
+        error_code,
         repair_from: word(108),
         repair_to: word(116),
         chunk: None,
@@ -1578,6 +1669,7 @@ impl DurableAuditGuard {
             let outcome = known_outcomes.get(&event.use_id);
             event.applied = outcome.map_or(AppliedState::Unknown, |o| o.applied);
             event.succeeded = outcome.is_some_and(|o| o.succeeded);
+            event.error_code = outcome.map_or(ERROR_CODE_NONE, outcome_error_code);
             event.unix_millis = now()?;
             if reuse_probe && tail > 0 && index == 0 {
                 event.repair_from = original;
@@ -1754,6 +1846,7 @@ impl KeyUseGuard for DurableAuditGuard {
                         outcome: Some(KeyUseOutcome {
                             applied: AppliedState::NotApplied,
                             succeeded: false,
+                            error: Some(oncl_core::ErrorCode::AuditFailed),
                         }),
                         _lease: None,
                     },
@@ -1828,6 +1921,7 @@ impl KeyUseGuard for DurableAuditGuard {
             .ok_or(OperationError::AuditFailed)?;
         record.applied = outcome.applied;
         record.succeeded = outcome.succeeded;
+        record.error_code = outcome_error_code(&outcome);
         record.unix_millis = now().map_err(|_| OperationError::AuditFailed)?;
         Self::append(&mut state, &record).map_err(|_| OperationError::AuditFailed)?;
         state.pending.remove(&id);
