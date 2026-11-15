@@ -10,7 +10,9 @@
 //!   versions that failed locally;
 //! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs;
 //! - [`fetch()`]: the index and its signature, through an [`HttpTransport`];
-//! - [`embedded_keys()`]: the public keys built in (`keys/current.pub`, `keys/next.pub`).
+//! - [`embedded_keys()`]: the public keys built in (`keys/current.pub`, `keys/next.pub`);
+//! - [`tuf`]: the TUF verifier and repository builder that is to replace the minisign
+//!   signature (not used until a root is built in: [`embedded_root()`], `keys/root.json`).
 //!
 //! The format is described in `docs/design/update-index.md`.
 //!
@@ -24,6 +26,7 @@ pub mod index;
 mod keys;
 pub mod plugins;
 pub mod state;
+pub mod tuf;
 pub mod verify;
 
 pub use choose::{Choice, Target, choose, rollout_bucket};
@@ -32,7 +35,7 @@ pub use fetch::{Fetched, fetch, index_url};
 pub use index::{
     Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, Package, Sha256,
 };
-pub use keys::embedded_keys;
+pub use keys::{embedded_keys, embedded_root};
 pub use minisign_verify::PublicKey;
 pub use plugins::{
     PluginChoice, PluginName, PluginRelease, PluginReplaces, choose_plugin, offer, plugin_bucket,
