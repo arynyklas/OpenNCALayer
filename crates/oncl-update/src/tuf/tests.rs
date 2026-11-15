@@ -1797,3 +1797,323 @@ fn the_builder_refuses_a_file_the_client_would_not_read() {
     let small = build::targets(1, T0 + days(30), &files[..10]).unwrap();
     build::sign(&small, &[&k.targets]).unwrap();
 }
+
+// --- a target kept from an earlier download, checked offline ---
+
+/// A client over a repository that has nothing: whatever it says, it says from its state.
+fn offline<'a>(
+    anchor: &[u8],
+    dir: &std::path::Path,
+    none: &'a MemoryFetcher,
+) -> TufClient<&'a MemoryFetcher, Files> {
+    TufClient::new(anchor, none, Files::in_data_dir(dir), Limits::default()).unwrap()
+}
+
+/// A directory state of a client that refreshed against the standard repository.
+fn refreshed(k: &Keys) -> (Vec<u8>, tempfile::TempDir, MemoryFetcher) {
+    let (repo, anchor) = standard(k);
+    let dir = tempfile::tempdir().unwrap();
+    TufClient::new(
+        &anchor,
+        &repo,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap()
+    .refresh(T0)
+    .unwrap();
+    (anchor, dir, repo)
+}
+
+#[test]
+fn a_kept_target_is_checked_against_the_saved_targets_without_the_network() {
+    let k = keys(1);
+    let (anchor, dir, _repo) = refreshed(&k);
+    let none = MemoryFetcher::new();
+    let c = offline(&anchor, dir.path(), &none);
+
+    // The index as downloaded holds; it holds until the first of the root's and the
+    // targets' expiry, and the timestamp's 7 days are not that.
+    assert_eq!(
+        c.verify_cached_target("indexes/stable.json", STABLE, T0 + days(8))
+            .unwrap(),
+        T0 + days(30)
+    );
+    c.verify_cached_target("indexes/beta.json", BETA, T0)
+        .unwrap();
+    assert!(
+        none.requests().is_empty(),
+        "nothing was asked of the repository"
+    );
+
+    // The same length, another content; another length.
+    let mut changed = STABLE.to_vec();
+    changed[3] ^= 1;
+    assert!(matches!(
+        c.verify_cached_target("indexes/stable.json", &changed, T0),
+        Err(TufError::Hash { .. })
+    ));
+    assert!(matches!(
+        c.verify_cached_target("indexes/stable.json", b"{}", T0),
+        Err(TufError::Length { .. })
+    ));
+    // The other channel's bytes are not this one's; a path nobody listed is no target.
+    assert!(
+        c.verify_cached_target("indexes/stable.json", BETA, T0)
+            .is_err()
+    );
+    assert!(matches!(
+        c.verify_cached_target("indexes/nightly.json", STABLE, T0),
+        Err(TufError::NoSuchTarget(_))
+    ));
+}
+
+#[test]
+fn a_kept_target_needs_targets_that_were_accepted_and_have_not_expired() {
+    let k = keys(1);
+    let none = MemoryFetcher::new();
+    let (anchor, _, _) = refreshed(&k);
+    // A client that never refreshed has accepted no targets.
+    let empty = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        offline(&anchor, empty.path(), &none).verify_cached_target(
+            "indexes/stable.json",
+            STABLE,
+            T0
+        ),
+        Err(TufError::NoSuchTarget(_))
+    ));
+
+    let (anchor, dir, _repo) = refreshed(&k);
+    let c = offline(&anchor, dir.path(), &none);
+    c.verify_cached_target(
+        "indexes/stable.json",
+        STABLE,
+        T0 + days(30) - Duration::seconds(1),
+    )
+    .unwrap();
+    for later in [T0 + days(30), T0 + days(31)] {
+        let e = c
+            .verify_cached_target("indexes/stable.json", STABLE, later)
+            .unwrap_err();
+        assert!(
+            matches!(
+                e,
+                TufError::Expired {
+                    role: Role::Targets,
+                    ..
+                }
+            ),
+            "{later}: {e:?}"
+        );
+    }
+}
+
+#[test]
+fn saved_targets_are_trusted_only_if_the_root_chain_still_signs_them() {
+    let (k1, evil) = (keys(1), keys(41));
+    let none = MemoryFetcher::new();
+    let (anchor, dir, _repo) = refreshed(&k1);
+    let store = Files::in_data_dir(dir.path());
+    let good = store.load().unwrap();
+    assert!(good.targets_file.is_some());
+
+    // Whoever writes the state file puts targets of their own (valid under their own keys,
+    // for the very bytes of the index) in place of the saved ones.
+    let (hostile, _) = standard(&evil);
+    let mut forged = good.clone();
+    forged.targets_file = Some(envelope(&hostile.get(&layout::targets_path(1)).unwrap()));
+    let mut store = Files::in_data_dir(dir.path());
+    store.overwrite(&forged).unwrap();
+    let e = offline(&anchor, dir.path(), &none)
+        .verify_cached_target("indexes/stable.json", STABLE, T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+
+    // Targets of another version than the one the state says were accepted.
+    let mut skewed = good.clone();
+    skewed.targets = Some(2);
+    store.overwrite(&skewed).unwrap();
+    let e = offline(&anchor, dir.path(), &none)
+        .verify_cached_target("indexes/stable.json", STABLE, T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Malformed { .. }), "{e:?}");
+
+    // A state that is not a state is no state.
+    std::fs::write(store.path(), b"nope").unwrap();
+    assert!(
+        offline(&anchor, dir.path(), &none)
+            .verify_cached_target("indexes/stable.json", STABLE, T0)
+            .is_err()
+    );
+}
+
+#[test]
+fn a_rotated_targets_key_ends_what_the_old_one_signed() {
+    let (k1, k2) = (keys(1), keys(11));
+    let (anchor, dir, repo) = refreshed(&k1);
+    let none = MemoryFetcher::new();
+    offline(&anchor, dir.path(), &none)
+        .verify_cached_target("indexes/stable.json", STABLE, T0)
+        .unwrap();
+    // The repository rotates every key (root 2) but has nothing re-signed yet: the refresh
+    // fails, but follows the new root, and the targets of the old key are forgotten.
+    rotate(&repo, 2, &k1, &k2);
+    let e = TufClient::new(
+        &anchor,
+        &repo,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap()
+    .refresh(T0)
+    .unwrap_err();
+    assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+    assert!(matches!(
+        offline(&anchor, dir.path(), &none).verify_cached_target("indexes/stable.json", STABLE, T0),
+        Err(TufError::NoSuchTarget(_))
+    ));
+}
+
+#[test]
+fn the_targets_file_follows_the_higher_version_when_states_are_merged() {
+    let k = keys(1);
+    let (repo, anchor) = standard(&k);
+    let mut high = release();
+    high.targets_version = 5;
+    high.snapshot_version = 5;
+    high.timestamp_version = 2000;
+    publish(&repo, &k, &high);
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = TufClient::new(
+        &anchor,
+        &repo,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap();
+    c.refresh(T0).unwrap();
+    let saved = Files::in_data_dir(dir.path()).load().unwrap();
+    assert_eq!(saved.targets, Some(5));
+
+    // A writer that only knows targets 1 cannot take the file of 5 away.
+    let (old_repo, _) = standard(&k);
+    let old = envelope(&old_repo.get(&layout::targets_path(1)).unwrap());
+    let mut mine = saved.clone();
+    mine.targets = Some(1);
+    mine.targets_file = Some(old);
+    let merged = Files::in_data_dir(dir.path()).save(&mine).unwrap();
+    assert_eq!(merged.targets, Some(5));
+    assert_eq!(merged.targets_file, saved.targets_file);
+}
+
+#[test]
+fn an_offline_check_needs_an_unexpired_root() {
+    let k = keys(1);
+    let none = MemoryFetcher::new();
+    let (anchor, dir, _repo) = refreshed(&k);
+    let c = offline(&anchor, dir.path(), &none);
+    // The root (365 days) outlives the targets (30): the targets are the first to fail ...
+    let e = c
+        .verify_cached_target("indexes/stable.json", STABLE, T0 + days(40))
+        .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            TufError::Expired {
+                role: Role::Targets,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+    // ... and once the root is past its expiry it is the root that is named.
+    let e = c
+        .verify_cached_target("indexes/stable.json", STABLE, T0 + days(366))
+        .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            TufError::Expired {
+                role: Role::Root,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn the_reason_of_a_reset_is_kept_when_the_refresh_then_fails() {
+    let k = keys(1);
+    let (_, anchor) = standard(&k);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Files::in_data_dir(dir.path());
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    std::fs::write(store.path(), b"nope").unwrap();
+    // The repository has nothing: the refresh fails after it reset the state.
+    let none = MemoryFetcher::new();
+    let mut c = TufClient::new(&anchor, &none, store, Limits::default()).unwrap();
+    assert!(c.last_reset().is_none());
+    assert!(c.refresh(T0).is_err());
+    assert!(
+        c.last_reset().unwrap().contains("not readable"),
+        "{:?}",
+        c.last_reset()
+    );
+}
+
+#[test]
+fn the_state_limit_is_the_same_for_reading_and_writing_and_a_file_at_it_is_not_too_large() {
+    use super::store::MAX_STATE_LEN;
+    assert_eq!(MAX_STATE_LEN, 2 << 20);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Files::in_data_dir(dir.path());
+    std::fs::create_dir_all(store.path().parent().unwrap()).unwrap();
+    for (len, larger) in [(MAX_STATE_LEN, false), (MAX_STATE_LEN + 1, true)] {
+        std::fs::write(store.path(), vec![b' '; len as usize]).unwrap();
+        let e = store.load().unwrap_err().to_string();
+        assert_eq!(e.contains("larger than"), larger, "{len}: {e}");
+    }
+}
+
+#[test]
+fn having_seen_the_repository_survives_a_rotation_and_a_reset() {
+    let (k1, k2) = (keys(1), keys(11));
+    let (anchor, dir, repo) = refreshed(&k1);
+    let flag = || Files::in_data_dir(dir.path()).load().unwrap();
+    assert!(flag().ever_published);
+    // Every key rotates: the saved timestamp is forgotten, the fact that there was one is not.
+    rotate(&repo, 2, &k1, &k2);
+    let mut c = TufClient::new(
+        &anchor,
+        &repo,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(c.refresh(T0).is_err());
+    let saved = flag();
+    assert!(saved.timestamp.is_none() && saved.ever_published);
+    // A state that did not hold is reset, and then it is not known that nothing was seen.
+    let store = Files::in_data_dir(dir.path());
+    std::fs::write(store.path(), b"nope").unwrap();
+    let none = MemoryFetcher::new();
+    let mut c = TufClient::new(
+        &anchor,
+        &none,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(c.refresh(T0).is_err());
+    assert!(c.last_reset().is_some() && flag().ever_published);
+    // A state saved before the flag existed reads as never published.
+    let mut old = flag();
+    old.ever_published = false;
+    assert!(
+        !serde_json::to_string(&old)
+            .unwrap()
+            .contains("ever_published")
+    );
+}

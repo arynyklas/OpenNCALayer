@@ -1,13 +1,14 @@
 //! The updater with a fake transport, installer and daemon, on a sandbox data directory, and
-//! indexes signed by a key made for the test.
+//! indexes served as targets of a TUF repository of synthetic keys.
 
 use super::*;
-use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest};
+use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_update::{Channel, CoreRelease, FlavorPackage, Index, Package, Sha256};
 use std::collections::BTreeMap;
-use std::io::Cursor;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use time::Duration as TimeDuration;
+
+use crate::repository::tests::{BASE, Server, timestamp_url, url};
 
 /// Something done while a request is being answered.
 type Hook = Box<dyn FnOnce() + Send>;
@@ -32,6 +33,10 @@ impl FakeTransport {
 
     pub(crate) fn reply(&self, url: &str, status: u16, body: &[u8]) {
         lock(&self.bodies).insert(url.to_owned(), (status, body.to_vec()));
+    }
+
+    pub(crate) fn reply_of(&self, url: &str) -> (u16, Vec<u8>) {
+        lock(&self.bodies)[url].clone()
     }
 
     pub(crate) fn asked(&self) -> Vec<(String, u64, bool)> {
@@ -179,9 +184,6 @@ fn v(s: &str) -> Version {
     Version::parse(s).unwrap()
 }
 
-const BASE: &str = "https://example.org/updates/v1";
-const INDEX: &str = "https://example.org/updates/v1/stable.json";
-
 /// A release of `version` for Windows x64, with its full package only.
 fn release(version: &str, rollout: u8, revoked: bool) -> CoreRelease {
     let name = format!("openncalayer-{version}-win-x64-full.nupkg");
@@ -203,32 +205,11 @@ fn release(version: &str, rollout: u8, revoked: bool) -> CoreRelease {
     }
 }
 
-/// A key pair made for the test.
-struct Key {
-    pair: minisign::KeyPair,
-    public: PublicKey,
-}
-
-impl Key {
-    fn new() -> Key {
-        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let public = PublicKey::decode(&pair.pk.to_box().unwrap().into_string()).unwrap();
-        Key { pair, public }
-    }
-
-    fn sign(&self, data: &[u8], comment: &str) -> Vec<u8> {
-        minisign::sign(None, &self.pair.sk, Cursor::new(data), Some(comment), None)
-            .unwrap()
-            .into_string()
-            .into_bytes()
-    }
-}
-
-/// A sandbox: its data directory, the index server and the key the client trusts.
+/// A sandbox: its data directory, the TUF repository served and the root the client trusts.
 struct Sandbox {
     dir: tempfile::TempDir,
     transport: Arc<FakeTransport>,
-    key: Key,
+    server: Server,
     log: Log,
     download_timeouts: Arc<Mutex<Vec<Duration>>>,
 }
@@ -253,7 +234,7 @@ impl Sandbox {
         let sandbox = Sandbox {
             dir: tempfile::tempdir().unwrap(),
             transport: Arc::new(FakeTransport::default()),
-            key: Key::new(),
+            server: Server::new(),
             log: Log::default(),
             download_timeouts: Arc::default(),
         };
@@ -261,8 +242,8 @@ impl Sandbox {
         sandbox
     }
 
-    /// Publishes the stable index `seq` of `core`, made `age` ago, signed by `key`.
-    fn publish_by(&self, key: &Key, seq: u64, core: Vec<CoreRelease>, age: TimeDuration) {
+    /// Publishes the stable index `seq` of `core`, made `age` ago, into the TUF repository.
+    fn publish_aged(&self, seq: u64, core: Vec<CoreRelease>, age: TimeDuration) {
         let generated = OffsetDateTime::now_utc() - age;
         let index = Index {
             schema: 1,
@@ -275,13 +256,24 @@ impl Sandbox {
             plugins: Vec::new(),
         };
         let body = serde_json::to_vec_pretty(&index).unwrap();
-        let sig = key.sign(&body, &format!("channel=stable;seq={seq}"));
-        self.transport.serve(INDEX, &body);
-        self.transport.serve(&format!("{INDEX}.minisig"), &sig);
+        self.server.publish(&self.transport, Channel::Stable, &body);
     }
 
     fn publish(&self, seq: u64, core: Vec<CoreRelease>) {
-        self.publish_by(&self.key, seq, core, TimeDuration::days(1));
+        self.publish_aged(seq, core, TimeDuration::days(1));
+    }
+
+    /// The repository of the updater, trusting the root of the sandbox's server.
+    fn repository(&self) -> Arc<Repository> {
+        Arc::new(
+            Repository::with_anchor(
+                &self.server.anchor(),
+                self.dir.path(),
+                BASE,
+                Arc::clone(&self.transport) as _,
+            )
+            .unwrap(),
+        )
     }
 
     fn settings(&self, enabled: bool) {
@@ -308,14 +300,12 @@ impl Sandbox {
             UpdaterConfig {
                 data_dir: self.dir.path().to_owned(),
                 settings: self.dir.path().join("settings.json"),
-                base: BASE.to_owned(),
-                keys: vec![self.key.public.clone()],
                 flavor: Flavor::WinX64,
                 idle_poll: Duration::from_millis(1),
                 health_grace: Duration::from_millis(grace),
                 health_settle: Duration::from_millis(settle),
             },
-            Arc::clone(&self.transport) as _,
+            self.repository(),
             Box::new(FakeInstaller {
                 current: v(current),
                 log: Arc::clone(&self.log),
@@ -405,13 +395,29 @@ fn an_update_is_found_downloaded_and_applied_once_the_daemon_is_idle() {
         [Event::Notice(Notice::Checked(available("0.2.0", true)))]
     );
     assert_eq!(s.state().last_seq, BTreeMap::from([(Channel::Stable, 3)]));
-    // The index and its signature over HTTPS only, within their limits.
+    // The metadata and the index over HTTPS only, each within its limit: the next root (not
+    // there), the timestamp, snapshot and targets, then the index file under its hash name.
+    let asked = s.transport.asked();
+    assert!(
+        asked.iter().all(|(_, _, https_only)| *https_only),
+        "{asked:?}"
+    );
+    let urls: Vec<&str> = asked.iter().map(|(url, ..)| url.as_str()).collect();
     assert_eq!(
-        s.transport.asked(),
+        urls,
         [
-            (INDEX.to_owned(), oncl_update::MAX_INDEX_LEN, true),
-            (format!("{INDEX}.minisig"), 4096, true),
+            url("metadata/2.root.json"),
+            url("metadata/timestamp.json"),
+            url("metadata/1.snapshot.json"),
+            url("metadata/1.targets.json"),
+            url(&s.server.repo().index_file_path(Channel::Stable)),
         ]
+    );
+    let index_file = s.server.repo().index_file_path(Channel::Stable);
+    let index_len = s.server.repo().get(&index_file).unwrap().len() as u64;
+    assert_eq!(
+        asked[4].1, index_len,
+        "the target is read up to the length listed"
     );
 
     // A sign request runs: the update waits for it. A request comes in just as the update
@@ -864,53 +870,64 @@ fn a_check_does_not_undo_what_other_threads_write_meanwhile() {
     assert_eq!(state.pending_health, None, "the confirmation stays");
 }
 
+/// The failure of the check, which must be one of refusal: shown, never retried soon.
+fn refusal(checked: &Checked) -> String {
+    let UpdateStatus::Failed(e) = &checked.status else {
+        panic!("{:?}", checked.status);
+    };
+    assert!(checked.plan.is_none() && !checked.retry_soon, "{e}");
+    e.clone()
+}
+
 #[test]
 fn a_refused_index_changes_nothing_and_is_not_notified() {
     let s = Sandbox::new();
     let u = s.updater("0.1.0", 0);
 
-    // Another key.
-    s.publish_by(&Key::new(), 7, two_releases(), TimeDuration::days(1));
-    let checked = u.check(false, None);
-    let UpdateStatus::Failed(e) = &checked.status else {
-        panic!("{:?}", checked.status);
-    };
-    assert!(e.contains("does not match any trusted key"), "{e}");
-    assert!(checked.plan.is_none() && !checked.retry_soon);
+    // A repository of other keys than the root built in.
+    let hostile = Server::new();
+    *hostile.repo() = oncl_update::tuf::testing::Repo::with_seed(41);
+    let body = serde_json::to_vec(&Index {
+        schema: 1,
+        channel: Channel::Stable,
+        seq: 7,
+        generated: OffsetDateTime::now_utc(),
+        expires: OffsetDateTime::now_utc() + TimeDuration::days(30),
+        core: two_releases(),
+        extension: None,
+        plugins: Vec::new(),
+    })
+    .unwrap();
+    hostile.publish(&s.transport, Channel::Stable, &body);
+    let e = refusal(&u.check(false, None));
+    assert!(
+        e.contains("valid signatures from distinct trusted keys"),
+        "{e}"
+    );
     assert!(
         s.state().last_seq.is_empty(),
         "seq is saved only once verified"
     );
 
-    // A broken signature.
+    // An index file that is not the one the targets metadata lists.
     s.publish(7, two_releases());
-    let mut body = lock(&s.transport.bodies)[INDEX].1.clone();
+    let path = url(&s.server.repo().index_file_path(Channel::Stable));
+    let mut body = lock(&s.transport.bodies)[&path].1.clone();
     body[10] ^= 1;
-    s.transport.serve(INDEX, &body);
-    assert!(matches!(
-        u.check(false, None).status,
-        UpdateStatus::Failed(_)
-    ));
+    s.transport.serve(&path, &body);
+    let e = refusal(&u.check(false, None));
+    assert!(e.contains("does not match"), "{e}");
+    assert!(s.state().last_seq.is_empty());
 
     // An older seq than one accepted.
     s.publish(7, two_releases());
     assert_eq!(u.check(false, None).status, available("0.2.0", true));
     s.publish(6, two_releases());
-    let checked = u.check(false, None);
-    let UpdateStatus::Failed(e) = &checked.status else {
-        panic!("{:?}", checked.status);
-    };
+    let e = refusal(&u.check(false, None));
     assert!(e.contains("older than the last seen 7"), "{e}");
     // The same seq again is the same index: accepted.
     s.publish(7, two_releases());
     assert_eq!(u.check(false, None).status, available("0.2.0", true));
-
-    // Not signed again within 30 days.
-    s.publish_by(&s.key, 8, two_releases(), TimeDuration::days(31));
-    let UpdateStatus::Failed(e) = u.check(false, None).status else {
-        panic!("not refused");
-    };
-    assert!(e.contains("expired"), "{e}");
     assert_eq!(s.state().last_seq[&Channel::Stable], 7);
 
     // Only the first offer of 0.2.0 was told; no failure was.
@@ -918,6 +935,53 @@ fn a_refused_index_changes_nothing_and_is_not_notified() {
         s.events(),
         [Event::Notice(Notice::Checked(available("0.2.0", true)))]
     );
+}
+
+#[test]
+fn a_rolled_back_timestamp_is_refused_and_nothing_is_installed() {
+    let s = Sandbox::new();
+    let u = s.updater("0.1.0", 0);
+    s.publish(7, two_releases());
+    let old = s
+        .server
+        .repo()
+        .get("metadata/timestamp.json")
+        .unwrap()
+        .to_vec();
+    s.publish(8, two_releases());
+    assert_eq!(u.check(false, None).status, available("0.2.0", true));
+    assert_eq!(s.state().last_seq[&Channel::Stable], 8);
+    s.events();
+
+    // The repository serves the older timestamp again (a replay of what was valid).
+    s.transport.serve(&timestamp_url(), &old);
+    let checked = u.check(false, None);
+    let e = refusal(&checked);
+    assert!(e.contains("was trusted before"), "{e}");
+    assert_eq!(u.status(), UpdateStatus::Failed(e));
+    assert_eq!(s.events(), []);
+    assert_eq!(s.state().last_seq[&Channel::Stable], 8);
+}
+
+#[test]
+fn an_expired_timestamp_fails_the_check_without_installing() {
+    let s = Sandbox::new();
+    // Signed 8 days ago: the timestamp's 7 days are over, whatever else is fresh.
+    s.server.repo().signed_at = OffsetDateTime::now_utc() - TimeDuration::days(8);
+    s.publish(5, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let checked = u.check(false, None);
+    let e = refusal(&checked);
+    assert!(e.contains("timestamp metadata expired"), "{e}");
+    assert_eq!(s.events(), []);
+    assert!(s.state().last_seq.is_empty());
+    assert!(s.state().pending_health.is_none());
+    // Only the repository's own check expires: an index generated long ago is not refused
+    // while the roles hold.
+    let fresh = Sandbox::new();
+    fresh.publish_aged(5, two_releases(), TimeDuration::days(45));
+    let u = fresh.updater("0.1.0", 0);
+    assert_eq!(u.check(false, None).status, available("0.2.0", true));
 }
 
 #[test]
@@ -1135,7 +1199,8 @@ fn a_state_that_cannot_be_read_is_left_as_it_is() {
 #[test]
 fn an_unpublished_channel_is_not_tried_again_soon() {
     let s = Sandbox::new();
-    s.transport.reply(INDEX, 404, b"Not Found");
+    s.transport.reply(&url("metadata/2.root.json"), 404, b"");
+    s.transport.reply(&timestamp_url(), 404, b"Not Found");
     let u = s.updater("0.1.0-alpha.1", 0);
     let checked = u.check(false, None);
     assert_eq!(checked.status, UpdateStatus::NotPublished(Channel::Stable));
@@ -1143,8 +1208,14 @@ fn an_unpublished_channel_is_not_tried_again_soon() {
     assert_eq!(s.events(), [], "no notice");
     assert_eq!(u.status(), UpdateStatus::NotPublished(Channel::Stable));
 
+    // A repository with only the other channel's index has none for this one.
+    s.server.publish(&s.transport, Channel::Beta, b"{}");
+    let checked = u.check(false, None);
+    assert_eq!(checked.status, UpdateStatus::NotPublished(Channel::Stable));
+    assert!(!checked.retry_soon);
+
     // Other failures still retry soon.
-    s.transport.reply(INDEX, 503, b"");
+    s.transport.reply(&timestamp_url(), 503, b"");
     let checked = u.check(false, None);
     assert!(matches!(checked.status, UpdateStatus::Failed(e) if e.contains("HTTP 503")));
     assert!(checked.retry_soon);
@@ -1220,7 +1291,8 @@ fn a_rollback_at_the_start_stays_within_its_budget() {
     assert_eq!(bad.roll_back_now(&failed, &to), RollBack::Applied);
     let index = s.transport.timeouts();
     let package = lock(&s.download_timeouts).clone();
-    assert_eq!((index.len(), package.len()), (2, 1));
+    // The next root, the timestamp, snapshot, targets and the index: one deadline for all.
+    assert_eq!((index.len(), package.len()), (5, 1));
     assert!(index.iter().all(|t| *t <= STARTUP_BUDGET), "{index:?}");
     assert!(package[0] <= STARTUP_BUDGET, "{package:?}");
 
@@ -1238,17 +1310,18 @@ fn a_rollback_at_the_start_stays_within_its_budget() {
 }
 
 #[test]
-fn availability_needs_a_flavor_an_installation_and_keys() {
-    let key = Key::new().public;
+fn availability_needs_a_flavor_an_installation_and_the_trust_root() {
+    let s = Sandbox::new();
+    let repository = Some(s.repository());
     let installed = || Ok::<_, String>(());
     let not_installed = || Err::<(), _>("not installed".to_owned());
     assert_eq!(
-        availability(Ok(vec![key.clone()]), None, None, installed).err(),
+        availability(repository.clone(), None, None, installed).err(),
         Some(UpdateStatus::NotInstalled)
     );
     assert_eq!(
         availability(
-            Ok(vec![key.clone()]),
+            repository.clone(),
             Some(Flavor::LinuxX64),
             None,
             not_installed
@@ -1259,7 +1332,7 @@ fn availability_needs_a_flavor_an_installation_and_keys() {
     // A package manager's copy is off whatever else holds: Velopack is not even asked.
     assert_eq!(
         availability(
-            Ok(vec![key.clone()]),
+            repository.clone(),
             Some(Flavor::LinuxX64),
             Some("pacman"),
             || -> Result<(), String> { panic!("Velopack asked for a package manager's copy") }
@@ -1267,23 +1340,13 @@ fn availability_needs_a_flavor_an_installation_and_keys() {
         .err(),
         Some(UpdateStatus::PackageManaged("pacman".to_owned()))
     );
+    // No trust root built in: updates are off.
     assert_eq!(
-        availability(Ok(Vec::new()), Some(Flavor::LinuxX64), None, installed).err(),
+        availability(None, Some(Flavor::LinuxX64), None, installed).err(),
         Some(UpdateStatus::NoKeys)
     );
-    assert_eq!(
-        availability(
-            Err(UpdateError::BadKey("x".to_owned())),
-            Some(Flavor::LinuxX64),
-            None,
-            installed
-        )
-        .err(),
-        Some(UpdateStatus::NoKeys)
-    );
-    let (keys, flavor, ()) =
-        availability(Ok(vec![key]), Some(Flavor::Osx), None, installed).unwrap();
-    assert_eq!((keys.len(), flavor), (1, Flavor::Osx));
+    let (_, flavor, ()) = availability(repository, Some(Flavor::Osx), None, installed).unwrap();
+    assert_eq!(flavor, Flavor::Osx);
     // Off: the window says why, and a check says the same.
     let off = UpdaterHandle::Off(UpdateStatus::NoKeys);
     assert_eq!(off.check_now(None), UpdateStatus::NoKeys);

@@ -1,12 +1,13 @@
 //! `<data>/plugins/`: installed packages checked against their sums, the state file
-//! replaced when damaged, and the catalog kept and verified again.
+//! replaced when damaged, and the catalog kept and checked again against the TUF state.
 
 mod common;
 
 use oncl_plugin::{Package, Source, Store, StoreError};
 use oncl_testkit::plugin::{example_package, example_package_with};
-use oncl_update::{Channel, Index, PublicKey, Version};
-use std::io::Cursor;
+use oncl_update::tuf::testing::Repo;
+use oncl_update::tuf::{FileStore, MemoryFetcher, TufClient};
+use oncl_update::{Channel, Index, Version};
 use time::{Duration, OffsetDateTime};
 
 const ID: &str = "io.github.arynyklas.openncalayer.example";
@@ -140,87 +141,190 @@ fn an_update_replaces_the_old_package_file() {
     );
 }
 
-struct Key {
-    pair: minisign::KeyPair,
-    public: PublicKey,
+/// An empty index of the beta channel, `seq`, made at `generated`.
+fn index(seq: u64, generated: OffsetDateTime) -> Vec<u8> {
+    serde_json::to_vec(&Index {
+        schema: 1,
+        channel: Channel::Beta,
+        seq,
+        generated,
+        expires: generated + Duration::days(7),
+        core: Vec::new(),
+        extension: None,
+        plugins: Vec::new(),
+    })
+    .unwrap()
 }
 
-impl Key {
-    fn new() -> Key {
-        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let public = PublicKey::decode(&pair.pk.to_box().unwrap().into_string()).unwrap();
-        Key { pair, public }
-    }
+type Client = TufClient<MemoryFetcher, FileStore>;
 
-    /// An empty index of the beta channel, `seq`, made at `generated`, and its signature.
-    fn index(&self, seq: u64, generated: OffsetDateTime) -> (Vec<u8>, Vec<u8>) {
-        let index = Index {
-            schema: 1,
-            channel: Channel::Beta,
-            seq,
-            generated,
-            expires: generated + Duration::days(7),
-            core: Vec::new(),
-            extension: None,
-            plugins: Vec::new(),
-        };
-        let body = serde_json::to_vec(&index).unwrap();
-        let sig = minisign::sign(
-            None,
-            &self.pair.sk,
-            Cursor::new(&body),
-            Some(&format!("channel=beta;seq={seq}")),
-            None,
-        )
+/// A client of `repo` with the TUF state in `tuf_dir` (the one a refresh and the store's
+/// checks share).
+fn client(repo: &Repo, tuf_dir: &std::path::Path) -> Client {
+    repo.client(repo.fetcher(), FileStore::in_data_dir(tuf_dir))
+}
+
+/// The beta index as the TUF client downloads it from `repo`.
+fn downloaded(client: &mut Client, now: OffsetDateTime) -> Vec<u8> {
+    let trusted = client.refresh(now).unwrap();
+    client
+        .download_target(&trusted, &Channel::Beta.target_path(), 1 << 20, now)
         .unwrap()
-        .into_string()
-        .into_bytes();
-        (body, sig)
+}
+
+/// What the store asks to vouch for the kept bytes: the TUF client, offline.
+fn check(
+    client: &Client,
+    now: OffsetDateTime,
+) -> impl FnOnce(&[u8]) -> Result<OffsetDateTime, String> + '_ {
+    move |bytes| {
+        client
+            .verify_cached_target(&Channel::Beta.target_path(), bytes, now)
+            .map_err(|e| e.to_string())
     }
 }
 
 #[test]
-fn catalog_roundtrip_reverifies_and_expires() {
+fn catalog_roundtrip_is_checked_against_the_saved_targets_and_expires_with_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let tuf = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let mut repo = Repo::new();
+    let now = repo.signed_at;
+    repo.publish(Channel::Beta, &index(5, now - Duration::hours(1)));
+    let mut client = client(&repo, tuf.path());
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now))
+            .is_none()
+    );
+
+    let bytes = downloaded(&mut client, now);
+    store.save_catalog(Channel::Beta, &bytes).unwrap();
+    assert_eq!(store.state().last_seq[&Channel::Beta], 5);
+    let kept = store
+        .load_catalog(Channel::Beta, check(&client, now))
+        .unwrap();
+    assert_eq!(kept.index.seq, 5);
+    // It holds as long as the targets that list it: 30 days.
+    assert_eq!(kept.valid_until, now + Duration::days(30));
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now + Duration::days(29)))
+            .is_some()
+    );
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now + Duration::days(31)))
+            .is_none(),
+        "expired targets"
+    );
+    // Another channel has none kept.
+    assert!(store.load_catalog(Channel::Stable, |_| Ok(now)).is_none());
+}
+
+#[test]
+fn a_kept_index_that_no_longer_matches_the_verified_targets_is_not_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let tuf = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let mut repo = Repo::new();
+    let now = repo.signed_at;
+    repo.publish(Channel::Beta, &index(5, now));
+    let mut client = client(&repo, tuf.path());
+    let bytes = downloaded(&mut client, now);
+    store.save_catalog(Channel::Beta, &bytes).unwrap();
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now))
+            .is_some()
+    );
+
+    let path = dir.path().join("plugins/catalog/beta.json");
+    // Altered on disk, however little (still a valid index).
+    let altered = index(6, now);
+    std::fs::write(&path, &altered).unwrap();
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now))
+            .is_none()
+    );
+    let mut padded = bytes.clone();
+    padded.push(b' ');
+    std::fs::write(&path, &padded).unwrap();
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&client, now))
+            .is_none()
+    );
+
+    // The repository publishes a newer index and the client takes it: the old file, put
+    // back, is not what the targets list any more, though it was once.
+    std::fs::write(&path, &bytes).unwrap();
+    repo.publish(Channel::Beta, &index(7, now));
+    let mut newer = TufClient::new(
+        repo.anchor(),
+        repo.fetcher(),
+        FileStore::in_data_dir(tuf.path()),
+        oncl_update::tuf::Limits::default(),
+    )
+    .unwrap();
+    let fresh = downloaded(&mut newer, now);
+    assert!(
+        store
+            .load_catalog(Channel::Beta, check(&newer, now))
+            .is_none()
+    );
+    store.save_catalog(Channel::Beta, &fresh).unwrap();
+    assert_eq!(store.state().last_seq[&Channel::Beta], 7);
+    assert_eq!(
+        store
+            .load_catalog(Channel::Beta, check(&newer, now))
+            .unwrap()
+            .index
+            .seq,
+        7
+    );
+}
+
+#[test]
+fn a_kept_index_is_still_held_to_its_channel_and_last_seq() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
-    let key = Key::new();
-    let keys = [key.public.clone()];
     let now = OffsetDateTime::now_utc();
-    assert!(store.load_catalog(Channel::Beta, &keys, now).is_none());
-
-    let (index, sig) = key.index(5, now - Duration::hours(1));
-    store.save_catalog(Channel::Beta, &index, &sig).unwrap();
-    assert_eq!(store.state().last_seq[&Channel::Beta], 5);
-    let loaded = store.load_catalog(Channel::Beta, &keys, now).unwrap();
-    assert_eq!(loaded.seq, 5);
-    // Another channel has none.
-    assert!(store.load_catalog(Channel::Stable, &keys, now).is_none());
-    // Another key does not verify it.
+    store.save_catalog(Channel::Beta, &index(7, now)).unwrap();
+    let valid = |_: &[u8]| Ok(now + Duration::days(1));
+    assert_eq!(
+        store.load_catalog(Channel::Beta, valid).unwrap().index.seq,
+        7
+    );
+    // An older index put back (the check, here, vouches for anything) is a rollback.
+    let path = dir.path().join("plugins/catalog/beta.json");
+    std::fs::write(&path, index(6, now)).unwrap();
+    assert!(store.load_catalog(Channel::Beta, valid).is_none());
+    // An index of the other channel under this one's name.
+    let mut other: serde_json::Value = serde_json::from_slice(&index(9, now)).unwrap();
+    other["channel"] = "stable".into();
+    std::fs::write(&path, serde_json::to_vec(&other).unwrap()).unwrap();
+    assert!(store.load_catalog(Channel::Beta, valid).is_none());
+    // The check says no.
+    std::fs::write(&path, index(8, now)).unwrap();
     assert!(
         store
-            .load_catalog(Channel::Beta, &[Key::new().public], now)
+            .load_catalog(Channel::Beta, |_| Err("expired".into()))
             .is_none()
     );
-    // Expired: not used.
-    assert!(
+    // What is not an index cannot be saved.
+    assert_eq!(
         store
-            .load_catalog(Channel::Beta, &keys, now + Duration::days(8))
-            .is_none()
+            .save_catalog(Channel::Beta, b"nope")
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidData
     );
-    // A newer one raises last_seq; the old one put back is a rollback.
-    let (newer, newer_sig) = key.index(7, now);
-    store
-        .save_catalog(Channel::Beta, &newer, &newer_sig)
-        .unwrap();
-    assert_eq!(store.state().last_seq[&Channel::Beta], 7);
-    let catalog = dir.path().join("plugins/catalog");
-    std::fs::write(catalog.join("beta.json"), &index).unwrap();
-    std::fs::write(catalog.join("beta.json.minisig"), &sig).unwrap();
-    assert!(store.load_catalog(Channel::Beta, &keys, now).is_none());
-    // A changed index fails its signature.
-    let mut changed = newer.clone();
-    changed.push(b' ');
-    std::fs::write(catalog.join("beta.json"), &changed).unwrap();
-    std::fs::write(catalog.join("beta.json.minisig"), &newer_sig).unwrap();
-    assert!(store.load_catalog(Channel::Beta, &keys, now).is_none());
+    // The signature file an older version kept is removed by a save.
+    let stale = dir.path().join("plugins/catalog/beta.json.minisig");
+    std::fs::write(&stale, b"old").unwrap();
+    store.save_catalog(Channel::Beta, &index(8, now)).unwrap();
+    assert!(!stale.exists());
 }

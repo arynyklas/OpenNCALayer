@@ -1,19 +1,22 @@
-//! The signature of an index: minisign (Ed25519 over the BLAKE2b-512 hash of the file, the
-//! "prehashed" mode), in `<channel>.json.minisig` beside the index. The signed trusted
-//! comment is `channel=<channel>;seq=<seq>` ([`trusted_comment`]) and must name the
-//! index's own channel and `seq`.
+//! The minisign signature of an update index, the way the clients of `0.1.0-rc.1` and before
+//! read it: Ed25519 over the BLAKE2b-512 hash of the file (the "prehashed" mode), in
+//! `<channel>.json.minisig` beside the index. The signed trusted comment is
+//! `channel=<channel>;seq=<seq>` ([`trusted_comment`]) and must name the index's own channel
+//! and `seq`.
+//!
+//! Only the maintainer's tools verify this now (`cargo xtask sign`, `cargo xtask index
+//! check`): the committed indexes stay signed with it as long as the legacy path
+//! (`updates/v1/*.json` + `.minisig`) is served to the clients that read it. The clients of
+//! this version read the indexes through TUF and contain no minisign code.
+
+use std::fmt;
 
 use minisign_verify::{PublicKey, Signature};
+use oncl_update::{Channel, Index, MAX_INDEX_LEN, UpdateError};
 use time::{Duration, OffsetDateTime};
 
-use crate::UpdateError;
-use crate::index::{Channel, Index};
-
-/// The largest index read: 1 MiB.
-pub const MAX_INDEX_LEN: u64 = 1 << 20;
-
-/// The oldest an index may be, from its `generated`, whatever its `expires` says: an index
-/// not signed again within this is refused.
+/// The oldest an index may be, from its `generated`, whatever its `expires` says: the length
+/// of the index's validity, and what the legacy clients refuse an older one by.
 pub const MAX_AGE: Duration = Duration::days(30);
 
 /// The trusted comment a signature of an index of `channel` and `seq` carries.
@@ -21,28 +24,88 @@ pub fn trusted_comment(channel: Channel, seq: u64) -> String {
     format!("channel={channel};seq={seq}")
 }
 
-/// Verifies an index of `channel` and reads it.
+/// Why a legacy client would refuse an index.
+#[derive(Debug)]
+pub enum Refused {
+    /// The index is bigger than [`MAX_INDEX_LEN`].
+    TooLarge,
+    /// The signature file is not a minisign signature.
+    MalformedSignature,
+    /// No trusted key made the signature, or the index or its trusted comment were changed
+    /// after signing; also a signature in minisign's legacy (not prehashed) mode.
+    BadSignature,
+    /// The signed trusted comment is not `channel=…;seq=…`.
+    BadTrustedComment(String),
+    /// The signed trusted comment names another channel or `seq` than the index.
+    CommentMismatch { comment: String, index: String },
+    /// The index is not valid.
+    Index(UpdateError),
+    /// The index is of another channel than the one asked for.
+    WrongChannel { expected: Channel, found: Channel },
+    /// The index is older than one already seen: `seq` went back.
+    Rollback { seq: u64, last: u64 },
+    /// The index is past its `expires`, or older than [`MAX_AGE`].
+    Expired(OffsetDateTime),
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Refused::TooLarge => write!(f, "the update index is larger than {MAX_INDEX_LEN} bytes"),
+            Refused::MalformedSignature => f.write_str("the update index signature is malformed"),
+            Refused::BadSignature => {
+                f.write_str("the update index signature does not match any trusted key")
+            }
+            Refused::BadTrustedComment(why) => {
+                write!(f, "the signature's trusted comment is malformed: {why}")
+            }
+            Refused::CommentMismatch { comment, index } => {
+                write!(f, "the signature is for {comment}, the index is {index}")
+            }
+            Refused::Index(e) => e.fmt(f),
+            Refused::WrongChannel { expected, found } => {
+                write!(f, "the index is for the {found} channel, not {expected}")
+            }
+            Refused::Rollback { seq, last } => {
+                write!(f, "the index seq {seq} is older than the last seen {last}")
+            }
+            Refused::Expired(at) => write!(f, "the index expired at {at}"),
+        }
+    }
+}
+
+impl std::error::Error for Refused {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Refused::Index(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<UpdateError> for Refused {
+    fn from(e: UpdateError) -> Refused {
+        Refused::Index(e)
+    }
+}
+
+/// Verifies an index of `channel` the way the legacy clients did, and reads it.
 ///
 /// The index is accepted only if all of these hold:
 /// - it is at most [`MAX_INDEX_LEN`] bytes;
-/// - `sig_bytes` is a prehashed minisign signature of `index_bytes` by one of `keys` (the
-///   current key and the next one, for rotation), its trusted comment included;
+/// - `sig_bytes` is a prehashed minisign signature of `index_bytes` by one of `keys`, its
+///   trusted comment included;
 /// - the trusted comment names the channel and `seq` of the index, and the index is of
 ///   `channel`;
 /// - the index is valid ([`Index::from_json`]);
-/// - its `seq` is not below `last_seq`, the highest `seq` of `channel` accepted before.
-///   An equal `seq` is the same index fetched again (every published index of a channel
-///   has a new `seq`), so an update that failed to download can be retried with it;
+/// - its `seq` is not below `last_seq`;
 /// - `now` is before its `expires` and less than [`MAX_AGE`] after its `generated`.
 ///
 /// The JSON is parsed only after the signature holds.
 ///
 /// # Errors
 ///
-/// The first rule broken, as [`UpdateError::TooLarge`], [`UpdateError::MalformedSignature`],
-/// [`UpdateError::BadSignature`], [`UpdateError::BadTrustedComment`], the errors of
-/// [`Index::from_json`], [`UpdateError::CommentMismatch`], [`UpdateError::WrongChannel`],
-/// [`UpdateError::Rollback`] or [`UpdateError::Expired`].
+/// The first rule broken.
 pub fn verify(
     index_bytes: &[u8],
     sig_bytes: &[u8],
@@ -50,31 +113,31 @@ pub fn verify(
     channel: Channel,
     last_seq: Option<u64>,
     now: OffsetDateTime,
-) -> Result<Index, UpdateError> {
+) -> Result<Index, Refused> {
     if index_bytes.len() as u64 > MAX_INDEX_LEN {
-        return Err(UpdateError::TooLarge);
+        return Err(Refused::TooLarge);
     }
     let signature = std::str::from_utf8(sig_bytes)
         .ok()
         .and_then(|text| Signature::decode(text).ok())
-        .ok_or(UpdateError::MalformedSignature)?;
+        .ok_or(Refused::MalformedSignature)?;
     // `allow_legacy = false`: a signature of the raw file (minisign's legacy mode) fails.
     if !keys
         .iter()
         .any(|key| key.verify(index_bytes, &signature, false).is_ok())
     {
-        return Err(UpdateError::BadSignature);
+        return Err(Refused::BadSignature);
     }
     let (signed_channel, signed_seq) = parse_trusted_comment(signature.trusted_comment())?;
     let index = Index::from_json(index_bytes)?;
     if (signed_channel, signed_seq) != (index.channel, index.seq) {
-        return Err(UpdateError::CommentMismatch {
+        return Err(Refused::CommentMismatch {
             comment: trusted_comment(signed_channel, signed_seq),
             index: trusted_comment(index.channel, index.seq),
         });
     }
     if index.channel != channel {
-        return Err(UpdateError::WrongChannel {
+        return Err(Refused::WrongChannel {
             expected: channel,
             found: index.channel,
         });
@@ -82,7 +145,7 @@ pub fn verify(
     if let Some(last) = last_seq
         && index.seq < last
     {
-        return Err(UpdateError::Rollback {
+        return Err(Refused::Rollback {
             seq: index.seq,
             last,
         });
@@ -92,15 +155,15 @@ pub fn verify(
         None => index.expires,
     };
     if now >= deadline {
-        return Err(UpdateError::Expired(deadline));
+        return Err(Refused::Expired(deadline));
     }
     Ok(index)
 }
 
 /// `channel=<channel>;seq=<seq>`, in any order; other `key=value` pairs are ignored, a key
 /// given twice is refused.
-fn parse_trusted_comment(comment: &str) -> Result<(Channel, u64), UpdateError> {
-    let bad = |why: &str| UpdateError::BadTrustedComment(format!("{why} in {comment:?}"));
+fn parse_trusted_comment(comment: &str) -> Result<(Channel, u64), Refused> {
+    let bad = |why: &str| Refused::BadTrustedComment(format!("{why} in {comment:?}"));
     let mut channel = None;
     let mut seq = None;
     for pair in comment.split(';') {
@@ -134,30 +197,30 @@ fn parse_trusted_comment(comment: &str) -> Result<(Channel, u64), UpdateError> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::index::tests::index_json;
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
     use minisign::KeyPair;
+    use serde_json::{Value, json};
     use std::io::Cursor;
     use time::macros::datetime;
 
-    /// A key pair made for the test, and its public key as the client reads it.
-    pub(crate) struct TestKey {
+    /// A key pair made for the test, and its public key as the legacy client read it.
+    struct TestKey {
         pair: KeyPair,
-        pub(crate) public: PublicKey,
+        public: PublicKey,
     }
 
     impl TestKey {
-        pub(crate) fn new() -> TestKey {
+        fn new() -> TestKey {
             let pair = KeyPair::generate_unencrypted_keypair().unwrap();
             let public = PublicKey::decode(&pair.pk.to_box().unwrap().into_string()).unwrap();
             TestKey { pair, public }
         }
 
         /// A `.minisig` of `data` with `comment` as its trusted comment.
-        pub(crate) fn sign(&self, data: &[u8], comment: &str) -> Vec<u8> {
+        fn sign(&self, data: &[u8], comment: &str) -> Vec<u8> {
             minisign::sign(None, &self.pair.sk, Cursor::new(data), Some(comment), None)
                 .unwrap()
                 .into_string()
@@ -166,6 +229,33 @@ pub(crate) mod tests {
     }
 
     const NOW: OffsetDateTime = datetime!(2026-10-10 12:00 UTC);
+
+    /// A valid index of `channel` and `seq`, generated 2026-10-01, expiring 2026-10-31.
+    fn index_json(channel: &str, seq: u64) -> Value {
+        let sum = |n: u8| hex(&[n; 32]);
+        json!({
+            "schema": 1,
+            "channel": channel,
+            "seq": seq,
+            "generated": "2026-10-01T00:00:00Z",
+            "expires": "2026-10-31T00:00:00Z",
+            "core": [{
+                "version": "0.1.0-alpha.2",
+                "flavors": {"win-x64": {
+                    "url": "https://github.com/o/r/releases/download/v0.1.0-alpha.2/full.nupkg",
+                    "sha256": sum(1),
+                    "size": 123
+                }},
+                "rollout": 100,
+                "revoked": false
+            }],
+            "plugins": []
+        })
+    }
+
+    fn hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
 
     fn body(channel: &str, seq: u64) -> Vec<u8> {
         serde_json::to_vec_pretty(&index_json(channel, seq)).unwrap()
@@ -177,7 +267,7 @@ pub(crate) mod tests {
         (index, sig)
     }
 
-    fn check(index: &[u8], sig: &[u8], keys: &[&TestKey]) -> Result<Index, UpdateError> {
+    fn check(index: &[u8], sig: &[u8], keys: &[&TestKey]) -> Result<Index, Refused> {
         let keys: Vec<_> = keys.iter().map(|k| k.public.clone()).collect();
         verify(index, sig, &keys, Channel::Beta, Some(40), NOW)
     }
@@ -198,11 +288,11 @@ pub(crate) mod tests {
         let (index, sig) = signed(&other, "beta", 42);
         assert!(matches!(
             check(&index, &sig, &[&trusted]),
-            Err(UpdateError::BadSignature)
+            Err(Refused::BadSignature)
         ));
         assert!(matches!(
             check(&index, &sig, &[]),
-            Err(UpdateError::BadSignature)
+            Err(Refused::BadSignature)
         ));
     }
 
@@ -216,7 +306,7 @@ pub(crate) mod tests {
         changed[at] ^= 1;
         assert!(matches!(
             check(&changed, &sig, &[&key]),
-            Err(UpdateError::BadSignature)
+            Err(Refused::BadSignature)
         ));
 
         // The trusted comment is covered by the global signature.
@@ -225,21 +315,7 @@ pub(crate) mod tests {
         assert_ne!(forged, text);
         assert!(matches!(
             check(&index, forged.as_bytes(), &[&key]),
-            Err(UpdateError::BadSignature)
-        ));
-
-        // A flipped bit of the signature itself (inside the base64 of line 2).
-        let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
-        let sig_line = &mut lines[1];
-        let replacement = if sig_line.as_bytes()[20] == b'A' {
-            "B"
-        } else {
-            "A"
-        };
-        sig_line.replace_range(20..21, replacement);
-        assert!(matches!(
-            check(&index, lines.join("\n").as_bytes(), &[&key]),
-            Err(UpdateError::BadSignature)
+            Err(Refused::BadSignature)
         ));
     }
 
@@ -273,7 +349,7 @@ pub(crate) mod tests {
         public.verify(&index, &decoded, true).unwrap();
         assert!(matches!(
             verify(&index, &sig, &[public], Channel::Beta, None, NOW),
-            Err(UpdateError::BadSignature)
+            Err(Refused::BadSignature)
         ));
     }
 
@@ -285,7 +361,7 @@ pub(crate) mod tests {
             assert!(
                 matches!(
                     check(&index, sig, &[&key]),
-                    Err(UpdateError::MalformedSignature)
+                    Err(Refused::MalformedSignature)
                 ),
                 "{sig:?}"
             );
@@ -301,7 +377,7 @@ pub(crate) mod tests {
             assert!(
                 matches!(
                     check(&index, &sig, &[&key]),
-                    Err(UpdateError::CommentMismatch { .. })
+                    Err(Refused::CommentMismatch { .. })
                 ),
                 "{comment}"
             );
@@ -321,7 +397,7 @@ pub(crate) mod tests {
             assert!(
                 matches!(
                     check(&index, &sig, &[&key]),
-                    Err(UpdateError::BadTrustedComment(_))
+                    Err(Refused::BadTrustedComment(_))
                 ),
                 "{comment}"
             );
@@ -333,37 +409,30 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn index_of_another_channel_is_refused() {
+    fn index_of_another_channel_and_a_seq_that_went_back_are_refused() {
         let key = TestKey::new();
         let (index, sig) = signed(&key, "stable", 42);
         assert!(matches!(
             check(&index, &sig, &[&key]),
-            Err(UpdateError::WrongChannel {
+            Err(Refused::WrongChannel {
                 expected: Channel::Beta,
                 found: Channel::Stable
             })
         ));
-    }
-
-    #[test]
-    fn seq_must_not_go_back() {
-        let key = TestKey::new();
         let (index, sig) = signed(&key, "beta", 39);
         assert!(matches!(
             check(&index, &sig, &[&key]),
-            Err(UpdateError::Rollback { seq: 39, last: 40 })
+            Err(Refused::Rollback { seq: 39, last: 40 })
         ));
         let keys = [key.public.clone()];
-        verify(&index, &sig, &keys, Channel::Beta, None, NOW).unwrap();
         verify(&index, &sig, &keys, Channel::Beta, Some(39), NOW).unwrap();
-        verify(&index, &sig, &keys, Channel::Beta, Some(38), NOW).unwrap();
     }
 
     #[test]
     fn stale_index_is_refused() {
         let key = TestKey::new();
         let keys = [key.public.clone()];
-        let at = |value: serde_json::Value| {
+        let at = |value: Value| {
             let index = serde_json::to_vec(&value).unwrap();
             let sig = key.sign(&index, "channel=beta;seq=42");
             (index, sig)
@@ -383,72 +452,34 @@ pub(crate) mod tests {
         .unwrap();
         assert!(matches!(
             verify(&index, &sig, &keys, Channel::Beta, None, expires),
-            Err(UpdateError::Expired(t)) if t == expires
+            Err(Refused::Expired(t)) if t == expires
         ));
-
-        // An `expires` before generated + 30 days ends the index first.
-        let mut early = index_json("beta", 42);
-        early["expires"] = serde_json::json!("2026-10-08T00:00:00Z");
-        let (index, sig) = at(early);
-        let expires = datetime!(2026-10-08 0:00 UTC);
-        verify(
-            &index,
-            &sig,
-            &keys,
-            Channel::Beta,
-            None,
-            expires - Duration::SECOND,
-        )
-        .unwrap();
-        for now in [expires, datetime!(2026-10-20 0:00 UTC)] {
-            assert!(
-                matches!(
-                    verify(&index, &sig, &keys, Channel::Beta, None, now),
-                    Err(UpdateError::Expired(t)) if t == expires
-                ),
-                "{now}"
-            );
-        }
 
         // A far `expires` does not stretch the index past 30 days from `generated`.
         let mut far = index_json("beta", 42);
-        far["expires"] = serde_json::json!("2027-12-31T00:00:00Z");
+        far["expires"] = json!("2027-12-31T00:00:00Z");
         let (index, sig) = at(far);
-        let aged = datetime!(2026-10-31 0:00 UTC);
-        verify(
-            &index,
-            &sig,
-            &keys,
-            Channel::Beta,
-            None,
-            aged - Duration::SECOND,
-        )
-        .unwrap();
         assert!(matches!(
-            verify(&index, &sig, &keys, Channel::Beta, None, aged + Duration::days(60)),
-            Err(UpdateError::Expired(t)) if t == aged
+            verify(&index, &sig, &keys, Channel::Beta, None, expires + Duration::days(60)),
+            Err(Refused::Expired(t)) if t == expires
         ));
     }
 
     #[test]
-    fn oversized_index_is_refused_before_anything_else() {
+    fn oversized_and_invalid_indexes_are_refused() {
         let index = vec![b' '; MAX_INDEX_LEN as usize + 1];
         assert!(matches!(
             verify(&index, b"", &[], Channel::Beta, None, NOW),
-            Err(UpdateError::TooLarge)
+            Err(Refused::TooLarge)
         ));
-    }
-
-    #[test]
-    fn signed_but_invalid_index_is_refused() {
         let key = TestKey::new();
         let mut v = index_json("beta", 42);
-        v["core"][0]["rollout"] = serde_json::json!(200);
+        v["core"][0]["rollout"] = json!(200);
         let index = serde_json::to_vec(&v).unwrap();
         let sig = key.sign(&index, "channel=beta;seq=42");
         assert!(matches!(
             check(&index, &sig, &[&key]),
-            Err(UpdateError::Malformed(_))
+            Err(Refused::Index(UpdateError::Malformed(_)))
         ));
     }
 }

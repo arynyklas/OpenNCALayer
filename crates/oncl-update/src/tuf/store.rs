@@ -23,7 +23,7 @@ pub const SCHEMA: u32 = 1;
 
 /// The largest state file, read or written: a client that wrote a file it cannot read back
 /// would reset itself every run.
-pub const MAX_STATE_LEN: u64 = 1 << 20;
+pub const MAX_STATE_LEN: u64 = 2 << 20;
 
 /// What the client trusts, apart from its built-in root.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -52,6 +52,21 @@ pub struct TrustState {
     /// The version of the newest targets accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<u64>,
+    /// The targets file of that version as downloaded: what [`super::TufClient::verify_cached_target`]
+    /// checks a kept target against, offline, after checking its signature again from the
+    /// chain of roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets_file: Option<Envelope>,
+    /// The client has accepted a timestamp of this repository at least once. Never cleared by
+    /// a rotation of keys or by dropping the saved versions (a reset of a state that did
+    /// not hold sets it: nothing can be known then), so that a 404 for the timestamp is "not
+    /// published" only for a client that never saw the repository. Absent means false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ever_published: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -91,17 +106,35 @@ impl TrustState {
         } else {
             (disk.root_version, disk.roots.clone())
         };
-        let (timestamp, snapshot, targets) = match disk.keys_epoch.cmp(&mine.keys_epoch) {
-            std::cmp::Ordering::Greater => (disk.timestamp, disk.snapshot, disk.targets),
-            std::cmp::Ordering::Less => {
-                (mine.timestamp.clone(), mine.snapshot.clone(), mine.targets)
-            }
-            std::cmp::Ordering::Equal => (
-                newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
-                newest(disk.snapshot, mine.snapshot.clone(), |s| s.version),
-                disk.targets.max(mine.targets),
-            ),
-        };
+        let (timestamp, snapshot, targets, targets_file) =
+            match disk.keys_epoch.cmp(&mine.keys_epoch) {
+                std::cmp::Ordering::Greater => (
+                    disk.timestamp,
+                    disk.snapshot,
+                    disk.targets,
+                    disk.targets_file,
+                ),
+                std::cmp::Ordering::Less => (
+                    mine.timestamp.clone(),
+                    mine.snapshot.clone(),
+                    mine.targets,
+                    mine.targets_file.clone(),
+                ),
+                std::cmp::Ordering::Equal => {
+                    // The file goes with the higher version; mine if they are equal.
+                    let file = if disk.targets > mine.targets {
+                        disk.targets_file
+                    } else {
+                        mine.targets_file.clone().or(disk.targets_file)
+                    };
+                    (
+                        newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
+                        newest(disk.snapshot, mine.snapshot.clone(), |s| s.version),
+                        disk.targets.max(mine.targets),
+                        file,
+                    )
+                }
+            };
         TrustState {
             root_version,
             keys_epoch: disk.keys_epoch.max(mine.keys_epoch),
@@ -109,6 +142,8 @@ impl TrustState {
             timestamp,
             snapshot,
             targets,
+            targets_file,
+            ever_published: disk.ever_published || mine.ever_published,
         }
     }
 }
@@ -139,7 +174,7 @@ pub trait Store {
     ///
     /// # Errors
     ///
-    /// [`TufError::Store`] if it cannot be written; [`TufError::TooLarge`] if the state is
+    /// [`TufError::Store`] if it cannot be written; [`TufError::StateTooLarge`] if the state is
     /// larger than [`MAX_STATE_LEN`].
     fn save(&mut self, state: &TrustState) -> Result<TrustState, TufError>;
 
@@ -275,10 +310,7 @@ impl FileStore {
         let mut body = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
         body.push(b'\n');
         if body.len() as u64 > MAX_STATE_LEN {
-            return Err(TufError::TooLarge {
-                what: "the TUF state".to_owned(),
-                limit: MAX_STATE_LEN,
-            });
+            return Err(TufError::StateTooLarge(MAX_STATE_LEN));
         }
         write_atomically(&self.path(), &body, Access::Default)?;
         Ok(())
@@ -354,6 +386,8 @@ mod tests {
             timestamp: Some(ts(1_800_000_000)),
             snapshot: Some(snap(7)),
             targets: Some(3),
+            targets_file: None,
+            ever_published: false,
         }
     }
 
@@ -435,14 +469,11 @@ mod tests {
         big.root_version = 40_000;
         assert!(matches!(
             store.save(&big),
-            Err(TufError::TooLarge {
-                limit: MAX_STATE_LEN,
-                ..
-            })
+            Err(TufError::StateTooLarge(MAX_STATE_LEN))
         ));
         assert!(matches!(
             store.overwrite(&big),
-            Err(TufError::TooLarge { .. })
+            Err(TufError::StateTooLarge(_))
         ));
         assert_eq!(store.load().unwrap(), state());
         // Too large to read: not read at all, an invalid state.
@@ -466,6 +497,8 @@ mod tests {
             timestamp: Some(ts(5)),
             snapshot: Some(snap(1)),
             targets: Some(1),
+            targets_file: None,
+            ever_published: false,
         };
         assert_eq!(s.save(&older).unwrap(), state());
         // An older root with higher versions of its own: the root stays, the versions of the
@@ -477,6 +510,8 @@ mod tests {
             timestamp: Some(ts(2_000_000_000)),
             snapshot: None,
             targets: None,
+            targets_file: None,
+            ever_published: false,
         };
         let merged = s.save(&stale_root).unwrap();
         assert_eq!(merged.root_version, 3);
@@ -493,6 +528,8 @@ mod tests {
             timestamp: None,
             snapshot: None,
             targets: None,
+            targets_file: None,
+            ever_published: false,
         };
         let merged = s.save(&rotated).unwrap();
         assert_eq!((merged.root_version, merged.keys_epoch), (4, 4));

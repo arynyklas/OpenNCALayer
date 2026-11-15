@@ -46,6 +46,9 @@ getrandom.workspace = true
 flate2.workspace = true
 # `sign`: the update index key pair and signatures.
 minisign.workspace = true
+# `sign`, `index check`: the minisign signature of the indexes of the legacy path, which no
+# client of this version reads (`legacy_index`).
+minisign-verify.workspace = true
 object.workspace = true
 pkcs8.workspace = true
 rand_chacha.workspace = true
@@ -76,6 +79,12 @@ zip.workspace = true
 zeroize.workspace = true
 # `platform-interop`: the synthetic WebAssembly plugin of the plugin-call cases.
 wat.workspace = true
+
+[dev-dependencies]
+# `legacy_index`'s tests: a minisign signature in the legacy mode, which `minisign` cannot make.
+ring.workspace = true
+# `legacy_index`'s tests: dates written as literals.
+time = { workspace = true, features = ["macros"] }
 
 [target.'cfg(unix)'.dependencies]
 # `ext-e2e`: signal handling and killing process groups.

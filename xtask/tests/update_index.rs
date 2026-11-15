@@ -359,8 +359,8 @@ fn signed_index_passes_the_check() {
     assert_eq!((checked[0].channel, checked[0].seq), (Channel::Beta, 1));
     assert_eq!(checked[0].new_versions, [version(TAG)]);
 
-    // The client accepts it too.
-    let index = oncl_update::verify(
+    // A legacy client accepts it too.
+    let index = xtask::legacy_index::verify(
         &fs::read(&path).unwrap(),
         signature.as_bytes(),
         &[key.trusted().current],

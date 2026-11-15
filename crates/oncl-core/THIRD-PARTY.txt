@@ -80,91 +80,90 @@ libm 0.2.16 | MIT | https://github.com/rust-lang/compiler-builtins | 56
 litemap 0.8.3 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
 log 0.4.34 | MIT OR Apache-2.0 | https://github.com/rust-lang/log | 1, 7
 memchr 2.8.3 | Unlicense OR MIT | https://github.com/BurntSushi/memchr | 57, 58, 59
-minisign-verify 0.3.0 | MIT | https://github.com/jedisct1/rust-minisign-verify | 60
-nix 0.31.3 | MIT | https://github.com/nix-rust/nix | 61
+nix 0.31.3 | MIT | https://github.com/nix-rust/nix | 60
 num-bigint-dig 0.8.6 | MIT/Apache-2.0 | https://github.com/dignifiedquire/num-bigint | 1, 7
-num-conv 0.2.2 | MIT OR Apache-2.0 | https://github.com/jhpratt/num-conv | 41, 62
+num-conv 0.2.2 | MIT OR Apache-2.0 | https://github.com/jhpratt/num-conv | 41, 61
 num-integer 0.1.47 | MIT OR Apache-2.0 | https://github.com/rust-num/num-integer | 1, 7
 num-iter 0.1.46 | MIT OR Apache-2.0 | https://github.com/rust-num/num-iter | 1, 7
 num-traits 0.2.19 | MIT OR Apache-2.0 | https://github.com/rust-num/num-traits | 1, 7
 once_cell 1.21.4 | MIT OR Apache-2.0 | https://github.com/matklad/once_cell | 1, 53
-pbkdf2 0.13.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/password-hashes | 1, 63
-pem-rfc7468 0.7.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pem-rfc7468 | 1, 64
-pem-rfc7468 1.0.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 65
+pbkdf2 0.13.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/password-hashes | 1, 62
+pem-rfc7468 0.7.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pem-rfc7468 | 1, 63
+pem-rfc7468 1.0.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 64
 percent-encoding 2.3.2 | MIT OR Apache-2.0 | https://github.com/servo/rust-url/ | 1, 49
 pin-project-lite 0.2.17 | Apache-2.0 OR MIT | https://github.com/taiki-e/pin-project-lite | 41, 53
-pkcs1 0.7.5 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs1 | 1, 66
+pkcs1 0.7.5 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs1 | 1, 65
 pkcs8 0.10.2 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/pkcs8 | 1, 25
 pkcs8 0.11.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 15
 polyval 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/universal-hashes | 1, 39
 potential_utf 0.1.6 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-powerfmt 0.2.1 | MIT OR Apache-2.0 | https://github.com/jhpratt/powerfmt | 67, 68
-ppv-lite86 0.2.21 | MIT OR Apache-2.0 | https://github.com/cryptocorrosion/cryptocorrosion | 69, 70
-rand 0.8.8 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 71, 72, 73
-rand_chacha 0.3.1 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 36, 71, 73
-rand_core 0.6.4 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 71, 73, 74
-rc2 0.9.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/block-ciphers | 75, 76
-ring 0.17.14 | Apache-2.0 AND ISC | https://github.com/briansmith/ring | 77, 78, 79
-roxmltree 0.21.2 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/roxmltree | 1, 80
+powerfmt 0.2.1 | MIT OR Apache-2.0 | https://github.com/jhpratt/powerfmt | 66, 67
+ppv-lite86 0.2.21 | MIT OR Apache-2.0 | https://github.com/cryptocorrosion/cryptocorrosion | 68, 69
+rand 0.8.8 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 70, 71, 72
+rand_chacha 0.3.1 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 36, 70, 72
+rand_core 0.6.4 | MIT OR Apache-2.0 | https://github.com/rust-random/rand | 70, 72, 73
+rc2 0.9.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/block-ciphers | 74, 75
+ring 0.17.14 | Apache-2.0 AND ISC | https://github.com/briansmith/ring | 76, 77, 78
+roxmltree 0.21.2 | MIT OR Apache-2.0 | https://github.com/RazrFalcon/roxmltree | 1, 79
 rsa 0.9.10 | MIT OR Apache-2.0 | https://github.com/RustCrypto/RSA | 1, 53
-rustls 0.23.46 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | 1, 81, 82
-rustls-pki-types 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | 83, 84
-rustls-webpki 0.103.16 | ISC | https://github.com/rustls/webpki | 85
+rustls 0.23.46 | Apache-2.0 OR ISC OR MIT | https://github.com/rustls/rustls | 1, 80, 81
+rustls-pki-types 1.15.1 | MIT OR Apache-2.0 | https://github.com/rustls/pki-types | 82, 83
+rustls-webpki 0.103.16 | ISC | https://github.com/rustls/webpki | 84
 semver 1.0.28 | MIT OR Apache-2.0 | https://github.com/dtolnay/semver | 41, 53
 serde 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | 41, 53
 serde_bytes 0.11.19 | MIT OR Apache-2.0 | https://github.com/serde-rs/bytes | 41, 53
 serde_core 1.0.229 | MIT OR Apache-2.0 | https://github.com/serde-rs/serde | 41, 53
 serde_json 1.0.154 | MIT OR Apache-2.0 | https://github.com/serde-rs/json | 41, 53
-serde_spanned 1.1.2 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 86, 87
-sha1 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 88
-sha2 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 89
-sha2 0.11.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 88
-signature 2.2.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/traits/tree/master/signature | 1, 90
-smallvec 1.16.4 | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec | 1, 91
-spin 0.9.9 | MIT | https://github.com/mvdnes/spin-rs.git | 92
-spki 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/spki | 1, 66
+serde_spanned 1.1.2 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 85, 86
+sha1 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 87
+sha2 0.10.9 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 88
+sha2 0.11.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 87
+signature 2.2.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/traits/tree/master/signature | 1, 89
+smallvec 1.16.4 | MIT OR Apache-2.0 | https://github.com/servo/rust-smallvec | 1, 90
+spin 0.9.9 | MIT | https://github.com/mvdnes/spin-rs.git | 91
+spki 0.7.3 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats/tree/master/spki | 1, 65
 spki 0.8.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 21
-stable_deref_trait 1.2.1 | MIT OR Apache-2.0 | https://github.com/storyyeller/stable_deref_trait | 1, 93
+stable_deref_trait 1.2.1 | MIT OR Apache-2.0 | https://github.com/storyyeller/stable_deref_trait | 1, 92
 streebog 0.11.0 | MIT OR Apache-2.0 | https://github.com/RustCrypto/hashes | 1, 40
-subtle 2.6.1 | BSD-3-Clause | https://github.com/dalek-cryptography/subtle | 94
+subtle 2.6.1 | BSD-3-Clause | https://github.com/dalek-cryptography/subtle | 93
 thiserror 2.0.21 | MIT OR Apache-2.0 | https://github.com/dtolnay/thiserror | 41, 53
-time 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | 41, 95
-time-core 0.1.9 | MIT OR Apache-2.0 | https://github.com/time-rs/time | 41, 95
+time 0.3.55 | MIT OR Apache-2.0 | https://github.com/time-rs/time | 41, 94
+time-core 0.1.9 | MIT OR Apache-2.0 | https://github.com/time-rs/time | 41, 94
 tinystr 0.8.5 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-toml 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 86, 87
-toml_datetime 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 86, 87
-toml_parser 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 86, 87
-tracing 0.1.44 | MIT | https://github.com/tokio-rs/tracing | 96
-tracing-core 0.1.36 | MIT | https://github.com/tokio-rs/tracing | 96
+toml 1.1.8+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 85, 86
+toml_datetime 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 85, 86
+toml_parser 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 | https://github.com/toml-rs/toml | 85, 86
+tracing 0.1.44 | MIT | https://github.com/tokio-rs/tracing | 95
+tracing-core 0.1.36 | MIT | https://github.com/tokio-rs/tracing | 95
 typed-path 0.13.0 | MIT OR Apache-2.0 | https://github.com/chipsenkbeil/typed-path | 41, 53
-typenum 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum | 97, 98, 99
-universal-hash 0.6.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits | 1, 100
-untrusted 0.7.1 | ISC | https://github.com/briansmith/untrusted | 101
-untrusted 0.9.0 | ISC | https://github.com/briansmith/untrusted | 101
-ureq 3.5.0 | MIT OR Apache-2.0 | https://github.com/algesten/ureq | 1, 102
-ureq-proto 0.6.5 | MIT OR Apache-2.0 | https://github.com/algesten/ureq-proto | 1, 103
+typenum 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum | 96, 97, 98
+universal-hash 0.6.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits | 1, 99
+untrusted 0.7.1 | ISC | https://github.com/briansmith/untrusted | 100
+untrusted 0.9.0 | ISC | https://github.com/briansmith/untrusted | 100
+ureq 3.5.0 | MIT OR Apache-2.0 | https://github.com/algesten/ureq | 1, 101
+ureq-proto 0.6.5 | MIT OR Apache-2.0 | https://github.com/algesten/ureq-proto | 1, 102
 url 2.5.8 | MIT OR Apache-2.0 | https://github.com/servo/rust-url | 1, 49
 utf8-zero 0.8.1 | MIT OR Apache-2.0 | https://github.com/algesten/utf8-zero | 41, 53
-utf8_iter 1.0.4 | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter | 1, 104, 105
-wasmi 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 114
-wasmi_collections 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 114
-wasmi_core 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 114
-wasmi_ir 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 114
-wasmparser 0.228.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser | 1, 115
-webpki-roots 1.0.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | 106
-windows-link 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | 107, 108
-windows-sys 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | 107, 108
+utf8_iter 1.0.4 | Apache-2.0 OR MIT | https://github.com/hsivonen/utf8_iter | 1, 103, 104
+wasmi 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 113
+wasmi_collections 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 113
+wasmi_core 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 113
+wasmi_ir 2.0.0 | MIT/Apache-2.0 | https://github.com/wasmi-labs/wasmi | 1, 113
+wasmparser 0.228.0 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasmparser | 1, 114
+webpki-roots 1.0.11 | CDLA-Permissive-2.0 | https://github.com/rustls/webpki-roots | 105
+windows-link 0.2.1 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | 106, 107
+windows-sys 0.61.2 | MIT OR Apache-2.0 | https://github.com/microsoft/windows-rs | 106, 107
 winnow 1.0.4 | MIT | https://github.com/winnow-rs/winnow | 53
 writeable 0.6.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-x509-cert 0.3.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 65
+x509-cert 0.3.0 | Apache-2.0 OR MIT | https://github.com/RustCrypto/formats | 1, 64
 yoke 0.8.4 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-zerocopy 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy | 109, 110, 111
+zerocopy 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT | https://github.com/google/zerocopy | 108, 109, 110
 zerofrom 0.1.8 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-zeroize 1.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils | 1, 112
+zeroize 1.9.1 | Apache-2.0 OR MIT | https://github.com/RustCrypto/utils | 1, 111
 zerotrie 0.2.5 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
 zerovec 0.11.9 | Unicode-3.0 | https://github.com/unicode-org/icu4x | 48
-zip 9.1.0 | MIT | https://github.com/zip-rs/zip2 | 92
-zlib-rs 0.6.8 | Zlib | https://github.com/trifectatechfoundation/zlib-rs | 113
+zip 9.1.0 | MIT | https://github.com/zip-rs/zip2 | 91
+zlib-rs 0.6.8 | Zlib | https://github.com/trifectatechfoundation/zlib-rs | 112
 zmij 1.0.23 | MIT | https://github.com/dtolnay/zmij | 53
 
 [text 1] LICENSE-APACHE of aes 0.9.3
@@ -3686,69 +3685,7 @@ OTHER DEALINGS IN THE SOFTWARE.
 
 For more information, please refer to <http://unlicense.org/>
 
-[text 60] LICENSE of minisign-verify 0.3.0
-
-Copyright (c) 2019-2025 Frank Denis
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
---
-
-Code in the src/crypto folder is derived from the rust-crypto project:
-https://github.com/DaGenix/rust-crypto
-
-Original ISC license follows:
-
-Copyright (c) 2006-2009 Graydon Hoare
-Copyright (c) 2009-2013 Mozilla Foundation
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-
-[text 61] LICENSE of nix 0.31.3
+[text 60] LICENSE of nix 0.31.3
 
 The MIT License (MIT)
 
@@ -3772,7 +3709,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
-[text 62] LICENSE-MIT of num-conv 0.2.2
+[text 61] LICENSE-MIT of num-conv 0.2.2
 
 Copyright (c) Jacob Pratt
 
@@ -3794,7 +3731,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 63] LICENSE-MIT of pbkdf2 0.13.0
+[text 62] LICENSE-MIT of pbkdf2 0.13.0
 
 Copyright (c) 2017 Artyom Pavlov
 Copyright (c) 2018-2023 The RustCrypto Project Developers
@@ -3823,7 +3760,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 64] LICENSE-MIT of pem-rfc7468 0.7.0
+[text 63] LICENSE-MIT of pem-rfc7468 0.7.0
 
 Copyright (c) 2021 The RustCrypto Project Developers
 
@@ -3851,7 +3788,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 65] LICENSE-MIT of pem-rfc7468 1.0.0
+[text 64] LICENSE-MIT of pem-rfc7468 1.0.0
 
 Copyright (c) 2021-2025 The RustCrypto Project Developers
 
@@ -3879,7 +3816,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 66] LICENSE-MIT of pkcs1 0.7.5
+[text 65] LICENSE-MIT of pkcs1 0.7.5
 
 Copyright (c) 2021-2023 The RustCrypto Project Developers
 
@@ -3907,7 +3844,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 67] LICENSE-Apache of powerfmt 0.2.1
+[text 66] LICENSE-Apache of powerfmt 0.2.1
 
                                  Apache License
                            Version 2.0, January 2004
@@ -4111,7 +4048,7 @@ DEALINGS IN THE SOFTWARE.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-[text 68] LICENSE-MIT of powerfmt 0.2.1
+[text 67] LICENSE-MIT of powerfmt 0.2.1
 
 Copyright (c) 2023 Jacob Pratt et al.
 
@@ -4133,7 +4070,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 69] LICENSE-APACHE of ppv-lite86 0.2.21
+[text 68] LICENSE-APACHE of ppv-lite86 0.2.21
 
                               Apache License
                         Version 2.0, January 2004
@@ -4337,7 +4274,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-[text 70] LICENSE-MIT of ppv-lite86 0.2.21
+[text 69] LICENSE-MIT of ppv-lite86 0.2.21
 
 Copyright (c) 2019 The CryptoCorrosion Contributors
 
@@ -4365,7 +4302,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 71] COPYRIGHT of rand 0.8.8
+[text 70] COPYRIGHT of rand 0.8.8
 
 Copyrights in the Rand project are retained by their contributors. No
 copyright assignment is required to contribute to the Rand project.
@@ -4380,7 +4317,7 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 The Rand project includes code from the Rust project
 published under these same licenses.
 
-[text 72] LICENSE-APACHE of rand 0.8.8
+[text 71] LICENSE-APACHE of rand 0.8.8
 
                               Apache License
                         Version 2.0, January 2004
@@ -4559,7 +4496,7 @@ TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
 
 END OF TERMS AND CONDITIONS
 
-[text 73] LICENSE-MIT of rand 0.8.8
+[text 72] LICENSE-MIT of rand 0.8.8
 
 Copyright 2018 Developers of the Rand project
 Copyright (c) 2014 The Rust Project Developers
@@ -4588,7 +4525,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 74] LICENSE-APACHE of rand_core 0.6.4
+[text 73] LICENSE-APACHE of rand_core 0.6.4
 
                               Apache License
                         Version 2.0, January 2004
@@ -4778,7 +4715,7 @@ APPENDIX: How to apply the Apache License to your work.
    same "printed page" as the copyright notice for easier
    identification within third-party archives.
 
-[text 75] LICENSE-APACHE of rc2 0.9.0
+[text 74] LICENSE-APACHE of rc2 0.9.0
 
                                  Apache License
                            Version 2.0, January 2004
@@ -4982,7 +4919,7 @@ APPENDIX: How to apply the Apache License to your work.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-[text 76] LICENSE-MIT of rc2 0.9.0
+[text 75] LICENSE-MIT of rc2 0.9.0
 
 Copyright (c) 2017-2024 The RustCrypto Project Developers
 Copyright (c) 2017 Damian Czaja
@@ -5011,7 +4948,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 77] LICENSE of ring 0.17.14
+[text 76] LICENSE of ring 0.17.14
 
 *ring* uses an "ISC" license, like BoringSSL used to use, for new code
 files. See LICENSE-other-bits for the text of that license.
@@ -5023,7 +4960,7 @@ license. In each case, the license info is at the top of the file.
 See src/polyfill/once_cell/LICENSE-APACHE and src/polyfill/once_cell/LICENSE-MIT
 for the license to code that was sourced from the once_cell project.
 
-[text 78] LICENSE-BoringSSL of ring 0.17.14
+[text 77] LICENSE-BoringSSL of ring 0.17.14
 
                                  Apache License
                            Version 2.0, January 2004
@@ -5297,7 +5234,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-[text 79] LICENSE-other-bits of ring 0.17.14
+[text 78] LICENSE-other-bits of ring 0.17.14
 
 Copyright 2015-2025 Brian Smith.
 
@@ -5313,7 +5250,7 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION
 OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-[text 80] LICENSE-MIT of roxmltree 0.21.2
+[text 79] LICENSE-MIT of roxmltree 0.21.2
 
 The MIT License (MIT)
 
@@ -5337,7 +5274,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 81] LICENSE-ISC of rustls 0.23.46
+[text 80] LICENSE-ISC of rustls 0.23.46
 
 ISC License (ISC)
 Copyright (c) 2016, Joseph Birr-Pixton <jpixton@gmail.com>
@@ -5355,7 +5292,7 @@ PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
 ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
-[text 82] LICENSE-MIT of rustls 0.23.46
+[text 81] LICENSE-MIT of rustls 0.23.46
 
 Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
 
@@ -5383,7 +5320,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 83] LICENSE-APACHE of rustls-pki-types 1.15.1
+[text 82] LICENSE-APACHE of rustls-pki-types 1.15.1
 
                               Apache License
                         Version 2.0, January 2004
@@ -5587,7 +5524,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-[text 84] LICENSE-MIT of rustls-pki-types 1.15.1
+[text 83] LICENSE-MIT of rustls-pki-types 1.15.1
 
 Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
 
@@ -5615,7 +5552,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 85] LICENSE of rustls-webpki 0.103.16
+[text 84] LICENSE of rustls-webpki 0.103.16
 
 Except as otherwise noted, this project is licensed under the following
 (ISC-style) terms:
@@ -5637,7 +5574,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 The files under third-party/chromium are licensed as described in
 third-party/chromium/LICENSE.
 
-[text 86] LICENSE-APACHE of serde_spanned 1.1.2
+[text 85] LICENSE-APACHE of serde_spanned 1.1.2
 
                                  Apache License
                            Version 2.0, January 2004
@@ -5841,7 +5778,7 @@ third-party/chromium/LICENSE.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-[text 87] LICENSE-MIT of serde_spanned 1.1.2
+[text 86] LICENSE-MIT of serde_spanned 1.1.2
 
 Copyright (c) Individual contributors
 
@@ -5863,7 +5800,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 88] LICENSE-MIT of sha1 0.11.0
+[text 87] LICENSE-MIT of sha1 0.11.0
 
 Copyright (c) 2016-2026 The RustCrypto Project Developers
 Copyright (c) 2016 Artyom Pavlov
@@ -5894,7 +5831,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 89] LICENSE-MIT of sha2 0.10.9
+[text 88] LICENSE-MIT of sha2 0.10.9
 
 Copyright (c) 2006-2009 Graydon Hoare
 Copyright (c) 2009-2013 Mozilla Foundation
@@ -5924,7 +5861,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 90] LICENSE-MIT of signature 2.2.0
+[text 89] LICENSE-MIT of signature 2.2.0
 
 Copyright (c) 2018-2023 RustCrypto Developers
 
@@ -5952,7 +5889,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 91] LICENSE-MIT of smallvec 1.16.4
+[text 90] LICENSE-MIT of smallvec 1.16.4
 
 Copyright (c) 2018 The Servo Project Developers
 
@@ -5980,7 +5917,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 92] LICENSE of spin 0.9.9
+[text 91] LICENSE of spin 0.9.9
 
 The MIT License (MIT)
 
@@ -6004,7 +5941,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 93] LICENSE-MIT of stable_deref_trait 1.2.1
+[text 92] LICENSE-MIT of stable_deref_trait 1.2.1
 
 Copyright (c) 2017 Robert Grosse
 
@@ -6032,7 +5969,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 94] LICENSE of subtle 2.6.1
+[text 93] LICENSE of subtle 2.6.1
 
 Copyright (c) 2016-2017 Isis Agora Lovecruft, Henry de Valence. All rights reserved.
 Copyright (c) 2016-2024 Isis Agora Lovecruft. All rights reserved.
@@ -6064,7 +6001,7 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-[text 95] LICENSE-MIT of time 0.3.55
+[text 94] LICENSE-MIT of time 0.3.55
 
 Copyright (c) Jacob Pratt et al.
 
@@ -6086,7 +6023,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 96] LICENSE of tracing 0.1.44
+[text 95] LICENSE of tracing 0.1.44
 
 Copyright (c) 2019 Tokio Contributors
 
@@ -6114,11 +6051,11 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 97] LICENSE of typenum 1.20.1
+[text 96] LICENSE of typenum 1.20.1
 
 MIT OR Apache-2.0
 
-[text 98] LICENSE-APACHE of typenum 1.20.1
+[text 97] LICENSE-APACHE of typenum 1.20.1
 
                               Apache License
                         Version 2.0, January 2004
@@ -6322,7 +6259,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-[text 99] LICENSE-MIT of typenum 1.20.1
+[text 98] LICENSE-MIT of typenum 1.20.1
 
 The MIT License (MIT)
 
@@ -6346,7 +6283,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 100] LICENSE-MIT of universal-hash 0.6.1
+[text 99] LICENSE-MIT of universal-hash 0.6.1
 
 Copyright (c) 2019-2025 RustCrypto Developers
 
@@ -6374,7 +6311,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 101] LICENSE.txt of untrusted 0.7.1
+[text 100] LICENSE.txt of untrusted 0.7.1
 
 // Copyright 2015-2016 Brian Smith.
 //
@@ -6390,7 +6327,7 @@ DEALINGS IN THE SOFTWARE.
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-[text 102] LICENSE-MIT of ureq 3.5.0
+[text 101] LICENSE-MIT of ureq 3.5.0
 
 MIT License
 
@@ -6414,7 +6351,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-[text 103] LICENSE-MIT.txt of ureq-proto 0.6.5
+[text 102] LICENSE-MIT.txt of ureq-proto 0.6.5
 
 Copyright 2022 Martin Algesten
 
@@ -6424,7 +6361,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-[text 104] COPYRIGHT of utf8_iter 1.0.4
+[text 103] COPYRIGHT of utf8_iter 1.0.4
 
 Copyright Mozilla Foundation
 
@@ -6469,7 +6406,7 @@ licensed under the Apache License, Version 2.0 <LICENSE-APACHE> or
 <http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
 <LICENSE-MIT> or <http://opensource.org/licenses/MIT>, at your option.
 
-[text 105] LICENSE-MIT of utf8_iter 1.0.4
+[text 104] LICENSE-MIT of utf8_iter 1.0.4
 
 Copyright Mozilla Foundation
 
@@ -6497,7 +6434,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 106] LICENSE of webpki-roots 1.0.11
+[text 105] LICENSE of webpki-roots 1.0.11
 
 # Community Data License Agreement - Permissive - Version 2.0
 
@@ -6561,7 +6498,7 @@ agreement.
 of Data, including for example machine learning models and models'
 insights.
 
-[text 107] license-apache-2.0 of windows-link 0.2.1
+[text 106] license-apache-2.0 of windows-link 0.2.1
 
                                  Apache License
                            Version 2.0, January 2004
@@ -6765,7 +6702,7 @@ insights.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-[text 108] license-mit of windows-link 0.2.1
+[text 107] license-mit of windows-link 0.2.1
 
     MIT License
 
@@ -6789,7 +6726,7 @@ insights.
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
     SOFTWARE
 
-[text 109] LICENSE-APACHE of zerocopy 0.8.63
+[text 108] LICENSE-APACHE of zerocopy 0.8.63
 
                                  Apache License
                            Version 2.0, January 2004
@@ -6993,7 +6930,7 @@ insights.
    See the License for the specific language governing permissions and
    limitations under the License.
 
-[text 110] LICENSE-BSD of zerocopy 0.8.63
+[text 109] LICENSE-BSD of zerocopy 0.8.63
 
 Copyright 2019 The Fuchsia Authors.
 
@@ -7020,7 +6957,7 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-[text 111] LICENSE-MIT of zerocopy 0.8.63
+[text 110] LICENSE-MIT of zerocopy 0.8.63
 
 Copyright 2023 The Fuchsia Authors
 
@@ -7048,7 +6985,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 112] LICENSE-MIT of zeroize 1.9.1
+[text 111] LICENSE-MIT of zeroize 1.9.1
 
 Copyright (c) 2018-2026 The RustCrypto Project Developers
 
@@ -7076,7 +7013,7 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 
-[text 113] LICENSE of zlib-rs 0.6.8
+[text 112] LICENSE of zlib-rs 0.6.8
 
 (C) 2024 Trifecta Tech Foundation
 
@@ -7098,7 +7035,7 @@ freely, subject to the following restrictions:
 
 3. This notice may not be removed or altered from any source distribution.
 
-[text 114] MIT, standard text for wasmi 2.0.0 (it ships no licence file)
+[text 113] MIT, standard text for wasmi 2.0.0 (it ships no licence file)
 
 MIT License
 
@@ -7110,7 +7047,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-[text 115] MIT, standard text for wasmparser 0.228.0 (it ships no licence file)
+[text 114] MIT, standard text for wasmparser 0.228.0 (it ships no licence file)
 
 MIT License
 

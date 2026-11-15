@@ -28,6 +28,8 @@
 //!   the run starts from the built-in root ([`Trusted::state_was_reset`]);
 //! - a built-in root newer than the saved state drops the versions saved before it (its keys
 //!   cannot be compared with those of roots it does not chain from);
+//! - the targets file accepted is saved beside its version, so that a target kept from an
+//!   earlier download can be checked again offline ([`TufClient::verify_cached_target`]);
 //! - there are no delegations: step 5.6.7 is only the top-level targets.
 
 use time::OffsetDateTime;
@@ -145,6 +147,8 @@ pub struct TufClient<F, S> {
     /// The root built into the program.
     anchor: Root,
     limits: Limits,
+    /// Why the last refresh that reset the saved state did (also when it then failed).
+    last_reset: Option<String>,
 }
 
 impl<F: Fetcher, S: Store> TufClient<F, S> {
@@ -170,12 +174,12 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             store,
             anchor: root,
             limits,
+            last_reset: None,
         })
     }
 
     /// A client trusting the root built into this program, or `None` if the build has none:
-    /// then there is no way to trust a repository, and the updater is off, as it is without
-    /// a minisign key.
+    /// then there is no way to trust a repository, and updates are off.
     ///
     /// # Errors
     ///
@@ -198,6 +202,12 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         trust_anchor
             .map(|root| TufClient::new(root, fetcher, store, limits))
             .transpose()
+    }
+
+    /// Why the last refresh that reset the saved state did so, if one did, whether or not it
+    /// went on to succeed (it is logged as a warning when it happens).
+    pub fn last_reset(&self) -> Option<&str> {
+        self.last_reset.as_deref()
     }
 
     /// The store.
@@ -246,8 +256,14 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                 self.anchor.clone()
             }
         };
+        if let Some(why) = &reset {
+            tracing::warn!(reason = %why, "the saved TUF state was reset to the built-in root");
+            self.last_reset = Some(why.clone());
+        }
         if reset.is_some() {
             state.root_version = root.version;
+            // Nothing can be known of what a state that did not hold had seen.
+            state.ever_published = true;
             self.store.overwrite(&state)?;
         }
 
@@ -281,6 +297,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                         state.timestamp = None;
                         state.snapshot = None;
                         state.targets = None;
+                        state.targets_file = None;
                         state.keys_epoch = new_root.version;
                     }
                     // 5.3.7: the new root is the trusted root.
@@ -371,6 +388,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             state.timestamp = None;
             state.snapshot = None;
             state.targets = None;
+            state.targets_file = None;
             state.keys_epoch = anchor.version;
         }
         state.roots = kept;
@@ -417,6 +435,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         // 5.4.4: a freeze attack.
         ensure_fresh(Role::Timestamp, timestamp.expires, now)?;
         // 5.4.5: persist.
+        state.ever_published = true;
         state.timestamp = Some(TimestampState {
             version: timestamp.version,
             snapshot: timestamp.snapshot.clone(),
@@ -537,6 +556,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         ensure_fresh(Role::Targets, targets.expires, now)?;
         // 5.6.6: persist.
         state.targets = Some(targets.version);
+        state.targets_file = Some(file);
         *state = self.store.save(state)?;
         // 5.6.7: the search for a target is in the top-level targets only: delegations are
         // refused when the targets are read.
@@ -591,6 +611,67 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             });
         }
         Ok(body)
+    }
+
+    /// The target `path` as a file kept from an earlier [`TufClient::download_target`]
+    /// (`bytes`), checked again without the network: the saved targets file must still be
+    /// signed by the targets keys of the root chain, which is replayed from the built-in
+    /// root, be the version saved, and not have expired at `now`; the root in force must not
+    /// have expired either; `bytes` must be exactly the length and sha256 it lists. Nothing
+    /// is read from the repository and nothing is written.
+    ///
+    /// The timestamp and snapshot are not asked: they expire in days and say that the
+    /// targets are *current*, which only a refresh can tell; this says that `bytes` are what
+    /// the targets the client accepted last list. On success the moment this stops holding:
+    /// the earlier of the expiry of the root and of the targets.
+    ///
+    /// # Errors
+    ///
+    /// [`TufError::Store`] if the state cannot be read, [`TufError::Malformed`] if it does
+    /// not hold up from the built-in root or its targets are not the version saved,
+    /// [`TufError::NoSuchTarget`] if no targets are saved or they do not list `path`,
+    /// [`TufError::Signature`], [`TufError::Expired`], [`TufError::Length`] or
+    /// [`TufError::Hash`].
+    pub fn verify_cached_target(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<OffsetDateTime, TufError> {
+        let mut state = self.store.load()?;
+        let root = self
+            .replay(&mut state)
+            .map_err(|why| TufError::malformed("the saved TUF state", why))?;
+        ensure_fresh(Role::Root, root.expires, now)?;
+        let (Some(version), Some(file)) = (state.targets, &state.targets_file) else {
+            return Err(TufError::NoSuchTarget(path.to_owned()));
+        };
+        verify_role(file, &root, Role::Targets, "the saved targets")?;
+        let targets = Targets::from_signed(&file.signed)?;
+        if targets.version != version {
+            return Err(TufError::malformed(
+                "the saved targets",
+                format!("version {} is not the {version} saved", targets.version),
+            ));
+        }
+        ensure_fresh(Role::Targets, targets.expires, now)?;
+        let target = targets
+            .targets
+            .get(path)
+            .ok_or_else(|| TufError::NoSuchTarget(path.to_owned()))?;
+        if bytes.len() as u64 != target.length {
+            return Err(TufError::Length {
+                what: path.to_owned(),
+                expected: target.length,
+                actual: bytes.len() as u64,
+            });
+        }
+        if Digest::of(bytes) != target.sha256 {
+            return Err(TufError::Hash {
+                what: path.to_owned(),
+            });
+        }
+        Ok(root.expires.min(targets.expires))
     }
 
     /// The file at `path`, or `None` for a 404; never more than `max_len` bytes, whatever

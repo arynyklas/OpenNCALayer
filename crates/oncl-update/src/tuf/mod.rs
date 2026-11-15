@@ -22,8 +22,9 @@
 //!   ([`HttpFetcher`], [`MemoryFetcher`]) and a [`Store`] ([`FileStore`], [`MemoryStore`]).
 //! - [`build`]: makes the metadata and signs it, with the same code.
 //!
-//! None of this is used until a root is built in (`keys/root.json`,
-//! [`crate::embedded_root`]); without one there is nothing to trust and the updater is off.
+//! The client is what the updater and the plugin catalog read their index through. Its root
+//! is built in ([`crate::embedded_root`], `keys/root.json`); without one there is nothing to
+//! trust and updates are off.
 
 pub mod build;
 pub mod canonical;
@@ -35,6 +36,8 @@ pub mod keys;
 pub mod layout;
 pub mod model;
 pub mod store;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 pub use client::{Limits, Trusted, TufClient};
 pub use ed25519::SigningKey;

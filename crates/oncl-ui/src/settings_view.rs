@@ -199,7 +199,7 @@ pub enum UpdateStatus {
     /// A package manager (named) installed this copy and updates it: it does not update
     /// itself.
     PackageManaged(String),
-    /// This build carries no update signing keys.
+    /// This build carries no update trust root.
     NoKeys,
     /// Not looked for yet since the start.
     NotChecked,
@@ -751,7 +751,7 @@ mod tests {
         );
         assert_eq!(
             update_view(&UpdateStatus::NoKeys, Locale::Ru),
-            "Ключи подписи обновлений не встроены в эту сборку: обновления выключены."
+            "Корень доверия обновлений не встроен в эту сборку: обновления выключены."
         );
         let pacman = UpdateStatus::PackageManaged("pacman".to_owned());
         assert_eq!(

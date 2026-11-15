@@ -11,7 +11,7 @@ publish.workspace = true
 [features]
 # `e2e-prompter`: with `ONCL_E2E_PROMPTER=<steps.json>` set, `run` answers the signing
 # dialogs from that script and opens no windows (end-to-end tests); with
-# `ONCL_UPDATE_INDEX_BASE` set, the updater reads its index there; with
+# `ONCL_UPDATE_INDEX_BASE` set, the updater and the plugin catalog read the TUF repository there; with
 # `ONCL_E2E_EXTRA_CA=<pem>` set, outbound HTTPS trusts that CA too; `e2e install-plugin`
 # installs a plugin package. Never in releases.
 e2e-prompter = ["oncl-flows/testing", "oncl-pki/extra-roots"]
@@ -78,9 +78,10 @@ oncl-flows = { path = "../oncl-flows", features = ["testing"] }
 oncl-pki = { path = "../oncl-pki", features = ["testing"] }
 # A `log` record must reach the log file through the `tracing-log` bridge.
 log.workspace = true
-# Update indexes signed in the updater's tests.
-minisign.workspace = true
 oncl-testkit.workspace = true
+# `testing`: the TUF repository of synthetic keys the updater's and the catalog's tests read
+# their indexes from.
+oncl-update = { workspace = true, features = ["testing"] }
 # A fake mkcert CA in the renewal tests.
 rcgen.workspace = true
 sha2.workspace = true

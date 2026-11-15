@@ -1,5 +1,5 @@
-//! The plugin service with a fake network serving a catalog signed by a key made for the
-//! test and the example plugin's packages, a fake confirmation, and a sandbox data
+//! The plugin service with a fake network serving a catalog as a target of a TUF repository
+//! of synthetic keys and the example plugin's packages, a fake confirmation, and a sandbox data
 //! directory.
 
 use super::*;
@@ -9,10 +9,8 @@ use oncl_plugin::{Engine, HostServices};
 use oncl_protocol::DynamicModules;
 use oncl_update::{PluginReplaces, Sha256};
 use serde_json::json;
-use std::io::Cursor;
 
-const BASE: &str = "https://example.org/updates/v1";
-const INDEX: &str = "https://example.org/updates/v1/stable.json";
+use crate::repository::tests::{BASE, Server, refresh_url, timestamp_url};
 pub(in crate::plugins) const ID: &str = "io.github.arynyklas.openncalayer.example";
 pub(in crate::plugins) const MODULE: &str = "io.github.arynyklas.openncalayer.Example";
 const ORIGIN: &str = "https://shop.kz";
@@ -60,30 +58,10 @@ impl InstallUi for FakeUi {
     }
 }
 
-struct Key {
-    pair: minisign::KeyPair,
-    public: PublicKey,
-}
-
-impl Key {
-    fn new() -> Key {
-        let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-        let public = PublicKey::decode(&pair.pk.to_box().unwrap().into_string()).unwrap();
-        Key { pair, public }
-    }
-
-    fn sign(&self, data: &[u8], comment: &str) -> Vec<u8> {
-        minisign::sign(None, &self.pair.sk, Cursor::new(data), Some(comment), None)
-            .unwrap()
-            .into_string()
-            .into_bytes()
-    }
-}
-
 struct Sandbox {
     dir: tempfile::TempDir,
     transport: Arc<FakeTransport>,
-    key: Key,
+    server: Arc<Server>,
     ui: Arc<FakeUi>,
     notices: Arc<Mutex<Vec<PluginNotice>>>,
     modules: Arc<PluginModules>,
@@ -108,7 +86,7 @@ impl Sandbox {
         Sandbox {
             dir,
             transport: Arc::new(FakeTransport::default()),
-            key: Key::new(),
+            server: Arc::new(Server::new()),
             ui: Arc::new(FakeUi {
                 answer: Mutex::new(Some(true)),
                 ..FakeUi::default()
@@ -122,13 +100,25 @@ impl Sandbox {
         }
     }
 
-    fn service_with(&self, keys: Vec<PublicKey>) -> Arc<PluginService> {
+    /// The repository the services read through: this sandbox's, trusting its server's root.
+    fn repository(&self) -> Arc<Repository> {
+        Arc::new(
+            Repository::with_anchor(
+                &self.server.anchor(),
+                self.dir.path(),
+                BASE,
+                Arc::clone(&self.transport) as _,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn service_with(&self, repository: Option<Arc<Repository>>) -> Arc<PluginService> {
         let notices = Arc::clone(&self.notices);
         PluginService::new(PluginConfig {
             data_dir: self.dir.path().to_owned(),
             settings: self.dir.path().join("settings.json"),
-            keys,
-            base: BASE.to_owned(),
+            repository,
             core: core(),
             http: Arc::clone(&self.transport) as _,
             modules: Arc::clone(&self.modules),
@@ -139,7 +129,7 @@ impl Sandbox {
     }
 
     fn service(&self) -> Arc<PluginService> {
-        self.service_with(vec![self.key.public.clone()])
+        self.service_with(Some(self.repository()))
     }
 
     /// Serves `bytes` as the package of `version` and the release describing it.
@@ -184,9 +174,7 @@ impl Sandbox {
             plugins,
         };
         let body = serde_json::to_vec_pretty(&index).unwrap();
-        let sig = self.key.sign(&body, &format!("channel=stable;seq={seq}"));
-        self.transport.serve(INDEX, &body);
-        self.transport.serve(&format!("{INDEX}.minisig"), &sig);
+        self.server.publish(&self.transport, Channel::Stable, &body);
     }
 
     fn notices(&self) -> Vec<PluginNotice> {
@@ -627,9 +615,9 @@ fn a_package_managers_copy_still_checks_and_updates_the_catalog() {
 }
 
 #[test]
-fn no_keys_means_no_catalog_but_file_install_works() {
+fn no_trust_root_means_no_catalog_but_file_install_works() {
     let sandbox = Sandbox::new(true);
-    let service = sandbox.service_with(Vec::new());
+    let service = sandbox.service_with(None);
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
     assert_eq!(service.view().catalog, CatalogView::Unavailable);
     assert_eq!(
@@ -859,10 +847,10 @@ fn install_bundle_without_a_catalog_finds_nothing() {
         "kz.example.echo",
         ORIGIN
     ));
-    // Without keys nothing is downloaded at all.
+    // Without the trust root nothing is downloaded at all.
     let sandbox = Sandbox::new(true);
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
-    let service = sandbox.service_with(Vec::new());
+    let service = sandbox.service_with(None);
     assert!(!Bundles::request_install(
         &*service,
         "kz.example.echo",
@@ -877,7 +865,7 @@ fn index_requests(sandbox: &Sandbox) -> usize {
         .transport
         .asked()
         .iter()
-        .filter(|(url, ..)| url == INDEX)
+        .filter(|(url, ..)| *url == refresh_url())
         .count()
 }
 
@@ -905,7 +893,7 @@ fn a_failed_catalog_is_not_downloaded_again_for_pages() {
     assert_eq!(index_requests(&sandbox), 1);
     // The user tries again whenever they ask.
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
-    sandbox.transport.reply(INDEX, 503, b"");
+    sandbox.transport.reply(&timestamp_url(), 503, b"");
     service.check_now();
     assert_eq!(index_requests(&sandbox), 2);
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
@@ -1516,7 +1504,7 @@ fn an_offer_waits_for_a_download_running_within_its_budget() {
         .transport
         .asked()
         .iter()
-        .filter(|(url, ..)| url == INDEX)
+        .filter(|(url, ..)| *url == refresh_url())
         .count();
     assert_eq!(index_requests, 1);
 }
@@ -1568,11 +1556,10 @@ fn an_application_asked_for_meanwhile_goes_over_the_newest_catalog() {
         plugins: releases,
     };
     let body = serde_json::to_vec_pretty(&index).unwrap();
-    let sig = sandbox.key.sign(&body, "channel=stable;seq=3");
     let transport = Arc::clone(&sandbox.transport);
+    let server = Arc::clone(&sandbox.server);
     sandbox.transport.during(&package_url("0.2.0"), move || {
-        transport.serve(INDEX, &body);
-        transport.serve(&format!("{INDEX}.minisig"), &sig);
+        server.publish(&transport, Channel::Stable, &body);
         newer.refresh(INDEX_TIMEOUT).unwrap();
         newer.apply_catalog();
     });

@@ -1,15 +1,11 @@
-//! Embeds the public keys of the update index, `keys/current.pub` and `keys/next.pub`, if
-//! they are there: the maintainer adds them (`cargo xtask sign keygen`). A build without
-//! them has no keys, and its updater is off. A key file that is there must be a minisign
-//! public key: a malformed one fails the build instead of shipping a release whose updater
-//! is off.
-//!
-//! The same holds for `keys/root.json`, the TUF client's root of trust: if it is there it
-//! is embedded, after the code of `src/tuf` that reads a root has checked it (a root of
-//! spec version 1.x, its keys' ids, its roles, its thresholds, signatures by listed keys
-//! of the root role, at least its threshold of them: [`check_root`]); a malformed one
-//! fails the build. Whether those signatures verify is not known here (no signature
-//! algorithm is built into this script), only when the client starts from the root.
+//! Embeds `keys/root.json`, the TUF client's root of trust, if it is there: the owner's key
+//! ceremony creates it. A build without it has nothing to trust, and its updater is off. If
+//! it is there it is embedded after the code of `src/tuf` that reads a root has checked it (a
+//! root of spec version 1.x, its keys' ids, its roles, its thresholds, signatures by listed
+//! keys of the root role, at least its threshold of them: [`check_root`]); a malformed one
+//! fails the build instead of shipping a release whose updater is off. Whether those
+//! signatures verify is not known here (no signature algorithm is built into this script),
+//! only when the client starts from the root.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -38,8 +34,6 @@ mod model;
 /// The most a root file may be: `tuf::Limits::default().root`.
 const MAX_ROOT_LEN: u64 = 64 << 10;
 
-const KEYS: [&str; 2] = ["current.pub", "next.pub"];
-
 fn main() {
     let dir = Path::new("keys");
     // A missing path would rerun the script on every build; until `keys/` exists, the
@@ -49,24 +43,7 @@ fn main() {
     } else {
         println!("cargo:rerun-if-changed=.");
     }
-    let mut keys = Vec::new();
-    for name in KEYS {
-        let path = dir.join(name);
-        match std::fs::read_to_string(&path) {
-            Ok(text) => {
-                if let Err(e) = minisign_verify::PublicKey::decode(&text) {
-                    panic!("{} is not a minisign public key: {e}", path.display());
-                }
-                keys.push(text);
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => panic!("cannot read {}: {e}", path.display()),
-        }
-    }
     let out = std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR");
-    let code = format!("&{keys:?}");
-    std::fs::write(Path::new(&out).join("keys.rs"), code).expect("cannot write keys.rs");
-
     let root = dir.join("root.json");
     let code = match std::fs::read(&root) {
         Ok(bytes) => {

@@ -1,75 +1,50 @@
 //! OpenNCALayer's self-update logic, without windows or a network stack of its own:
 //!
 //! - [`index`]: the update index of a channel (`updates/v1/<channel>.json`), its model and
-//!   structural checks, and the sha256 check of a downloaded package;
+//!   structural checks ([`Index::accept`]), and the sha256 check of a downloaded package;
 //! - [`contents_sha256()`]: the sum of the files in a package, which a full package rebuilt
 //!   from a delta is checked against;
-//! - [`verify()`]: the minisign signature of an index (`<channel>.json.minisig`), its trusted
-//!   comment, the `seq` against the last one seen and the index's age;
+//! - [`tuf`]: the TUF client that authenticates the index (it is the target
+//!   `indexes/<channel>.json` of the repository), and the builder the maintainer's tools
+//!   publish it with; the root it trusts is built in ([`embedded_root()`],
+//!   `keys/root.json`), and without one the updater is off;
 //! - [`choose()`]: the version to move to, with the staged rollout, revoked versions and
 //!   versions that failed locally;
-//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs;
-//! - [`fetch()`]: the index and its signature, through an [`HttpTransport`];
-//! - [`embedded_keys()`]: the public keys built in (`keys/current.pub`, `keys/next.pub`);
-//! - [`tuf`]: the TUF verifier and repository builder that is to replace the minisign
-//!   signature (not used until a root is built in: [`embedded_root()`], `keys/root.json`).
+//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs.
 //!
-//! The format is described in `docs/design/update-index.md`.
-//!
-//! [`HttpTransport`]: oncl_pki::http::HttpTransport
+//! The format is described in `docs/design/update-index.md`, the authentication in
+//! `docs/design/tuf.md`.
 
 pub mod choose;
 mod contents;
-pub mod fetch;
 mod hex;
 pub mod index;
 mod keys;
 pub mod plugins;
 pub mod state;
 pub mod tuf;
-pub mod verify;
 
 pub use choose::{Choice, Target, choose, rollout_bucket};
 pub use contents::contents_sha256;
-pub use fetch::{Fetched, fetch, index_url};
 pub use index::{
-    Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, Package, Sha256,
+    Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, MAX_INDEX_LEN, Package,
+    Sha256,
 };
-pub use keys::{embedded_keys, embedded_root};
-pub use minisign_verify::PublicKey;
+pub use keys::embedded_root;
 pub use plugins::{
     PluginChoice, PluginName, PluginRelease, PluginReplaces, choose_plugin, offer, plugin_bucket,
 };
 pub use semver::Version;
 pub use state::{PendingHealth, State};
-pub use verify::{MAX_AGE, MAX_INDEX_LEN, trusted_comment, verify};
 
-use time::OffsetDateTime;
+use tuf::TufError;
 
-/// Why an index, its signature or a package is refused.
+/// Why an index or a package is refused, or the repository that holds the index.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
     /// The index is bigger than [`MAX_INDEX_LEN`].
     #[error("the update index is larger than {MAX_INDEX_LEN} bytes")]
     TooLarge,
-    /// The signature file is not a minisign signature.
-    #[error("the update index signature is malformed")]
-    MalformedSignature,
-    /// No trusted key made the signature, or the index or its trusted comment were changed
-    /// after signing; also a signature in minisign's legacy (not prehashed) mode.
-    #[error("the update index signature does not match any trusted key")]
-    BadSignature,
-    /// The signed trusted comment is not `channel=…;seq=…`.
-    #[error("the update index signature's trusted comment is malformed: {0}")]
-    BadTrustedComment(String),
-    /// The signed trusted comment names another channel or `seq` than the index.
-    #[error("the update index signature is for {comment}, the index is {index}")]
-    CommentMismatch {
-        /// `channel=…;seq=…` of the trusted comment.
-        comment: String,
-        /// `channel=…;seq=…` of the index.
-        index: String,
-    },
     /// The index is not valid JSON of the expected shape, or breaks a rule of the format.
     #[error("the update index is malformed: {0}")]
     Malformed(String),
@@ -92,9 +67,6 @@ pub enum UpdateError {
         /// The last `seq` seen.
         last: u64,
     },
-    /// The index is past its `expires`, or older than [`MAX_AGE`].
-    #[error("the update index expired at {0}")]
-    Expired(OffsetDateTime),
     /// A downloaded package has another size than the index says.
     #[error("the package is {actual} bytes, the update index says {expected}")]
     PackageSize {
@@ -110,18 +82,119 @@ pub enum UpdateError {
     /// ([`contents_sha256()`]), or is not a package.
     #[error("the package's contents do not match the update index: {0}")]
     PackageContents(String),
-    /// The index could not be downloaded: no response, a status other than 200 or 404, or a
-    /// URL that is not HTTPS.
-    #[error("the update index could not be downloaded: {0}")]
-    Fetch(String),
-    /// The index of the channel is not published (404): nothing has been released into it
-    /// yet.
+    /// The TUF repository refused the index, or could not be read: an expired or rolled-back
+    /// role, a signature or a hash that does not match, a network error, a state that cannot
+    /// be saved ([`UpdateError::retry_soon`] tells which of these is worth trying again).
+    #[error("the update repository: {0}")]
+    Tuf(#[source] TufError),
+    /// The channel has no index in the repository: the repository was never published to this
+    /// client (no timestamp accepted yet, and 404 for it), or the accepted targets metadata
+    /// has no entry for the channel. Any other 404 is a refusal ([`UpdateError::Tuf`]).
     #[error("the {0} channel has no update index yet")]
     NotPublished(Channel),
     /// A file could not be read.
     #[error(transparent)]
     Io(#[from] std::io::Error),
-    /// A built-in public key is not a minisign public key.
-    #[error("a built-in update signing key is malformed: {0}")]
-    BadKey(String),
+}
+
+impl UpdateError {
+    /// `error`, which the TUF client gave for the index of `channel`, as this crate's error:
+    /// a channel without an entry in the targets is [`UpdateError::NotPublished`], everything
+    /// else is [`UpdateError::Tuf`]. (A 404 for the timestamp of a repository never published
+    /// to this client is also "not published", but only the caller knows the saved state: it
+    /// builds [`UpdateError::NotPublished`] itself.) A 404 anywhere else is a refusal: a
+    /// published repository does not lose files.
+    pub fn from_tuf(error: TufError, channel: Channel) -> UpdateError {
+        match error {
+            TufError::NoSuchTarget(_) => UpdateError::NotPublished(channel),
+            other => UpdateError::Tuf(other),
+        }
+    }
+
+    /// Whether the check is worth trying again soon: the repository could not be read (no
+    /// answer, a bad status) or the state could not be read or saved, or a long chain of
+    /// roots is yet to be followed. What the repository answered and the client refused (an
+    /// expired or rolled-back role, a signature, a hash, a length) stays refused until the
+    /// next ordinary check, and a channel not published is not tried again soon either.
+    pub fn retry_soon(&self) -> bool {
+        matches!(
+            self,
+            UpdateError::Io(_)
+                | UpdateError::Tuf(
+                    TufError::Fetch(_)
+                        | TufError::NotFound(_)
+                        | TufError::Store(_)
+                        | TufError::StateTooLarge(_)
+                        | TufError::RootChainTooLong(_)
+                )
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use time::macros::datetime;
+    use tuf::Role;
+
+    #[test]
+    fn a_missing_repository_is_not_published_and_the_rest_is_a_refusal_or_a_retry() {
+        let not_published = |e| {
+            matches!(
+                UpdateError::from_tuf(e, Channel::Beta),
+                UpdateError::NotPublished(Channel::Beta)
+            )
+        };
+        // A 404 is not "not published" here: a published repository does not lose files.
+        assert!(!not_published(TufError::NotFound(
+            "metadata/timestamp.json".into()
+        )));
+        assert!(UpdateError::from_tuf(TufError::NotFound("x".into()), Channel::Beta).retry_soon());
+        assert!(not_published(TufError::NoSuchTarget(
+            "indexes/beta.json".into()
+        )));
+
+        let retry = |e| UpdateError::from_tuf(e, Channel::Beta).retry_soon();
+        // Could not be read, or the state could not be: soon.
+        assert!(retry(TufError::Fetch("no answer".into())));
+        assert!(retry(TufError::Store(std::io::Error::other("disk"))));
+        assert!(retry(TufError::RootChainTooLong(128)));
+        // A state too large to be written is tried again; a file of the repository is refused.
+        assert!(retry(TufError::StateTooLarge(1)));
+        assert!(!retry(TufError::TooLarge {
+            what: "snapshot".into(),
+            limit: 1
+        }));
+        // Answered and refused: not soon.
+        let at = datetime!(2026-11-15 12:00 UTC);
+        for refused in [
+            TufError::Expired {
+                role: Role::Timestamp,
+                expires: at,
+            },
+            TufError::Rollback {
+                what: "timestamp".into(),
+                found: 1,
+                trusted: 2,
+            },
+            TufError::Signature {
+                what: "the timestamp".into(),
+                valid: 0,
+                threshold: 1,
+            },
+            TufError::Hash {
+                what: "indexes/beta.json".into(),
+            },
+            TufError::Length {
+                what: "indexes/beta.json".into(),
+                expected: 1,
+                actual: 2,
+            },
+        ] {
+            assert!(!retry(refused));
+        }
+        assert!(!UpdateError::NotPublished(Channel::Beta).retry_soon());
+        assert!(!UpdateError::Rollback { seq: 1, last: 2 }.retry_soon());
+        assert!(UpdateError::Io(std::io::Error::other("disk")).retry_soon());
+    }
 }

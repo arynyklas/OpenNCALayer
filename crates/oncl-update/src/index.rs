@@ -1,7 +1,9 @@
 //! The update index of a channel, `updates/v1/<channel>.json`: core versions by flavor with
 //! their staged rollout and revocation, the browser extension and plugin versions
 //! ([`crate::PluginRelease`]). [`Index::from_json`] reads one and checks the rules of the
-//! format that JSON alone does not express.
+//! format that JSON alone does not express. The index is a target of the TUF repository
+//! ([`Channel::target_path`]); it is authenticated there, and [`Index::accept`] reads the
+//! bytes the TUF client handed over.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -18,6 +20,9 @@ use crate::UpdateError;
 
 /// The only `schema` this version reads.
 pub const SCHEMA: u32 = 1;
+
+/// The largest index read: 1 MiB.
+pub const MAX_INDEX_LEN: u64 = 1 << 20;
 
 /// An update channel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -39,6 +44,12 @@ impl Channel {
             Channel::Stable => "stable",
             Channel::Beta => "beta",
         }
+    }
+
+    /// The path of the index of this channel among the targets of the TUF repository:
+    /// `indexes/stable.json` or `indexes/beta.json`.
+    pub fn target_path(self) -> String {
+        format!("indexes/{}.json", self.as_str())
     }
 
     /// The channel an installation of `version` follows when its settings name none: beta
@@ -297,8 +308,8 @@ impl Index {
     /// Reads an index from its JSON and checks the format's rules: [`SCHEMA`], `https://`
     /// URLs only, `rollout` up to 100, each core version once, `contents_sha256` beside any
     /// `delta_from`, each plugin `id` + `version` once with at least one module. Unknown members are
-    /// ignored, so later versions of schema 1 may add some. The signature is not checked
-    /// here: see [`crate::verify()`].
+    /// ignored, so later versions of schema 1 may add some. Nothing here authenticates the
+    /// bytes: see [`Index::accept`] for the index the TUF client handed over.
     ///
     /// # Errors
     ///
@@ -316,6 +327,45 @@ impl Index {
         }
         let index: Index = serde_json::from_slice(bytes).map_err(malformed)?;
         index.check()?;
+        Ok(index)
+    }
+
+    /// Reads `bytes`, an index of `channel` that the TUF client verified (the target
+    /// [`Channel::target_path`]), and applies the rules that are the consumers' own: the
+    /// index is valid ([`Index::from_json`]), is of `channel`, and its `seq` is not below
+    /// `last_seq`, the highest of the channel accepted before. An equal `seq` is the same
+    /// index fetched again, so an update that failed to download can be retried with it.
+    ///
+    /// The 30 days of `generated` and the `expires` of the index are not applied: what ends
+    /// the trust in an index is the `expires` of the TUF roles.
+    ///
+    /// # Errors
+    ///
+    /// [`UpdateError::TooLarge`] for more than [`MAX_INDEX_LEN`] bytes, the errors of
+    /// [`Index::from_json`], [`UpdateError::WrongChannel`] and [`UpdateError::Rollback`].
+    pub fn accept(
+        bytes: &[u8],
+        channel: Channel,
+        last_seq: Option<u64>,
+    ) -> Result<Index, UpdateError> {
+        if bytes.len() as u64 > MAX_INDEX_LEN {
+            return Err(UpdateError::TooLarge);
+        }
+        let index = Index::from_json(bytes)?;
+        if index.channel != channel {
+            return Err(UpdateError::WrongChannel {
+                expected: channel,
+                found: index.channel,
+            });
+        }
+        if let Some(last) = last_seq
+            && index.seq < last
+        {
+            return Err(UpdateError::Rollback {
+                seq: index.seq,
+                last,
+            });
+        }
         Ok(index)
     }
 
@@ -639,5 +689,36 @@ pub(crate) mod tests {
             Sha256::of(b"abc").to_string(),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+    }
+
+    #[test]
+    fn accept_applies_the_channel_and_seq_rules() {
+        let body = |channel: &str, seq| serde_json::to_vec(&index_json(channel, seq)).unwrap();
+        let index = Index::accept(&body("beta", 42), Channel::Beta, Some(41)).unwrap();
+        assert_eq!((index.channel, index.seq), (Channel::Beta, 42));
+        // The same `seq` is the same index again; none seen before is no limit.
+        Index::accept(&body("beta", 42), Channel::Beta, Some(42)).unwrap();
+        Index::accept(&body("beta", 1), Channel::Beta, None).unwrap();
+        assert!(matches!(
+            Index::accept(&body("beta", 41), Channel::Beta, Some(42)),
+            Err(UpdateError::Rollback { seq: 41, last: 42 })
+        ));
+        assert!(matches!(
+            Index::accept(&body("stable", 42), Channel::Beta, None),
+            Err(UpdateError::WrongChannel {
+                expected: Channel::Beta,
+                found: Channel::Stable
+            })
+        ));
+        assert!(matches!(
+            Index::accept(&vec![b' '; MAX_INDEX_LEN as usize + 1], Channel::Beta, None),
+            Err(UpdateError::TooLarge)
+        ));
+        assert!(matches!(
+            Index::accept(b"{\"schema\":2}", Channel::Beta, None),
+            Err(UpdateError::UnsupportedSchema(2))
+        ));
+        assert_eq!(Channel::Stable.target_path(), "indexes/stable.json");
+        assert_eq!(Channel::Beta.target_path(), "indexes/beta.json");
     }
 }

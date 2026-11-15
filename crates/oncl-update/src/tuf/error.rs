@@ -154,6 +154,9 @@ pub enum TufError {
     /// The same timestamp version with other content than the one trusted.
     #[error("a second, different timestamp of version {0}")]
     TimestampChanged(u64),
+    /// The state to save is larger than the limit: nothing is written, and it is tried again.
+    #[error("the TUF state is larger than {0} bytes")]
+    StateTooLarge(u64),
     /// A file of the repository that must be there answers 404.
     #[error("{0} is not published")]
     NotFound(String),

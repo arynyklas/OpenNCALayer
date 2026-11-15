@@ -753,16 +753,20 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       # `index add` refuses a tag without a trusted update key: a build without one cannot
-      # update itself, so no installation may be moved onto it. Such a release (before the
-      # maintainer's keys exist) gets no index pull request, with a notice.
+      # update itself, so no installation may be moved onto it. The tag needs both the TUF
+      # trust root, `crates/oncl-update/keys/root.json`, which the client of rc.2 and later
+      # embeds (without it its updater is off), and the minisign key `current.pub`, which the
+      # clients of rc.1 and before read the legacy indexes `updates/v1` with. Such a release
+      # (before the maintainer's keys exist) gets no index pull request, with a notice.
       - name: The tag's update key
         id: key
         run: |
           git fetch --no-tags --depth 1 origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
-          if git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/current.pub"; then
+          if git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/root.json" \
+            && git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/current.pub"; then
             echo "keyed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::$GITHUB_REF_NAME has no crates/oncl-update/keys/current.pub: its build cannot update itself; it is not added to the update indexes"
+            echo "::notice::$GITHUB_REF_NAME lacks crates/oncl-update/keys/root.json or crates/oncl-update/keys/current.pub: its build cannot update itself; it is not added to the update indexes"
             echo "keyed=false" >> "$GITHUB_OUTPUT"
           fi
       # The `osx` flavor stays out of the indexes until the universal build has run on an

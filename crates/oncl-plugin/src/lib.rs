@@ -57,7 +57,7 @@ pub use runtime::{
     SessionContext, Trust,
 };
 #[cfg(feature = "distribution")]
-pub use store::{Installed, Source, Store, StoreError, StoreState};
+pub use store::{Installed, KeptCatalog, Source, Store, StoreError, StoreState};
 pub use url::Url;
 
 use std::io;

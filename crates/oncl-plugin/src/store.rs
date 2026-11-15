@@ -4,8 +4,8 @@
 //!   install id of the rollouts and the highest `seq` of each catalog accepted;
 //! - `packages/<id>-<version>.onclp`: the package of each installed plugin, as downloaded or
 //!   chosen;
-//! - `catalog/<channel>.json` and `catalog/<channel>.json.minisig`: the last update index of
-//!   the channel accepted, verified again whenever it is read;
+//! - `catalog/<channel>.json`: the last update index of the channel accepted, checked again
+//!   whenever it is read, against the targets metadata of the TUF state ([`Store::load_catalog`]);
 //! - `settings/<id>.json`: a plugin's settings (`settings_*`), kept across its updates and
 //!   removed with it.
 //!
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use oncl_pki::fsutil::{Access, write_atomically};
-use oncl_update::{Channel, Index, PublicKey, Sha256, Version, verify};
+use oncl_update::{Channel, Index, Sha256, Version};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -84,6 +84,15 @@ pub enum StoreError {
     /// The package is valid, but of another plugin or version.
     #[error("the plugin package is of {0}")]
     Mismatch(String),
+}
+
+/// A catalog kept by [`Store::save_catalog`] that still holds.
+#[derive(Clone, Debug)]
+pub struct KeptCatalog {
+    /// The index.
+    pub index: Index,
+    /// When the TUF metadata that vouches for it expires.
+    pub valid_until: OffsetDateTime,
 }
 
 /// The plugins' directory; see the [module](self).
@@ -278,49 +287,55 @@ impl Store {
         Ok(package)
     }
 
-    /// Keeps the index of `channel` and its signature, which the caller has verified, and
-    /// raises the channel's `last_seq` to its `seq`.
+    /// Keeps the index of `channel`, the bytes the TUF client verified, and raises the
+    /// channel's `last_seq` to its `seq`. The signature file an older version kept beside
+    /// it, which nothing reads now, is removed.
     ///
     /// # Errors
     ///
     /// [`io::ErrorKind::InvalidData`] if `index` is not an index; any I/O error.
-    pub fn save_catalog(&self, channel: Channel, index: &[u8], sig: &[u8]) -> io::Result<()> {
+    pub fn save_catalog(&self, channel: Channel, index: &[u8]) -> io::Result<()> {
         let seq = Index::from_json(index)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
             .seq;
         let dir = self.dir.join("catalog");
         std::fs::create_dir_all(&dir)?;
-        let (index_path, sig_path) = self.catalog_paths(channel);
-        write_atomically(&index_path, index, Access::Default)?;
-        write_atomically(&sig_path, sig, Access::Default)?;
+        write_atomically(&self.catalog_path(channel), index, Access::Default)?;
+        remove_file(&dir.join(format!("{channel}.json.minisig")));
         self.change(|state| {
             let last = state.last_seq.entry(channel).or_insert(seq);
             *last = (*last).max(seq);
         })
     }
 
-    /// The kept index of `channel`, verified again with `keys`, the channel's `last_seq` and
-    /// `now`; `None` if there is none, or it no longer holds (expired, among others: logged).
+    /// The kept index of `channel`, if there is one and it still holds: `check` is given
+    /// its bytes and must vouch for them (for the TUF client,
+    /// [`oncl_update::tuf::TufClient::verify_cached_target`]: the saved targets metadata
+    /// lists exactly these bytes and has not expired) and says until when they hold; then the
+    /// index must be of `channel` and not older than the channel's `last_seq`. `None` if
+    /// there is none, or it no longer holds (logged).
     pub fn load_catalog(
         &self,
         channel: Channel,
-        keys: &[PublicKey],
-        now: OffsetDateTime,
-    ) -> Option<Index> {
-        let (index_path, sig_path) = self.catalog_paths(channel);
-        let read = |path: &Path| match std::fs::read(path) {
-            Ok(bytes) => Some(bytes),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        check: impl FnOnce(&[u8]) -> Result<OffsetDateTime, String>,
+    ) -> Option<KeptCatalog> {
+        let path = self.catalog_path(channel);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return None,
             Err(e) => {
                 tracing::warn!(path = %path.display(), error = %e, "cannot read the kept plugin catalog");
-                None
+                return None;
             }
         };
-        let index = read(&index_path)?;
-        let sig = read(&sig_path)?;
         let last_seq = lock(&self.state).last_seq.get(&channel).copied();
-        match verify(&index, &sig, keys, channel, last_seq, now) {
-            Ok(index) => Some(index),
+        let kept = check(&bytes).and_then(|valid_until| {
+            Index::accept(&bytes, channel, last_seq)
+                .map(|index| KeptCatalog { index, valid_until })
+                .map_err(|e| e.to_string())
+        });
+        match kept {
+            Ok(kept) => Some(kept),
             Err(e) => {
                 tracing::info!(%channel, error = %e, "the kept plugin catalog no longer holds");
                 None
@@ -351,12 +366,8 @@ impl Store {
             .join(format!("{id}-{version}.{PACKAGE_EXT}"))
     }
 
-    fn catalog_paths(&self, channel: Channel) -> (PathBuf, PathBuf) {
-        let dir = self.dir.join("catalog");
-        (
-            dir.join(format!("{channel}.json")),
-            dir.join(format!("{channel}.json.minisig")),
-        )
+    fn catalog_path(&self, channel: Channel) -> PathBuf {
+        self.dir.join("catalog").join(format!("{channel}.json"))
     }
 
     /// Applies `f` to the installed `id` and saves the state.
