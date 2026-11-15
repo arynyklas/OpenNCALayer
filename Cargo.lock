@@ -4408,7 +4408,6 @@ dependencies = [
  "der 0.8.2",
  "getrandom 0.4.3",
  "libc",
- "minisign",
  "oncl-flows",
  "oncl-pdk",
  "oncl-pki",
@@ -4648,10 +4647,7 @@ dependencies = [
 name = "oncl-update"
 version = "0.1.0-rc.1"
 dependencies = [
- "base64",
  "getrandom 0.4.3",
- "minisign",
- "minisign-verify",
  "oncl-pki",
  "ring",
  "semver",
@@ -4722,7 +4718,6 @@ dependencies = [
  "getrandom 0.4.3",
  "httparse",
  "log",
- "minisign",
  "oncl-builtin-accessory",
  "oncl-builtins-build",
  "oncl-core",
@@ -8410,6 +8405,7 @@ dependencies = [
  "getrandom 0.4.3",
  "libc",
  "minisign",
+ "minisign-verify",
  "object",
  "oncl-builtin-accessory",
  "oncl-builtins-build",
@@ -8429,6 +8425,7 @@ dependencies = [
  "pkcs8 0.11.0",
  "rand_chacha 0.3.1",
  "regex",
+ "ring",
  "rpassword",
  "rsa",
  "serde",

@@ -19,6 +19,7 @@ pub mod notices;
 mod paths;
 pub mod plugins;
 pub mod renewal;
+pub mod repository;
 mod server;
 mod session;
 mod settings;

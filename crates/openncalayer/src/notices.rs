@@ -989,7 +989,7 @@ mod tests {
         let config: toml::Table = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let base_url = config["base_url"].as_str().unwrap();
         assert_eq!(SITE, base_url);
-        assert_eq!(crate::update::INDEX_BASE, format!("{base_url}/updates/v1"));
+        assert_eq!(crate::update::INDEX_BASE, format!("{base_url}/tuf/v1"));
         assert_eq!(config["default_language"].as_str(), Some("ru"));
         let languages = config["languages"].as_table().unwrap();
         for (l, lang) in [(Locale::Kk, "kk"), (Locale::En, "en")] {

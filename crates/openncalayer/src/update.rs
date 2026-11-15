@@ -1,8 +1,9 @@
 //! The self-update of the core.
 //!
-//! An [`Updater`] looks at the signed index of the channel in the settings
-//! ([`INDEX_BASE`]`/<channel>.json`) a few minutes after the start and then every 6 to 24
-//! hours: [`oncl_update::fetch()`], [`oncl_update::verify()`] with the keys built in,
+//! An [`Updater`] looks at the index of the channel in the settings a few minutes after the
+//! start and then every 6 to 24 hours: the index is the target `indexes/<channel>.json` of
+//! the TUF repository at [`INDEX_BASE`], read and verified by the [`Repository`] the plugin
+//! catalog shares, from the trust root built in (without one, updates are off), then
 //! [`oncl_update::choose()`]. A version it chooses is downloaded and checked against the index
 //! by an [`Installer`] (Velopack in an installed copy: [`installer::VelopackInstaller`]), and
 //! applied once no page's request is being answered and no window is open ([`Host::busy`]),
@@ -21,9 +22,10 @@
 //! index has no such package, the version stays marked bad and the checks go on.
 //!
 //! An index that cannot be downloaded is tried again quietly within hours; one that fails
-//! its checks (another key, a broken signature, an older `seq`, too old) is logged, shown
-//! in the settings window, and tried again at the next check: no notification is sent for
-//! either. Every change of the state file is a read-modify-write under one lock.
+//! its checks (an expired or rolled-back TUF role, a signature or hash that does not match,
+//! an older `seq`) is logged, shown in the settings window, and tried again at the next
+//! check: no notification is sent for either. Every change of the state file is a
+//! read-modify-write under one lock.
 
 pub mod installer;
 
@@ -33,23 +35,20 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use oncl_desktop::UpdateSettings;
-use oncl_pki::http::HttpTransport;
 use oncl_ui::settings_view::{UpdateStatus, Updates};
-use oncl_update::{
-    Choice, Flavor, PendingHealth, PublicKey, State, Target, UpdateError, Version, choose, fetch,
-    verify,
-};
+use oncl_update::{Choice, Flavor, PendingHealth, State, Target, UpdateError, Version, choose};
 use time::OffsetDateTime;
 use tracing::{error, info, warn};
 
 use crate::load_settings;
+use crate::repository::Repository;
 
-/// Where the update indexes are published: the `updates/v1` directory of the project's
-/// GitHub Pages.
-pub const INDEX_BASE: &str = "https://arynyklas.github.io/OpenNCALayer/updates/v1";
+/// Where the update repository is published: the `tuf/v1` directory of the project's GitHub
+/// Pages (`docs/design/tuf.md`). The index of a channel is its target `indexes/<channel>.json`.
+pub const INDEX_BASE: &str = "https://arynyklas.github.io/OpenNCALayer/tuf/v1";
 
 /// With feature `e2e-prompter` (test builds, never releases): another `https://` base of the
-/// update indexes.
+/// update repository.
 #[cfg(feature = "e2e-prompter")]
 pub const INDEX_BASE_VAR: &str = "ONCL_UPDATE_INDEX_BASE";
 
@@ -94,7 +93,7 @@ const fn hours(n: u64) -> Duration {
     Duration::from_secs(n * 3600)
 }
 
-/// The base of the update indexes: [`INDEX_BASE`]; in test builds `ONCL_UPDATE_INDEX_BASE`
+/// The base of the update repository: [`INDEX_BASE`]; in test builds `ONCL_UPDATE_INDEX_BASE`
 /// (`INDEX_BASE_VAR`) if set.
 pub fn index_base() -> String {
     #[cfg(feature = "e2e-prompter")]
@@ -232,10 +231,6 @@ pub struct UpdaterConfig {
     pub data_dir: PathBuf,
     /// `settings.json`: its `updates` are read at every check.
     pub settings: PathBuf,
-    /// The base of the indexes ([`index_base`]).
-    pub base: String,
-    /// The keys the index must be signed with ([`oncl_update::embedded_keys`]).
-    pub keys: Vec<PublicKey>,
     /// This build's flavor.
     pub flavor: Flavor,
     /// How often a waiting update looks whether the daemon is idle ([`IDLE_POLL`]).
@@ -284,7 +279,7 @@ enum Job {
 /// The self-update; see the [module](self).
 pub struct Updater {
     config: UpdaterConfig,
-    transport: Arc<dyn HttpTransport>,
+    repository: Arc<Repository>,
     installer: Box<dyn Installer>,
     host: Box<dyn Host>,
     status: Mutex<UpdateStatus>,
@@ -304,13 +299,13 @@ pub struct Updater {
 impl Updater {
     pub fn new(
         config: UpdaterConfig,
-        transport: Arc<dyn HttpTransport>,
+        repository: Arc<Repository>,
         installer: Box<dyn Installer>,
         host: Box<dyn Host>,
     ) -> Updater {
         Updater {
             config,
-            transport,
+            repository,
             installer,
             host,
             status: Mutex::new(UpdateStatus::NotChecked),
@@ -669,24 +664,15 @@ impl Updater {
         self.checked(status, plan)
     }
 
-    /// The index of `channel`, downloaded within `timeout` and verified; its `seq` is
-    /// saved, and an index whose `seq` cannot be saved is not used. The error says whether
-    /// to try again soon (the index could not be downloaded, or the state not read or
-    /// saved); [`UpdateError::NotPublished`] is not tried again soon.
+    /// The index of `channel`, downloaded and verified through the repository within
+    /// `timeout`; its `seq` is saved, and an index whose `seq` cannot be saved is not used.
+    /// The error says whether to try again soon (the repository could not be read, or the
+    /// state not read or saved); [`UpdateError::NotPublished`] is not tried again soon.
     fn verified_index(
         &self,
         channel: oncl_update::Channel,
         timeout: Duration,
     ) -> Result<oncl_update::Index, (UpdateError, bool)> {
-        let fetched = fetch(&*self.transport, &self.config.base, channel, timeout).map_err(|e| {
-            if let UpdateError::NotPublished(_) = e {
-                info!(%channel, "the channel has no update index yet");
-                (e, false)
-            } else {
-                info!(error = %e, %channel, "cannot download the update index; trying again later");
-                (e, true)
-            }
-        })?;
         let state_error = |e: std::io::Error| {
             warn!(error = %e, "cannot read or save the updater's state");
             (UpdateError::Io(e), true)
@@ -694,18 +680,14 @@ impl Updater {
         let last_seq = self
             .try_update_state(|s| s.last_seq.get(&channel).copied())
             .map_err(state_error)?;
-        let index = verify(
-            &fetched.index,
-            &fetched.signature,
-            &self.config.keys,
-            channel,
-            last_seq,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(|e| {
-            warn!(error = %e, %channel, "the update index is refused");
-            (e, false)
-        })?;
+        let index = self
+            .repository
+            .index(channel, last_seq, timeout)
+            .map_err(|e| {
+                let soon = e.retry_soon();
+                (e, soon)
+            })?
+            .index;
         // Only ever raised: the state is read again under the lock.
         self.try_update_state(|s| {
             let seq = s.last_seq.entry(channel).or_insert(index.seq);
@@ -1025,15 +1007,16 @@ impl Updates for Checks {
 }
 
 /// Whether this build can update itself: not if `package_manager` installed it (it updates
-/// the copy), otherwise with the keys built in and `installer` (`Err` if this copy is not
-/// installed through Velopack, with the reason). `Err` is the status the settings window
-/// shows; the reason is logged.
+/// the copy), otherwise with the trust root built in (`repository`: `None` without one, which
+/// is logged where it is opened) and `installer` (`Err` if this copy is not installed through
+/// Velopack, with the reason). `Err` is the status the settings window shows; the reason is
+/// logged.
 pub fn availability<I>(
-    keys: Result<Vec<PublicKey>, UpdateError>,
+    repository: Option<Arc<Repository>>,
     flavor: Option<Flavor>,
     package_manager: Option<&str>,
     installer: impl FnOnce() -> Result<I, String>,
-) -> Result<(Vec<PublicKey>, Flavor, I), UpdateStatus> {
+) -> Result<(Arc<Repository>, Flavor, I), UpdateStatus> {
     if let Some(manager) = package_manager {
         info!(
             manager,
@@ -1049,16 +1032,9 @@ pub fn availability<I>(
         info!(reason = %e, "updates are available only for the installed version");
         UpdateStatus::NotInstalled
     })?;
-    match keys {
-        Ok(keys) if keys.is_empty() => {
-            info!("the update signing keys are not built into this build: updates are off");
-            Err(UpdateStatus::NoKeys)
-        }
-        Ok(keys) => Ok((keys, flavor, installer)),
-        Err(e) => {
-            error!(error = %e, "updates are off");
-            Err(UpdateStatus::NoKeys)
-        }
+    match repository {
+        Some(repository) => Ok((repository, flavor, installer)),
+        None => Err(UpdateStatus::NoKeys),
     }
 }
 

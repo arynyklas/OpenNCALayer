@@ -1,6 +1,7 @@
 //! The plugins of the daemon: installed in `<data>/plugins/` ([`Store`]), loaded as dynamic
 //! modules ([`PluginModules`]), installed, updated and withdrawn from the catalog (the
-//! plugin releases of the signed update index of the channel in the settings), or installed
+//! plugin releases of the update index of the channel in the settings, read through the TUF
+//! repository), or installed
 //! from a file the user chose.
 //!
 //! - At the start the enabled plugins not withdrawn are loaded (one that fails is shown with
@@ -19,7 +20,7 @@
 //! - A request for a module nothing serves that a plugin of the catalog would serve is told
 //!   ([`PluginNotice::Needed`]) and listed in the plugin window.
 //!
-//! Without the keys of the update index built in there is no catalog: plugins are
+//! Without the trust root of the update repository built in there is no catalog: plugins are
 //! installed from files only.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,13 +43,14 @@ use oncl_plugin::{
 use oncl_protocol::{AddInfo, DynamicModules};
 use oncl_ui::PluginActionError;
 use oncl_update::{
-    Channel, Index, MAX_AGE, PluginChoice, PluginName, PluginRelease, PublicKey, Sha256,
-    UpdateError, Version, choose_plugin, fetch, offer, verify,
+    Channel, Index, PluginChoice, PluginName, PluginRelease, Sha256, UpdateError, Version,
+    choose_plugin, offer,
 };
 use time::OffsetDateTime;
 use tracing::{info, warn};
 
 use crate::load_settings;
+use crate::repository::{Repository, VerifiedIndex};
 use crate::update::installer::fetch_package;
 use crate::update::{
     CHECK_EVERY, DOWNLOAD_TIMEOUT, FIRST_CHECK, INDEX_TIMEOUT, RETRY_AFTER, jitter,
@@ -125,10 +127,9 @@ pub struct PluginConfig {
     pub data_dir: PathBuf,
     /// `settings.json`: its `updates` (on or off, the channel) are read at every check.
     pub settings: PathBuf,
-    /// The keys the update index must be signed with; none: no catalog.
-    pub keys: Vec<PublicKey>,
-    /// The base of the update indexes ([`crate::update::index_base`]).
-    pub base: String,
+    /// The update repository the catalog is read through, shared with the updater; none:
+    /// no catalog.
+    pub repository: Option<Arc<Repository>>,
     /// This version of OpenNCALayer: plugins needing a newer one are not offered or loaded.
     pub core: Version,
     /// The network: the catalog and the packages.
@@ -152,7 +153,7 @@ pub struct ServiceView {
 /// The catalog's state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatalogView {
-    /// This build has no keys of the update index: no catalog.
+    /// This build has no trust root of the update repository built in: no catalog.
     Unavailable,
     /// The catalog of `channel` is in use, made at `generated`; `checked` is when it was
     /// last downloaded in this run, `error` why the last download failed, if it did.
@@ -276,6 +277,8 @@ pub struct PluginService {
 #[derive(Default)]
 struct Catalog {
     index: Option<Index>,
+    /// Until when the metadata that vouches for `index` holds.
+    valid_until: Option<OffsetDateTime>,
     /// When it was last downloaded in this run.
     checked: Option<OffsetDateTime>,
     /// Why the last download failed.
@@ -315,12 +318,13 @@ struct PendingUpdate {
 /// Why a catalog download did not bring a catalog.
 #[derive(Debug)]
 enum Refresh {
-    NoKeys,
+    NoRepository,
     /// It could not be downloaded (or recorded): try again soon.
     Unreachable(String),
     /// The channel has no index yet.
     NotPublished,
-    /// It was refused (signature, age, an older `seq`).
+    /// It was refused (an expired or rolled-back TUF role, a signature or hash that does not
+    /// match, an older `seq`).
     Refused(String),
 }
 
@@ -386,8 +390,8 @@ impl PluginService {
     /// As [`PluginService::new`].
     pub fn start(cfg: PluginConfig) -> std::io::Result<Arc<PluginService>> {
         let service = PluginService::new(cfg)?;
-        if service.cfg.keys.is_empty() {
-            info!("the update keys are not built in: no plugin catalog");
+        if service.cfg.repository.is_none() {
+            info!("the update trust root is not built in: no plugin catalog");
             return Ok(service);
         }
         let scheduled = Arc::clone(&service);
@@ -483,7 +487,7 @@ impl PluginService {
                 }
             })
             .collect();
-        if self.cfg.keys.is_empty() {
+        if self.cfg.repository.is_none() {
             return ServiceView {
                 catalog: CatalogView::Unavailable,
                 installed,
@@ -754,8 +758,8 @@ impl PluginService {
     /// Downloads the catalog of the channel in the settings within `timeout`, verifies it
     /// and keeps it.
     fn refresh(&self, timeout: Duration) -> Result<(), Refresh> {
-        if self.cfg.keys.is_empty() {
-            return Err(Refresh::NoKeys);
+        if self.cfg.repository.is_none() {
+            return Err(Refresh::NoRepository);
         }
         let one = lock(&self.checking);
         self.refresh_locked(&one, timeout)
@@ -768,8 +772,9 @@ impl PluginService {
         let mut catalog = lock(&self.catalog);
         match &result {
             Ok(index) => {
-                info!(%channel, seq = index.seq, plugins = index.plugins.len(), "the plugin catalog is downloaded");
-                catalog.index = Some(index.clone());
+                info!(%channel, seq = index.index.seq, plugins = index.index.plugins.len(), "the plugin catalog is downloaded");
+                catalog.index = Some(index.index.clone());
+                catalog.valid_until = Some(index.valid_until);
                 catalog.checked = Some(OffsetDateTime::now_utc());
                 catalog.error = None;
                 catalog.failed_at = None;
@@ -782,62 +787,57 @@ impl PluginService {
                 catalog.error = Some(e.clone());
                 catalog.failed_at = Some(Instant::now());
             }
-            Err(Refresh::NoKeys) => {}
+            Err(Refresh::NoRepository) => {}
         }
         result.map(drop)
     }
 
-    fn download_catalog(&self, channel: Channel, timeout: Duration) -> Result<Index, Refresh> {
-        let fetched = fetch(&*self.cfg.http, &self.cfg.base, channel, timeout).map_err(|e| {
-            if let UpdateError::NotPublished(_) = e {
-                info!(%channel, "the channel has no update index yet: no plugin catalog");
-                Refresh::NotPublished
-            } else {
-                info!(error = %e, %channel, "cannot download the plugin catalog");
-                Refresh::Unreachable(e.to_string())
-            }
-        })?;
+    fn download_catalog(
+        &self,
+        channel: Channel,
+        timeout: Duration,
+    ) -> Result<VerifiedIndex, Refresh> {
+        let Some(repository) = &self.cfg.repository else {
+            return Err(Refresh::NoRepository);
+        };
         let last_seq = self.store.state().last_seq.get(&channel).copied();
-        let index = verify(
-            &fetched.index,
-            &fetched.signature,
-            &self.cfg.keys,
-            channel,
-            last_seq,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(|e| {
-            warn!(error = %e, %channel, "the plugin catalog is refused");
-            Refresh::Refused(e.to_string())
-        })?;
+        let verified = repository
+            .index(channel, last_seq, timeout)
+            .map_err(|e| match e {
+                UpdateError::NotPublished(_) => Refresh::NotPublished,
+                e if e.retry_soon() => Refresh::Unreachable(e.to_string()),
+                e => Refresh::Refused(e.to_string()),
+            })?;
         // A catalog whose `seq` is not recorded is not used.
         self.store
-            .save_catalog(channel, &fetched.index, &fetched.signature)
+            .save_catalog(channel, &verified.bytes)
             .map_err(|e| {
                 warn!(error = %e, "cannot keep the plugin catalog");
                 Refresh::Unreachable(e.to_string())
             })?;
-        Ok(index)
+        Ok(verified)
     }
 
     /// The catalog of the channel in the settings, if one in use still holds: the one
-    /// downloaded, or the one kept in `<data>/plugins/` (verified again).
+    /// downloaded, or the one kept in `<data>/plugins/` (checked again against the saved TUF
+    /// state, offline).
     fn valid_index(&self) -> Option<Index> {
-        if self.cfg.keys.is_empty() {
-            return None;
-        }
+        let repository = self.cfg.repository.as_ref()?;
         let channel = self.update_settings().channel;
         let now = OffsetDateTime::now_utc();
         let mut catalog = lock(&self.catalog);
         if let Some(index) = &catalog.index
             && index.channel == channel
-            && fresh(index, now)
+            && catalog.valid_until.is_some_and(|until| now < until)
         {
             return Some(index.clone());
         }
-        let kept = self.store.load_catalog(channel, &self.cfg.keys, now);
-        catalog.index.clone_from(&kept);
-        kept
+        let kept = self
+            .store
+            .load_catalog(channel, |bytes| repository.verify_kept(channel, bytes, now));
+        catalog.valid_until = kept.as_ref().map(|kept| kept.valid_until);
+        catalog.index = kept.map(|kept| kept.index);
+        catalog.index.clone()
     }
 
     /// [`PluginService::valid_index`], or one downloaded within `timeout`. A download
@@ -850,7 +850,7 @@ impl PluginService {
         if let Some(index) = self.valid_index() {
             return Some(index);
         }
-        if self.cfg.keys.is_empty() || self.page_waits_out_failure(asker) {
+        if self.cfg.repository.is_none() || self.page_waits_out_failure(asker) {
             return None;
         }
         let wait = asker == Asker::User;
@@ -1484,15 +1484,6 @@ fn read_package(path: &Path) -> Result<(Package, Vec<u8>), String> {
         .map_err(|e| e.to_string())?;
     let package = Package::read(&bytes).map_err(|e| e.to_string())?;
     Ok((package, bytes))
-}
-
-/// Whether `index` is still within its validity at `now`.
-fn fresh(index: &Index, now: OffsetDateTime) -> bool {
-    let deadline = index
-        .generated
-        .checked_add(MAX_AGE)
-        .map_or(index.expires, |aged| aged.min(index.expires));
-    now < deadline
 }
 
 fn localized(name: &PluginName) -> Localized {

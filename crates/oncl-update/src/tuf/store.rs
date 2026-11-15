@@ -52,6 +52,11 @@ pub struct TrustState {
     /// The version of the newest targets accepted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<u64>,
+    /// The targets file of that version as downloaded: what [`super::TufClient::verify_cached_target`]
+    /// checks a kept target against, offline, after checking its signature again from the
+    /// chain of roots.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets_file: Option<Envelope>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -91,17 +96,35 @@ impl TrustState {
         } else {
             (disk.root_version, disk.roots.clone())
         };
-        let (timestamp, snapshot, targets) = match disk.keys_epoch.cmp(&mine.keys_epoch) {
-            std::cmp::Ordering::Greater => (disk.timestamp, disk.snapshot, disk.targets),
-            std::cmp::Ordering::Less => {
-                (mine.timestamp.clone(), mine.snapshot.clone(), mine.targets)
-            }
-            std::cmp::Ordering::Equal => (
-                newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
-                newest(disk.snapshot, mine.snapshot.clone(), |s| s.version),
-                disk.targets.max(mine.targets),
-            ),
-        };
+        let (timestamp, snapshot, targets, targets_file) =
+            match disk.keys_epoch.cmp(&mine.keys_epoch) {
+                std::cmp::Ordering::Greater => (
+                    disk.timestamp,
+                    disk.snapshot,
+                    disk.targets,
+                    disk.targets_file,
+                ),
+                std::cmp::Ordering::Less => (
+                    mine.timestamp.clone(),
+                    mine.snapshot.clone(),
+                    mine.targets,
+                    mine.targets_file.clone(),
+                ),
+                std::cmp::Ordering::Equal => {
+                    // The file goes with the higher version; mine if they are equal.
+                    let file = if disk.targets > mine.targets {
+                        disk.targets_file
+                    } else {
+                        mine.targets_file.clone().or(disk.targets_file)
+                    };
+                    (
+                        newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
+                        newest(disk.snapshot, mine.snapshot.clone(), |s| s.version),
+                        disk.targets.max(mine.targets),
+                        file,
+                    )
+                }
+            };
         TrustState {
             root_version,
             keys_epoch: disk.keys_epoch.max(mine.keys_epoch),
@@ -109,6 +132,7 @@ impl TrustState {
             timestamp,
             snapshot,
             targets,
+            targets_file,
         }
     }
 }
@@ -354,6 +378,7 @@ mod tests {
             timestamp: Some(ts(1_800_000_000)),
             snapshot: Some(snap(7)),
             targets: Some(3),
+            targets_file: None,
         }
     }
 
@@ -466,6 +491,7 @@ mod tests {
             timestamp: Some(ts(5)),
             snapshot: Some(snap(1)),
             targets: Some(1),
+            targets_file: None,
         };
         assert_eq!(s.save(&older).unwrap(), state());
         // An older root with higher versions of its own: the root stays, the versions of the
@@ -477,6 +503,7 @@ mod tests {
             timestamp: Some(ts(2_000_000_000)),
             snapshot: None,
             targets: None,
+            targets_file: None,
         };
         let merged = s.save(&stale_root).unwrap();
         assert_eq!(merged.root_version, 3);
@@ -493,6 +520,7 @@ mod tests {
             timestamp: None,
             snapshot: None,
             targets: None,
+            targets_file: None,
         };
         let merged = s.save(&rotated).unwrap();
         assert_eq!((merged.root_version, merged.keys_epoch), (4, 4));

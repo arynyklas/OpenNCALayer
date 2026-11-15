@@ -20,15 +20,17 @@ use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
+use minisign_verify::PublicKey;
 use oncl_update::{
     Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, Package, PluginName,
-    PluginRelease, PluginReplaces, PublicKey, Sha256, Version,
+    PluginRelease, PluginReplaces, Sha256, Version,
 };
 use serde_json::Value;
 use sha2::Digest;
 use time::OffsetDateTime;
 use ureq::Agent;
 
+use crate::legacy_index;
 use crate::registry::ports::Conformance;
 use crate::sign::signature_path;
 
@@ -294,7 +296,7 @@ pub struct Added {
 /// - optionally the extension, [`chromium_name`] and [`firefox_name`] together.
 ///
 /// sha256 and sizes come from the files; URLs are [`release_asset_url`]. `seq` grows by
-/// one, `generated` is `now` and `expires` 30 days later ([`oncl_update::MAX_AGE`]). A
+/// one, `generated` is `now` and `expires` 30 days later ([`legacy_index::MAX_AGE`]). A
 /// signature of the old index is removed.
 ///
 /// # Errors
@@ -539,7 +541,7 @@ fn write_next(path: &Path, mut index: Index, now: OffsetDateTime) -> anyhow::Res
         .checked_add(1)
         .context("seq cannot grow any further")?;
     index.generated = now.replace_nanosecond(0).expect("0 is a valid nanosecond");
-    index.expires = index.generated + oncl_update::MAX_AGE;
+    index.expires = index.generated + legacy_index::MAX_AGE;
 
     let mut json = serde_json::to_string_pretty(&index).context("serializing the index")?;
     json.push('\n');
@@ -769,7 +771,7 @@ pub struct Checked {
 }
 
 /// Checks the indexes in `dir`: each passes the client's verification
-/// (`oncl_update::verify`, the signature by `options.keys.current` only: a `next.pub` is for
+/// (`legacy_index::verify`, the signature by `options.keys.current` only: a `next.pub` is for
 /// clients, not for signing before the switch) at `options.now` and [`check_asset_urls`];
 /// against `options.base`, a changed index has a greater `seq` and no index is removed.
 /// With a base, every version new against it, or whose packages changed, passes
@@ -828,7 +830,7 @@ pub fn check(
                 signature.display()
             )
         })?;
-        let index = oncl_update::verify(&bytes, &sig, &signing, channel, None, options.now)
+        let index = legacy_index::verify(&bytes, &sig, &signing, channel, None, options.now)
             .with_context(|| format!("{} is refused", path.display()))?;
         check_asset_urls(&index).with_context(|| format!("{} is refused", path.display()))?;
 

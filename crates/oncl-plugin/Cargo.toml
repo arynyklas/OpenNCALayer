@@ -33,7 +33,8 @@ oncl-pki.workspace = true
 oncl-protocol.workspace = true
 # `Tokens`: the hardware tokens the `keys` capability's storage dialog offers.
 oncl-token.workspace = true
-# `Store`: the catalog (the signed update index) kept and verified again, the package sums.
+# `Store`: the catalog (the update index the TUF client verified) kept and checked again, the
+# package sums.
 oncl-update = { workspace = true, optional = true }
 semver.workspace = true
 serde.workspace = true
@@ -63,12 +64,12 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 libc.workspace = true
 
 [dev-dependencies]
-# Catalogs signed in the store's tests.
-minisign.workspace = true
 oncl-flows = { path = "../oncl-flows", features = ["testing"] }
 # `testing`: `tsp::MockTsa`, `RouteTransport`.
 oncl-pki = { path = "../oncl-pki", features = ["testing"] }
 oncl-testkit.workspace = true
+# `testing`: the TUF repository the catalog's store tests are served by.
+oncl-update = { workspace = true, features = ["testing"] }
 # `emulator`: software tokens for the `keys` capability's token tests.
 oncl-token = { path = "../oncl-token", features = ["emulator"] }
 tempfile.workspace = true

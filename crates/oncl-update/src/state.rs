@@ -14,7 +14,7 @@ use crate::index::Channel;
 /// The updater's state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
-    /// The highest `seq` accepted, by channel: [`crate::verify()`] refuses an index below it.
+    /// The highest `seq` accepted, by channel: [`crate::Index::accept`] refuses an index below it.
     #[serde(default)]
     pub last_seq: BTreeMap<Channel, u64>,
     /// This installation's random id, for its rollout buckets ([`crate::rollout_bucket`]);

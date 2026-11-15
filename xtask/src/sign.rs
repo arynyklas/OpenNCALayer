@@ -5,7 +5,7 @@
 //!   `current.pub` or `next.pub`. It refuses a directory whose secret key git could commit.
 //! - [`sign`] writes `<index>.minisig` beside an index, in the prehashed mode, with the
 //!   trusted comment `channel=<channel>;seq=<seq>` the client checks
-//!   (`oncl_update::trusted_comment`).
+//!   (`legacy_index::trusted_comment`).
 //!
 //! Passwords are read by the CLI without echo and held in `Zeroizing`; these functions take
 //! them as arguments, so tests use keys of their own in temporary directories. minisign
@@ -19,8 +19,10 @@ use std::process::Command;
 
 use anyhow::{Context, bail};
 use minisign::{KeyPair, PublicKey, SecretKey};
-use oncl_update::{Index, MAX_INDEX_LEN, trusted_comment};
+use oncl_update::{Index, MAX_INDEX_LEN};
 use time::OffsetDateTime;
+
+use crate::legacy_index::{self, trusted_comment};
 
 /// The secret key that [`keygen`] writes.
 pub const SECRET_KEY_FILE: &str = "oncl-index.key";
@@ -137,14 +139,14 @@ pub fn sign(index: &Path, key: &SecretKey, now: OffsetDateTime) -> anyhow::Resul
     .context("signing")?
     .into_string();
 
-    let trusted = oncl_update::PublicKey::decode(
+    let trusted = minisign_verify::PublicKey::decode(
         &public
             .to_box()
             .context("encoding the public key")?
             .into_string(),
     )
     .context("decoding the public key")?;
-    oncl_update::verify(
+    legacy_index::verify(
         &bytes,
         signature.as_bytes(),
         &[trusted],

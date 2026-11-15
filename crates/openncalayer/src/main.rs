@@ -26,13 +26,14 @@ use oncl_ui::{
     AboutInfo, DesktopWindow, DesktopWindows, Notification, PluginsServices, SlintPrompter,
     StopOriginal, TrayCommand, TrayHandle, TrayState,
 };
-use oncl_update::{Flavor, Version, embedded_keys};
+use oncl_update::{Flavor, Version};
 use openncalayer::cli::{self, Cli, Command};
 use openncalayer::lifecycle::{self, Executables};
 use openncalayer::notices::TrayStatus;
 use openncalayer::plugins::window::{WindowInstallUi, WindowServices};
 use openncalayer::plugins::{PluginConfig, PluginNotice, PluginService};
 use openncalayer::renewal::{self, RenewalCheck};
+use openncalayer::repository::Repository;
 use openncalayer::update::installer::VelopackInstaller;
 use openncalayer::update::{
     self, Checks, Host, Notice, RollBack, Startup, Updater, UpdaterConfig, UpdaterHandle,
@@ -298,6 +299,7 @@ fn run(allow_no_wss: bool, with_tray: bool, show_tools: bool) -> ExitCode {
     };
     let Some(Started {
         http,
+        repository,
         updates,
         startup,
         rollback,
@@ -321,7 +323,8 @@ fn run(allow_no_wss: bool, with_tray: bool, show_tools: bool) -> ExitCode {
     let prompter: Arc<dyn Prompter> = scripted.unwrap_or_else(|| Arc::new(SlintPrompter::new()));
     let recent: Arc<dyn RecentPathStore> = Arc::new(JsonSettings::new(daemon.paths.settings()));
     let services = host_services(&daemon.paths, prompter, recent, &http, &tokens);
-    let (plugins, plugin_modules) = start_plugins(&daemon.paths, services.clone(), &http);
+    let (plugins, plugin_modules) =
+        start_plugins(&daemon.paths, services.clone(), &http, repository);
     let workspace = match oncl_ui::desktop_engine(
         oncl_ui::desktop_limits(),
         Arc::clone(&http) as _,
@@ -673,27 +676,24 @@ fn host_services(
 }
 
 /// The plugins: their modules, loaded with `services`; their service, which installs and
-/// updates them from the catalog through `http` (or why they are off: logged, shown in their
+/// updates them from the catalog (read through `repository`, shared with the updater; none:
+/// no catalog) and downloads through `http` (or why they are off: logged, shown in their
 /// window). A change is told in the tray and refreshes the plugin window.
 fn start_plugins(
     paths: &Paths,
     services: HostServices,
     http: &Arc<LiveProxyTransport>,
+    repository: Option<Arc<Repository>>,
 ) -> (Result<Arc<PluginService>, String>, Option<Plugins>) {
     let modules = Arc::new(PluginModules::new(
         Arc::new(Engine::new()),
         services,
         builtin_modules(),
     ));
-    let keys = embedded_keys().unwrap_or_else(|e| {
-        tracing::error!(error = %e, "the update keys are unusable: no plugin catalog");
-        Vec::new()
-    });
     let started = PluginService::start(PluginConfig {
         data_dir: paths.data.clone(),
         settings: paths.settings(),
-        keys,
-        base: update::index_base(),
+        repository,
         core: Version::parse(env!("CARGO_PKG_VERSION")).expect("the package version"),
         http: Arc::clone(http) as _,
         modules: Arc::clone(&modules),
@@ -995,6 +995,9 @@ struct UpdateStart {
 struct Started {
     /// The daemon's HTTP transport, through the proxy of the settings.
     http: Arc<LiveProxyTransport>,
+    /// The update repository, shared by the updater and the plugin catalog; none without the
+    /// trust root built in.
+    repository: Option<Arc<Repository>>,
     updates: UpdaterHandle,
     startup: Startup,
     /// A rollback still to do: `(failed, to)`.
@@ -1006,8 +1009,14 @@ impl cli::AtStart for UpdateStart {
         let http = Arc::new(LiveProxyTransport::new(
             load_settings(&paths.settings()).proxy,
         ));
+        let repository = Repository::open(
+            &paths.data,
+            &update::index_base(),
+            Arc::clone(&http) as Arc<dyn HttpTransport>,
+        );
         let (updates, startup) = updater(
             paths,
+            repository.clone(),
             Arc::clone(&http),
             Arc::clone(&self.stop),
             Arc::clone(&self.loop_runs),
@@ -1030,6 +1039,7 @@ impl cli::AtStart for UpdateStart {
         lifecycle::at_daemon_start(paths);
         self.started = Some(Started {
             http,
+            repository,
             updates,
             startup,
             rollback,
@@ -1045,11 +1055,12 @@ impl cli::AtStart for UpdateStart {
 }
 
 /// The updater of this copy and what it found at the start, or why it is off: only a copy
-/// installed through Velopack, built with the keys of the update index, updates itself; a
-/// package manager's copy is its to update. It downloads through `http` (the proxy of the
-/// settings) and exits through `stop`.
+/// installed through Velopack, built with the trust root of the update repository
+/// (`repository`), updates itself; a package manager's copy is its to update. It downloads
+/// through `http` (the proxy of the settings) and exits through `stop`.
 fn updater(
     paths: &Paths,
+    repository: Option<Arc<Repository>>,
     http: Arc<LiveProxyTransport>,
     stop: Arc<Notify>,
     loop_runs: Arc<AtomicBool>,
@@ -1058,13 +1069,10 @@ fn updater(
     let manager = std::env::current_exe()
         .ok()
         .and_then(|exe| lifecycle::package_manager(&exe));
-    let available = update::availability(
-        embedded_keys(),
-        Flavor::current(),
-        manager.as_deref(),
-        || VelopackInstaller::detect(Arc::clone(&transport)),
-    );
-    let (keys, flavor, installer) = match available {
+    let available = update::availability(repository, Flavor::current(), manager.as_deref(), || {
+        VelopackInstaller::detect(Arc::clone(&transport))
+    });
+    let (repository, flavor, installer) = match available {
         Ok(available) => available,
         Err(status) => return (UpdaterHandle::Off(status), Startup::Normal),
     };
@@ -1072,14 +1080,12 @@ fn updater(
         UpdaterConfig {
             data_dir: paths.data.clone(),
             settings: paths.settings(),
-            base: update::index_base(),
-            keys,
             flavor,
             idle_poll: update::IDLE_POLL,
             health_grace: update::HEALTH_GRACE,
             health_settle: update::HEALTH_SETTLE,
         },
-        transport,
+        repository,
         Box::new(installer),
         Box::new(DaemonHost { stop, loop_runs }),
     );
