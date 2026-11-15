@@ -114,6 +114,9 @@ cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packag
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check
 cargo xtask licenses --check   # сторонние лицензии окна «О программе» свежие
+# при изменении updates/ или tuf/ (проверки индексов и репозитория TUF, `docs/dev/release.md`, разделы 4 и 7г):
+cargo xtask index check updates/v1 --offline --base origin/main
+cargo xtask tuf check --no-timestamp --base origin/main
 ```
 
 `web/demo/vendor/ncalayer-client.js` — файл `package/ncalayer-client.js` из npm-пакета `ncalayer-js-client@1.6.1` без изменений (MIT, sha256 `bdf2015c3e422eed70ccf38eef3246af67a0d38639e6b70fe6b8655a2fa03489`). Тест `demo_assets_served` сверяет sha256 файла, который отдаёт сервер. Лицензию клиента сервер отдаёт рядом с ним: `/demo/vendor/LICENSE`.
