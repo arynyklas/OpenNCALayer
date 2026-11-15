@@ -20,17 +20,20 @@ use std::path::Path;
 #[allow(dead_code)]
 mod hex;
 
+// (Flat, with `src/tuf`'s own names: its files reach each other as `super::keys`, and
+// `super` is this crate root here.)
+#[path = "src/tuf/canonical.rs"]
 #[allow(dead_code)]
-mod tuf {
-    #[path = "../src/tuf/canonical.rs"]
-    pub mod canonical;
-    #[path = "../src/tuf/error.rs"]
-    pub mod error;
-    #[path = "../src/tuf/keys.rs"]
-    pub mod keys;
-    #[path = "../src/tuf/model.rs"]
-    pub mod model;
-}
+mod canonical;
+#[path = "src/tuf/error.rs"]
+#[allow(dead_code)]
+mod error;
+#[path = "src/tuf/keys.rs"]
+#[allow(dead_code)]
+mod keys;
+#[path = "src/tuf/model.rs"]
+#[allow(dead_code)]
+mod model;
 
 /// The most a root file may be: `tuf::Limits::default().root`.
 const MAX_ROOT_LEN: u64 = 64 << 10;
@@ -83,18 +86,18 @@ fn not_a_root(path: &Path, why: &dyn std::fmt::Display) -> ! {
 /// Panics, failing the build, unless `bytes` is a root file the client can start from, as far
 /// as can be told without verifying a signature.
 fn check_root(path: &Path, bytes: &[u8]) {
-    let file = match tuf::model::Envelope::parse(bytes, MAX_ROOT_LEN, "root.json") {
+    let file = match model::Envelope::parse(bytes, MAX_ROOT_LEN, "root.json") {
         Ok(file) => file,
         Err(e) => not_a_root(path, &e),
     };
-    let root = match tuf::model::Root::from_signed(&file.signed) {
+    let root = match model::Root::from_signed(&file.signed) {
         Ok(root) => root,
         Err(e) => not_a_root(path, &e),
     };
     let signers: BTreeSet<_> = file
         .signatures
         .iter()
-        .filter_map(|s| tuf::keys::KeyId::from_hex(&s.keyid))
+        .filter_map(|s| keys::KeyId::from_hex(&s.keyid))
         .filter(|id| root.root.keyids.contains(id))
         .collect();
     if signers.len() < root.root.threshold as usize {
