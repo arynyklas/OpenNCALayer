@@ -134,8 +134,8 @@ impl Fetcher for HttpFetcher<'_> {
                         .and_then(|location| same_host_redirect(&url, location));
                     url = next.ok_or_else(|| {
                         TufError::Fetch(format!(
-                            "{url}: redirect to {:?}, which is not an https URL on the same host",
-                            reply.location
+                            "{url}: redirect to {}, which is not an https URL on the same host",
+                            printable(reply.location.as_deref())
                         ))
                     })?;
                 }
@@ -146,6 +146,25 @@ impl Fetcher for HttpFetcher<'_> {
             "{path}: more than {MAX_REDIRECTS} redirects"
         )))
     }
+}
+
+/// What a server sent as a `Location`, for an error message: at most 80 characters, control
+/// characters shown as `?`, in quotes. The header is not trusted.
+fn printable(location: Option<&str>) -> String {
+    let Some(location) = location else {
+        return "nothing".to_owned();
+    };
+    let shown: String = location
+        .chars()
+        .take(80)
+        .map(|c| if c.is_control() { '?' } else { c })
+        .collect();
+    let more = if location.chars().count() > 80 {
+        "..."
+    } else {
+        ""
+    };
+    format!("\"{shown}{more}\"")
 }
 
 /// The `host[:port]` of an `https://` URL.
@@ -399,6 +418,22 @@ mod tests {
                 .iter()
                 .all(|(u, _)| u.to_ascii_lowercase().starts_with("https://example.org/"))
         );
+    }
+
+    #[test]
+    fn an_untrusted_location_is_shortened_and_has_no_control_characters_in_the_error() {
+        let long = format!("https://evil.example/\r\n\u{1b}[31m{}", "a".repeat(500));
+        let t = table(vec![(
+            "https://example.org/tuf/v1/a",
+            reply(302, Some(&long), b""),
+        )]);
+        let f = HttpFetcher::new(&t, BASE).unwrap();
+        let Err(TufError::Fetch(message)) = f.fetch("a", 10) else {
+            panic!("not refused");
+        };
+        assert!(!message.chars().any(char::is_control), "{message:?}");
+        assert!(message.len() < 250, "{} bytes", message.len());
+        assert!(message.contains("..."), "{message}");
     }
 
     #[test]

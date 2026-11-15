@@ -44,7 +44,7 @@ pub use keys::{KeyId, PublicKey};
 pub use model::{
     Digest, Envelope, MetaFile, RoleKeys, Root, Signature, Snapshot, Target, Targets, Timestamp,
 };
-pub use store::{AcceptedTarget, FileStore, MemoryStore, Store, TrustState};
+pub use store::{FileStore, MemoryStore, SnapshotState, Store, TimestampState, TrustState};
 
 #[cfg(test)]
 mod tests;

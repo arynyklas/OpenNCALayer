@@ -25,6 +25,8 @@ serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["serde", "formatting", "parsing"] }
+# The signing keys the repository tools generate are wiped when dropped.
+zeroize.workspace = true
 # `contents_sha256`: the files of a package.
 zip.workspace = true
 

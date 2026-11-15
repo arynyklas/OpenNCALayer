@@ -1,7 +1,7 @@
 //! The whole client against the repositories python-tuf built (`tests/fixtures/tuf/`, see its
-//! README): `valid/` is accepted, byte for byte, and every `<attack>/` is refused at the step
-//! its `expected.json` names, with the error class it names. Each directory is a served root;
-//! the files are read from disk into a `MemoryFetcher`, the clock is the `now` of the vector.
+//! README): `valid/` is accepted, byte for byte, and every `<attack>/` is refused, at the
+//! step and as the error the table below says, exactly. Each directory is a served root; the
+//! files are read from disk into a `MemoryFetcher`, the clock is the `now` of the vector.
 
 use std::path::{Path, PathBuf};
 
@@ -53,7 +53,8 @@ fn now(vector: &Value) -> OffsetDateTime {
     OffsetDateTime::parse(vector["now"].as_str().unwrap(), &Rfc3339).unwrap()
 }
 
-/// How far into the workflow a path is: the step that asks for it.
+/// How far into the workflow a path is: the step that asks for it. 0 root, 1 timestamp,
+/// 2 snapshot, 3 targets, 4 a target file.
 fn rank(path: &str) -> u8 {
     if path.ends_with(".root.json") {
         0
@@ -68,59 +69,110 @@ fn rank(path: &str) -> u8 {
     }
 }
 
-fn step_rank(step: &str) -> u8 {
-    match step {
-        "root" => 0,
-        "timestamp" => 1,
-        "snapshot" => 2,
-        "targets" | "snapshot or targets" => 3,
-        "target" => 4,
-        other => panic!("unknown step {other}"),
-    }
-}
-
-/// Whether `error` is what the vector `name` is refused as.
-fn refused_as(name: &str, error: &TufError) -> bool {
-    match (name, error) {
-        ("expired-timestamp", TufError::Expired { role, .. }) => *role == Role::Timestamp,
-        ("expired-snapshot", TufError::Expired { role, .. }) => *role == Role::Snapshot,
-        ("expired-targets", TufError::Expired { role, .. }) => *role == Role::Targets,
-        ("rollback-timestamp", TufError::Rollback { what, .. }) => what == "timestamp",
-        ("rollback-snapshot", TufError::Rollback { what, .. }) => what.contains("snapshot"),
-        ("rollback-targets", TufError::Rollback { what, .. }) => what.contains("targets"),
-        (
-            "bad-signature-targets" | "tampered-unknown-field",
-            TufError::Signature { what, valid, .. },
-        ) => what == "the targets" && *valid == 0,
-        (
-            "threshold-not-met",
-            TufError::Signature {
-                what,
-                valid,
-                threshold,
-            },
-        ) => what.contains("its own keys") && (*valid, *threshold) == (1, 2),
-        ("new-root-signed-only-by-new-keys", TufError::Signature { what, valid, .. }) => {
-            what.contains("keys of root") && *valid == 0
-        }
-        ("root-version-gap", TufError::RootVersion { .. }) => true,
-        ("wrong-keyid-in-root", TufError::BadKeyId { .. }) => true,
-        ("target-hash-mismatch", TufError::Hash { .. }) => true,
-        // A body longer than listed is stopped by the fetcher or the client, a shorter one
-        // is a length mismatch.
-        (
-            "target-length-mismatch",
-            TufError::Length { .. } | TufError::TooLarge { .. } | TufError::Fetch(_),
-        ) => true,
-        _ => false,
-    }
-}
-
 fn client<'a>(
     repo: &'a MemoryFetcher,
     store: &'a mut MemoryStore,
 ) -> TufClient<&'a MemoryFetcher, &'a mut MemoryStore> {
     TufClient::new(&anchor(), repo, store, Limits::default()).unwrap()
+}
+
+type Check = fn(&TufError) -> bool;
+
+/// One attack: where the client refuses it (the deepest step it asks the repository for,
+/// see [`rank`]), the step python-tuf refuses it at (as in `expected.json`'s `must_fail_at`),
+/// and exactly the error.
+struct Attack {
+    name: &'static str,
+    ours: u8,
+    python_tuf: &'static str,
+    error: Check,
+}
+
+fn attacks() -> Vec<Attack> {
+    macro_rules! attack {
+        ($name:literal, $ours:literal, $python:literal, $pattern:pat $(if $guard:expr)?) => {
+            Attack {
+                name: $name,
+                ours: $ours,
+                python_tuf: $python,
+                error: |e| matches!(e, $pattern $(if $guard)?),
+            }
+        };
+    }
+    vec![
+        attack!("bad-signature-targets", 3, "targets",
+            TufError::Signature { what, valid: 0, threshold: 1 } if what == "the targets"),
+        attack!(
+            "expired-timestamp",
+            1,
+            "timestamp",
+            TufError::Expired {
+                role: Role::Timestamp,
+                ..
+            }
+        ),
+        attack!(
+            "expired-snapshot",
+            2,
+            "snapshot",
+            TufError::Expired {
+                role: Role::Snapshot,
+                ..
+            }
+        ),
+        attack!(
+            "expired-targets",
+            3,
+            "targets",
+            TufError::Expired {
+                role: Role::Targets,
+                ..
+            }
+        ),
+        attack!("new-root-signed-only-by-new-keys", 0, "root",
+            TufError::Signature { what, valid: 0, threshold: 1 }
+                if what == "root 3 by the keys of root 2"),
+        // The next timestamp already lists snapshot 1 after snapshot 2 was accepted: refused
+        // by 5.4.3.2 at the timestamp, one step before python-tuf, which refuses the snapshot.
+        attack!("rollback-snapshot", 1, "snapshot",
+            TufError::Rollback { what, found: 1, trusted: 2 }
+                if what == "snapshot listed by the timestamp"),
+        // The new snapshot lists targets 1 after targets 2: refused by 5.5.5 at the snapshot,
+        // one step before python-tuf, which refuses the targets file.
+        attack!("rollback-targets", 2, "snapshot or targets",
+            TufError::Rollback { what, found: 1, trusted: 2 }
+                if what == "targets.json listed by the snapshot"),
+        attack!("rollback-timestamp", 1, "timestamp",
+            TufError::Rollback { what, found: 1_794_697_200, trusted: 1_794_700_800 }
+                if what == "timestamp"),
+        attack!(
+            "root-version-gap",
+            0,
+            "root",
+            TufError::RootVersion {
+                expected: 2,
+                found: 3
+            }
+        ),
+        attack!("tampered-unknown-field", 3, "targets",
+            TufError::Signature { what, valid: 0, threshold: 1 } if what == "the targets"),
+        attack!("threshold-not-met", 0, "root",
+            TufError::Signature { what, valid: 1, threshold: 2 }
+                if what == "root 2 by its own keys"),
+        // python-tuf accepts this repository (`diverges_from_contract`): the contract has
+        // the client recompute key ids.
+        attack!("wrong-keyid-in-root", 0, "root",
+            TufError::BadKeyId { claimed, actual }
+                if claimed == &"0".repeat(64)
+                    && actual == "e837e8b183c59a2b7ebcd3173500127f0c1ef57d5d590e0673c8190dd9536976"),
+        // The metadata is fine; the target file is not (the step is 4: a target file).
+        attack!("target-hash-mismatch", 4, "target",
+            TufError::Hash { what } if what == "indexes/stable.json"),
+        // A body longer than listed (1005 bytes) is stopped where it is read.
+        attack!("target-length-mismatch", 4, "target",
+            TufError::Fetch(m) if m.contains(".stable.json")
+                && m.contains("larger than request limit: 1005")),
+    ]
 }
 
 #[test]
@@ -129,7 +181,9 @@ fn the_valid_repository_is_accepted_and_both_indexes_come_out_byte_for_byte() {
     let repo = repository("valid");
     let mut store = MemoryStore::default();
     let mut c = client(&repo, &mut store);
-    let trusted = c.refresh(now(&vector)).unwrap();
+    let clock = now(&vector);
+    let trusted = c.refresh(clock).unwrap();
+    assert_eq!(trusted.state_was_reset(), None);
 
     // Root 1 -> 2 -> 3 (a timestamp key rotation, then a root key rotation), snapshot and
     // targets 2, the timestamp at the time of signing.
@@ -149,16 +203,20 @@ fn the_valid_repository_is_accepted_and_both_indexes_come_out_byte_for_byte() {
     for (target, stored) in targets {
         let fixture =
             std::fs::read(fixtures().join("valid").join(stored.as_str().unwrap())).unwrap();
-        let downloaded = c.download_target(&trusted, target, MAX_TARGET).unwrap();
+        let downloaded = c
+            .download_target(&trusted, target, MAX_TARGET, clock)
+            .unwrap();
         assert_eq!(downloaded, fixture, "{target}");
     }
-    let state = &store.load().unwrap();
-    assert_eq!(state.accepted.len(), 2);
+    let state = store.load().unwrap();
+    assert_eq!((state.root_version, state.roots.len()), (3, 2));
     assert_eq!(state.targets, Some(2));
 }
 
 #[test]
-fn every_attack_is_refused_at_its_step_as_its_class() {
+fn every_attack_is_refused_at_its_step_as_its_error() {
+    let table = attacks();
+    // The table covers every attack directory, and nothing else.
     let mut names: Vec<String> = std::fs::read_dir(fixtures())
         .unwrap()
         .map(|e| e.unwrap())
@@ -166,65 +224,61 @@ fn every_attack_is_refused_at_its_step_as_its_class() {
         .map(|e| e.file_name().into_string().unwrap())
         .collect();
     names.sort();
-    assert_eq!(names.len(), 14, "{names:?}");
+    let mut listed: Vec<&str> = table.iter().map(|a| a.name).collect();
+    listed.sort_unstable();
+    assert_eq!(names, listed);
+    assert_eq!(table.len(), 14);
 
-    for name in names {
-        let vector = expected(&name);
-        let step = vector["must_fail_at"].as_str().unwrap();
+    for attack in table {
+        let name = attack.name;
+        let vector = expected(name);
+        assert_eq!(
+            vector["must_fail_at"].as_str().unwrap(),
+            attack.python_tuf,
+            "{name}: python-tuf's step"
+        );
+        let clock = now(&vector);
         let mut store = MemoryStore::default();
         if !vector["prior_state"].is_null() {
             // A client that has already accepted the valid repository on the same clock.
             let valid = repository("valid");
-            client(&valid, &mut store).refresh(now(&vector)).unwrap();
+            client(&valid, &mut store).refresh(clock).unwrap();
         }
-        let repo = repository(&name);
+        let repo = repository(name);
+        repo.clear_requests();
         let mut c = client(&repo, &mut store);
-        let error = match c.refresh(now(&vector)) {
+        let error = match c.refresh(clock) {
             Err(error) => error,
             Ok(trusted) => {
-                assert_eq!(
-                    step, "target",
-                    "{name}: refresh accepted what must fail at {step}"
-                );
-                // Metadata is fine: the target is what is wrong.
-                let valid = expected("valid");
-                let failures: Vec<_> = valid["targets"]
-                    .as_object()
-                    .unwrap()
-                    .keys()
-                    .filter_map(|target| c.download_target(&trusted, target, MAX_TARGET).err())
-                    .collect();
-                assert!(!failures.is_empty(), "{name}: every target was accepted");
-                failures.into_iter().next().unwrap()
+                assert_eq!(attack.ours, 4, "{name}: refresh accepted what must fail");
+                // The metadata is fine; of the two indexes the one in the vector is not, the
+                // other is.
+                let mut failures = Vec::new();
+                for target in ["indexes/stable.json", "indexes/beta.json"] {
+                    match c.download_target(&trusted, target, MAX_TARGET, clock) {
+                        Ok(_) => {}
+                        Err(e) => failures.push((target, e)),
+                    }
+                }
+                assert_eq!(failures.len(), 1, "{name}: {failures:?}");
+                let (target, error) = failures.remove(0);
+                assert_eq!(target, "indexes/stable.json", "{name}");
+                error
             }
         };
         assert!(
-            refused_as(&name, &error),
+            (attack.error)(&error),
             "{name}: refused as {error:?}, expected {}",
             vector["error_class"]
         );
-
-        // Nothing past the failing step was asked for.
+        // Exactly the step: the deepest file asked for is the one of that step.
         let deepest = repo.requests().iter().map(|p| rank(p)).max().unwrap();
-        assert!(
-            deepest <= step_rank(step),
-            "{name}: asked for a file of step {deepest} past {step}"
-        );
+        assert_eq!(deepest, attack.ours, "{name}: the deepest step asked for");
     }
 }
 
 #[test]
 fn the_only_vector_python_tuf_accepts_is_the_one_the_contract_refuses() {
-    let name = "wrong-keyid-in-root";
-    let vector = expected(name);
-    assert_eq!(vector["python_tuf"]["diverges_from_contract"], true);
-    assert_eq!(vector["python_tuf"]["verdict"], "ACCEPT");
-    let repo = repository(name);
-    let error = client(&repo, &mut MemoryStore::default())
-        .refresh(now(&vector))
-        .unwrap_err();
-    assert!(matches!(error, TufError::BadKeyId { .. }), "{error:?}");
-    // No other vector diverges.
     for entry in std::fs::read_dir(fixtures()).unwrap() {
         let path = entry.unwrap().path();
         if path.join("expected.json").is_file() {
@@ -232,6 +286,9 @@ fn the_only_vector_python_tuf_accepts_is_the_one_the_contract_refuses() {
             let vector = expected(&name);
             let diverges = vector["python_tuf"]["diverges_from_contract"] == true;
             assert_eq!(diverges, name == "wrong-keyid-in-root", "{name}");
+            if diverges {
+                assert_eq!(vector["python_tuf"]["verdict"], "ACCEPT");
+            }
         }
     }
 }

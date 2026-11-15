@@ -6,6 +6,7 @@ use std::fmt;
 
 use ring::rand::SystemRandom;
 use ring::signature::{ED25519, Ed25519KeyPair, KeyPair, UnparsedPublicKey};
+use zeroize::Zeroizing;
 
 use super::error::{Role, TufError};
 use super::keys::{KeyId, PublicKey};
@@ -86,16 +87,16 @@ pub struct SigningKey {
 
 impl SigningKey {
     /// A new random key and its PKCS#8 encoding (the form [`SigningKey::from_pkcs8`] reads;
-    /// the caller stores it, protected).
+    /// the caller stores it, protected). The copy returned is wiped when dropped.
     ///
     /// # Errors
     ///
     /// [`TufError::Key`] if the system's random generator fails.
-    pub fn generate() -> Result<(SigningKey, Vec<u8>), TufError> {
+    pub fn generate() -> Result<(SigningKey, Zeroizing<Vec<u8>>), TufError> {
         let pkcs8 = Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
             .map_err(|_| TufError::Key("the system random generator failed".to_owned()))?;
         let key = SigningKey::from_pkcs8(pkcs8.as_ref())?;
-        Ok((key, pkcs8.as_ref().to_vec()))
+        Ok((key, Zeroizing::new(pkcs8.as_ref().to_vec())))
     }
 
     /// The key of a PKCS#8 v2 document (with the public key), as [`SigningKey::generate`]

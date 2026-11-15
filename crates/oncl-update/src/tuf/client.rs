@@ -17,9 +17,17 @@
 //! - when a new root changes the keys or threshold of the timestamp, snapshot **or targets**
 //!   role, the stored versions of all three are forgotten (step 5.3.11 names the first two;
 //!   without the third, a targets key rotated after a fast-forward could never recover);
-//! - the root files are saved with that deletion in one atomic write, before the expiry of
-//!   the final root is checked (step 5.3.10), so a root that is too old to use is still
-//!   remembered and the keys it rotated are still forgotten;
+//! - the roots followed are saved with that deletion in one atomic write, before the expiry
+//!   of the final root is checked (step 5.3.10), and also when a root further on is refused:
+//!   a root that is too old to use is still remembered, the keys it rotated are still
+//!   forgotten, and a chain too long for one refresh is followed in several;
+//! - what is saved is the whole chain of roots from the built-in one; a later run checks it
+//!   again from the built-in root, both thresholds at every step, before it trusts any of it
+//!   (a saved root alone, signed by its own keys, would be whatever whoever writes the
+//!   state says). A state that is not a state, or whose chain does not hold, is dropped and
+//!   the run starts from the built-in root ([`Trusted::state_was_reset`]);
+//! - a built-in root newer than the saved state drops the versions saved before it (its keys
+//!   cannot be compared with those of roots it does not chain from);
 //! - there are no delegations: step 5.6.7 is only the top-level targets.
 
 use time::OffsetDateTime;
@@ -32,7 +40,7 @@ use super::model::{
     Digest, Envelope, MetaFile, Root, Snapshot, TARGETS_META, Target, Targets, Timestamp,
     ensure_fresh,
 };
-use super::store::{AcceptedTarget, SnapshotState, Store, TimestampState, TrustState};
+use super::store::{SnapshotState, Store, TimestampState, TrustState};
 
 /// The most each kind of file may be, when its size is not listed by the role above (and the
 /// most a listed size may be).
@@ -72,9 +80,16 @@ pub struct Trusted {
     timestamp: Timestamp,
     snapshot: Snapshot,
     targets: Targets,
+    reset: Option<String>,
 }
 
 impl Trusted {
+    /// Why this refresh started from the built-in root, ignoring the saved state: it was
+    /// not readable, or did not hold up. The caller logs it; the state was replaced.
+    pub fn state_was_reset(&self) -> Option<&str> {
+        self.reset.as_deref()
+    }
+
     /// The root in force.
     pub fn root(&self) -> &Root {
         &self.root
@@ -108,20 +123,28 @@ impl Trusted {
             .min(self.snapshot.expires)
             .min(self.targets.expires)
     }
+
+    /// `Ok` if none of the four files has expired at `now`: metadata that was fresh when it
+    /// was refreshed is not fresh for ever.
+    ///
+    /// # Errors
+    ///
+    /// [`TufError::Expired`] for the first of root, timestamp, snapshot, targets that has.
+    pub fn ensure_fresh(&self, now: OffsetDateTime) -> Result<(), TufError> {
+        ensure_fresh(Role::Root, self.root.expires, now)?;
+        ensure_fresh(Role::Timestamp, self.timestamp.expires, now)?;
+        ensure_fresh(Role::Snapshot, self.snapshot.expires, now)?;
+        ensure_fresh(Role::Targets, self.targets.expires, now)
+    }
 }
 
 /// A TUF repository's client.
 pub struct TufClient<F, S> {
     fetcher: F,
     store: S,
-    anchor: Anchor,
+    /// The root built into the program.
+    anchor: Root,
     limits: Limits,
-}
-
-/// The root built into the program.
-struct Anchor {
-    envelope: Envelope,
-    root: Root,
 }
 
 impl<F: Fetcher, S: Store> TufClient<F, S> {
@@ -145,7 +168,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         Ok(TufClient {
             fetcher,
             store,
-            anchor: Anchor { envelope, root },
+            anchor: root,
             limits,
         })
     }
@@ -193,78 +216,93 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
     /// against it.
     ///
     /// On an error nothing from the failing file onward is trusted; what was accepted
-    /// before it (a newer root, say) stays saved, as the specification says.
+    /// before it stays saved, as the specification says: the roots followed before a root
+    /// that is refused (or before the limit of roots one refresh follows), the timestamp
+    /// before a snapshot that is refused, and so on.
     ///
     /// # Errors
     ///
     /// A [`TufError`] naming the check that failed: a signature below its threshold, a
     /// version that went back or is not the one listed, a hash or length that does not
-    /// match, an expired file, a file that is not there, or a store that cannot be written.
+    /// match, an expired file, a file that is not there, a chain of roots longer than
+    /// [`Limits::max_roots`], or a store that cannot be written.
     pub fn refresh(&mut self, now: OffsetDateTime) -> Result<Trusted, TufError> {
         // 5.1: `now` is the fixed update start time.
-        let mut state = self.store.load()?;
-        let loaded_root = state.root.clone();
-        // 5.2: the trusted root: the built-in one, or the newer one saved by an earlier run.
-        let (mut root_file, mut root) = self.trusted_root(&mut state);
+        let (mut state, mut reset) = match self.store.load() {
+            Ok(state) => (state, None),
+            Err(TufError::Store(e)) if e.kind() == std::io::ErrorKind::InvalidData => (
+                TrustState::default(),
+                Some(format!("the saved state is not readable: {e}")),
+            ),
+            Err(e) => return Err(e),
+        };
+        // 5.2: the trusted root: the built-in one, and the saved chain after it if it holds.
+        let loaded = state.clone();
+        let mut root = match self.replay(&mut state) {
+            Ok(root) => root,
+            Err(why) => {
+                state = TrustState::default();
+                reset.get_or_insert(why);
+                self.anchor.clone()
+            }
+        };
+        if reset.is_some() {
+            state.root_version = root.version;
+            self.store.overwrite(&state)?;
+        }
 
         // 5.3: the root chain.
-        let mut changed = loaded_root.as_ref() != Some(&root_file);
-        let mut rotated = false;
         let mut downloaded = 0u32;
+        let mut chain_error = None;
         // 5.3.2-5.3.3: N is the trusted version; try N+1.
         while let Some(next) = root.version.checked_add(1) {
-            if downloaded >= self.limits.max_roots {
-                break; // 5.3.3: more than Y roots, go to 5.3.10.
-            }
             let path = layout::root_path(next);
-            let Some(body) = self.get(&path, self.limits.root)? else {
-                break; // 5.3.3: not available, go to 5.3.10.
+            let body = match self.get(&path, self.limits.root) {
+                Ok(Some(body)) => body,
+                // 5.3.3: not available, go to 5.3.10.
+                Ok(None) => break,
+                Err(e) => {
+                    chain_error = Some(e);
+                    break;
+                }
             };
-            downloaded += 1;
-            let new_file = Envelope::parse(&body, self.limits.root, &path)?;
-            // 5.3.4: signed by a threshold of the keys of the trusted root (N) ...
-            verify_role(
-                &new_file,
-                &root,
-                Role::Root,
-                &format!("root {next} by the keys of root {}", root.version),
-            )?;
-            let new_root = Root::from_signed(&new_file.signed)?;
-            // ... and by a threshold of the keys of the new root (N+1).
-            verify_role(
-                &new_file,
-                &new_root,
-                Role::Root,
-                &format!("root {next} by its own keys"),
-            )?;
-            // 5.3.5: exactly N+1.
-            if new_root.version != next {
-                return Err(TufError::RootVersion {
-                    expected: next,
-                    found: new_root.version,
-                });
+            if downloaded >= self.limits.max_roots {
+                // 5.3.3: more than Y roots: the chain ends here only if there is no more.
+                chain_error = Some(TufError::RootChainTooLong(self.limits.max_roots));
+                break;
             }
-            // 5.3.6: the expiry of an intermediate root does not matter yet.
-            // 5.3.7: the new root is the trusted root.
-            rotated |= root.rotates(&new_root);
-            root_file = new_file;
-            root = new_root;
-            changed = true;
-            // 5.3.8: persisted below, in one write with 5.3.11.
-            // 5.3.9: repeat.
+            downloaded += 1;
+            match self.follow_root(&root, next, &body, &path) {
+                Ok((file, new_root)) => {
+                    // 5.3.6: the expiry of an intermediate root does not matter yet.
+                    // 5.3.11: if the timestamp, snapshot (or targets) keys were rotated, the
+                    // versions trusted before are forgotten.
+                    if root.rotates(&new_root) {
+                        state.timestamp = None;
+                        state.snapshot = None;
+                        state.targets = None;
+                        state.keys_epoch = new_root.version;
+                    }
+                    // 5.3.7: the new root is the trusted root.
+                    state.roots.push(file);
+                    state.root_version = new_root.version;
+                    root = new_root;
+                    // 5.3.9: repeat.
+                }
+                Err(e) => {
+                    chain_error = Some(e);
+                    break;
+                }
+            }
         }
-
-        // 5.3.11: if the timestamp, snapshot (or targets) keys were rotated, the versions
-        // trusted before are forgotten. It is done, and saved with the root, before the
-        // expiry check below: a root too old to use would otherwise be saved without it.
-        if rotated {
-            state.timestamp = None;
-            state.snapshot = None;
-            state.targets = None;
+        // 5.3.8: persist the roots followed, and what 5.3.11 dropped, in one write, also if
+        // a root further on was refused (and before the expiry check below: a root too old
+        // to use would otherwise be saved without the deletion).
+        if state != loaded {
+            state = self.store.save(&state)?;
         }
-        state.root = Some(root_file);
-        if changed {
-            self.store.save(&state)?;
+        if let Some(e) = chain_error {
+            return Err(e);
         }
         // 5.3.10: a freeze attack, or a repository nobody re-signed.
         ensure_fresh(Role::Root, root.expires, now)?;
@@ -281,36 +319,63 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             timestamp,
             snapshot,
             targets,
+            reset,
         })
     }
 
-    /// 5.2: the root to start from. The saved one if it is newer than the built-in one;
-    /// otherwise the built-in one, and then, if a saved root is there whose timestamp,
-    /// snapshot or targets keys differ, what was saved of those roles is dropped (the
-    /// built-in root is a later root). A saved root that cannot be read, or is not signed by
-    /// its own keys, is dropped with everything saved with it.
-    fn trusted_root(&self, state: &mut TrustState) -> (Envelope, Root) {
-        let saved = state.root.take().and_then(|file| {
-            let root = Root::from_signed(&file.signed).ok()?;
-            verify_role(&file, &root, Role::Root, "the saved root").ok()?;
-            Some((file, root))
-        });
+    /// 5.3.4-5.3.5: the root file `body` as version `next` after `root`, the trusted one.
+    fn follow_root(
+        &self,
+        root: &Root,
+        next: u64,
+        body: &[u8],
+        path: &str,
+    ) -> Result<(Envelope, Root), TufError> {
+        let file = Envelope::parse(body, self.limits.root, path)?;
+        accept_root(root, next, file)
+    }
+
+    /// 5.2: checks the saved chain of roots again from the built-in one, drops the entries
+    /// the built-in root has overtaken, and returns the root in force. `Err` says why the
+    /// state does not hold. If the built-in root is newer than the state, what was saved of
+    /// the timestamp, snapshot and targets goes too.
+    fn replay(&self, state: &mut TrustState) -> Result<Root, String> {
         let anchor = &self.anchor;
-        match saved {
-            Some((file, root)) if root.version > anchor.root.version => (file, root),
-            Some((_, root)) => {
-                if root.rotates(&anchor.root) {
-                    state.timestamp = None;
-                    state.snapshot = None;
-                    state.targets = None;
-                }
-                (anchor.envelope.clone(), anchor.root.clone())
+        let mut trusted = anchor.clone();
+        let mut kept = Vec::new();
+        for (i, file) in state.roots.iter().enumerate() {
+            let root = Root::from_signed(&file.signed)
+                .map_err(|e| format!("saved root #{} is not a root: {e}", i + 1))?;
+            if root.version <= anchor.version {
+                continue; // The built-in root has overtaken it.
             }
-            None => {
-                *state = TrustState::default();
-                (anchor.envelope.clone(), anchor.root.clone())
-            }
+            let (file, root) =
+                accept_root(&trusted, trusted.version + 1, file.clone()).map_err(|e| {
+                    format!(
+                        "saved root {} does not follow the built-in root: {e}",
+                        root.version
+                    )
+                })?;
+            kept.push(file);
+            trusted = root;
         }
+        if state.root_version > trusted.version {
+            return Err(format!(
+                "the saved state is of root {}, its chain ends at {}",
+                state.root_version, trusted.version
+            ));
+        }
+        if state.root_version != 0 && state.root_version < anchor.version {
+            // A built-in root newer than anything saved: the keys of the roles in between
+            // are not known, so the versions saved under them are not kept.
+            state.timestamp = None;
+            state.snapshot = None;
+            state.targets = None;
+            state.keys_epoch = anchor.version;
+        }
+        state.roots = kept;
+        state.root_version = trusted.version;
+        Ok(trusted)
     }
 
     fn update_timestamp(
@@ -356,7 +421,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             version: timestamp.version,
             snapshot: timestamp.snapshot.clone(),
         });
-        self.store.save(state)?;
+        *state = self.store.save(state)?;
         Ok(timestamp)
     }
 
@@ -423,7 +488,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                 .map(|(name, meta)| (name.clone(), meta.version))
                 .collect(),
         });
-        self.store.save(state)?;
+        *state = self.store.save(state)?;
         Ok(snapshot)
     }
 
@@ -472,7 +537,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         ensure_fresh(Role::Targets, targets.expires, now)?;
         // 5.6.6: persist.
         state.targets = Some(targets.version);
-        self.store.save(state)?;
+        *state = self.store.save(state)?;
         // 5.6.7: the search for a target is in the top-level targets only: delegations are
         // refused when the targets are read.
         Ok(targets)
@@ -481,22 +546,22 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
     /// 5.7: the target `path` of `trusted`, as the repository has it: downloaded from its
     /// hash name, and handed over only if it is exactly the length and sha256 the targets
     /// metadata lists. `max_len` is the most the caller takes; a target the metadata lists
-    /// as larger is refused without a request.
-    ///
-    /// The target is recorded as accepted ([`TrustState::accepted`]) in the store.
+    /// as larger is refused without a request. `now` is the time of this call: `trusted` is
+    /// not used once any of its files has expired.
     ///
     /// # Errors
     ///
-    /// [`TufError::NoSuchTarget`] (5.7.2), [`TufError::TargetTooLarge`],
+    /// [`TufError::Expired`], [`TufError::NoSuchTarget`] (5.7.2), [`TufError::TargetTooLarge`],
     /// [`TufError::NotFound`] if the file is not there, [`TufError::Fetch`] if it is longer
-    /// than listed, [`TufError::Length`] or [`TufError::Hash`] if it does not match, or the
-    /// store's error.
+    /// than listed, [`TufError::Length`] or [`TufError::Hash`] if it does not match.
     pub fn download_target(
-        &mut self,
+        &self,
         trusted: &Trusted,
         path: &str,
         max_len: u64,
+        now: OffsetDateTime,
     ) -> Result<Vec<u8>, TufError> {
+        trusted.ensure_fresh(now)?;
         // 5.7.1-5.7.2: the metadata of the target.
         let target = trusted
             .target(path)
@@ -525,16 +590,6 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                 what: path.to_owned(),
             });
         }
-        let mut state = self.store.load()?;
-        state.accepted.insert(
-            path.to_owned(),
-            AcceptedTarget {
-                sha256: target.sha256,
-                length: target.length,
-                targets_version: trusted.targets.version,
-            },
-        );
-        self.store.save(&state)?;
         Ok(body)
     }
 
@@ -595,4 +650,32 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         }
         Ok(body)
     }
+}
+
+/// 5.3.4-5.3.5: `file` as root version `next` after `trusted`: signed by a threshold of the
+/// keys of the trusted root and by a threshold of its own, and exactly that version.
+fn accept_root(trusted: &Root, next: u64, file: Envelope) -> Result<(Envelope, Root), TufError> {
+    // 5.3.4: signed by a threshold of the keys of the trusted root (N) ...
+    verify_role(
+        &file,
+        trusted,
+        Role::Root,
+        &format!("root {next} by the keys of root {}", trusted.version),
+    )?;
+    let new_root = Root::from_signed(&file.signed)?;
+    // ... and by a threshold of the keys of the new root (N+1).
+    verify_role(
+        &file,
+        &new_root,
+        Role::Root,
+        &format!("root {next} by its own keys"),
+    )?;
+    // 5.3.5: exactly N+1.
+    if new_root.version != next {
+        return Err(TufError::RootVersion {
+            expected: next,
+            found: new_root.version,
+        });
+    }
+    Ok((file, new_root))
 }

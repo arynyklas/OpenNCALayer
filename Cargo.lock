@@ -4661,6 +4661,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "time",
+ "zeroize",
  "zip",
 ]
 

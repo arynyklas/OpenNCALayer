@@ -11,7 +11,7 @@
 //!
 //! - `spec_version` is `1.x`; `_type` is the role's name; `version` is at least 1;
 //!   `expires` is `YYYY-MM-DDTHH:MM:SSZ`;
-//! - keys are Ed25519 ([`super::keys`]); a key's id is recomputed;
+//! - keys are Ed25519 ([`super::keys`]); a key's id is recomputed; no key serves two roles;
 //! - `consistent_snapshot` is `true`;
 //! - hashes are sha256 only;
 //! - targets have no `delegations` (not even an empty one); a target path is made of
@@ -255,7 +255,7 @@ impl Root {
                 threshold: threshold as u32,
             })
         };
-        Ok(Root {
+        let root = Root {
             version: header.version,
             expires: header.expires,
             root: role(Role::Root)?,
@@ -263,7 +263,21 @@ impl Root {
             snapshot: role(Role::Snapshot)?,
             targets: role(Role::Targets)?,
             keys,
-        })
+        };
+        // No key serves two roles: the timestamp key is the one that is online, and it
+        // must give no right to sign targets, snapshots or roots.
+        let mut served_by = BTreeMap::new();
+        for role in [Role::Root, Role::Timestamp, Role::Snapshot, Role::Targets] {
+            for id in &root.role(role).keyids {
+                if let Some(other) = served_by.insert(id, role) {
+                    return Err(TufError::malformed(
+                        "roles",
+                        format!("the key {id} serves both the {other} and the {role} role"),
+                    ));
+                }
+            }
+        }
+        Ok(root)
     }
 
     /// The keys and threshold of `role`.
@@ -625,21 +639,23 @@ mod tests {
         (key.key_id().to_hex(), key.to_value())
     }
 
+    /// Keys 1 to 6 are in the root; 1 signs roots, 2 the timestamp, 3 and 4 (both needed)
+    /// the snapshot, 5 the targets; 6 serves no role.
     fn root_value() -> Value {
-        let (a, ka) = key(1);
-        let (b, kb) = key(2);
+        let keys: Vec<(String, Value)> = (1..=6).map(key).collect();
+        let id = |n: usize| keys[n - 1].0.clone();
         json!({
             "_type": "root",
             "spec_version": "1.0.31",
             "consistent_snapshot": true,
             "version": 3,
             "expires": "2027-11-15T00:00:00Z",
-            "keys": {a.clone(): ka, b.clone(): kb},
+            "keys": keys.iter().cloned().collect::<serde_json::Map<_, _>>(),
             "roles": {
-                "root": {"keyids": [a.clone()], "threshold": 1},
-                "timestamp": {"keyids": [b.clone()], "threshold": 1},
-                "snapshot": {"keyids": [a.clone(), b.clone()], "threshold": 2},
-                "targets": {"keyids": [b], "threshold": 1},
+                "root": {"keyids": [id(1)], "threshold": 1},
+                "timestamp": {"keyids": [id(2)], "threshold": 1},
+                "snapshot": {"keyids": [id(3), id(4)], "threshold": 2},
+                "targets": {"keyids": [id(5)], "threshold": 1},
             },
         })
     }
@@ -654,7 +670,7 @@ mod tests {
         let root = Root::from_signed(&root_value()).unwrap();
         assert_eq!(root.version, 3);
         assert_eq!(root.expires, datetime!(2027-11-15 0:00 UTC));
-        assert_eq!(root.keys.len(), 2);
+        assert_eq!(root.keys.len(), 6);
         assert_eq!(root.snapshot.threshold, 2);
         assert_eq!(root.snapshot.keyids.len(), 2);
         assert!(root.root.same_as(&root.root));
@@ -670,7 +686,7 @@ mod tests {
     #[test]
     fn a_root_that_breaks_a_rule_is_refused() {
         let (a, _) = key(1);
-        let (c, kc) = key(3);
+        let (c, kc) = key(9);
         type Edit = Box<dyn Fn(&mut Value)>;
         let unsupported: Vec<(&str, Edit)> = vec![
             ("spec 2", Box::new(|v| v["spec_version"] = json!("2.0.0"))),
@@ -816,7 +832,7 @@ mod tests {
     #[test]
     fn a_key_listed_under_another_id_is_refused() {
         let (a, _) = key(1);
-        let (c, kc) = key(3);
+        let (c, kc) = key(9);
         // The key of `a` under the id of another key.
         let v = edited(root_value(), |v| {
             let keys = v["keys"].as_object_mut().unwrap();
@@ -836,16 +852,15 @@ mod tests {
     fn rotation_is_a_change_of_the_keys_or_threshold_of_the_lower_roles() {
         let root = Root::from_signed(&root_value()).unwrap();
         assert!(!root.rotates(&root));
-        let (a, _) = key(1);
-        let (b, _) = key(2);
+        let id = |n: u8| key(n).0;
         // A new root version that only changes the root role's keys is not a rotation.
         let v = edited(root_value(), |v| {
-            v["roles"]["root"]["keyids"] = json!([a.clone(), b.clone()])
+            v["roles"]["root"]["keyids"] = json!([id(1), id(6)])
         });
         assert!(!root.rotates(&Root::from_signed(&v).unwrap()));
         // The order of keyids is not a rotation, another threshold is.
         let v = edited(root_value(), |v| {
-            v["roles"]["snapshot"]["keyids"] = json!([b.clone(), a.clone()])
+            v["roles"]["snapshot"]["keyids"] = json!([id(4), id(3)])
         });
         assert!(!root.rotates(&Root::from_signed(&v).unwrap()));
         let v = edited(root_value(), |v| {
@@ -853,13 +868,78 @@ mod tests {
         });
         assert!(root.rotates(&Root::from_signed(&v).unwrap()));
         let v = edited(root_value(), |v| {
-            v["roles"]["timestamp"]["keyids"] = json!([a.clone()])
+            v["roles"]["timestamp"]["keyids"] = json!([id(6)])
         });
         assert!(root.rotates(&Root::from_signed(&v).unwrap()));
         let v = edited(root_value(), |v| {
-            v["roles"]["targets"]["keyids"] = json!([a])
+            v["roles"]["targets"]["keyids"] = json!([id(6)])
         });
         assert!(root.rotates(&Root::from_signed(&v).unwrap()));
+    }
+
+    #[test]
+    fn a_key_may_serve_only_one_role() {
+        let id = |n: u8| key(n).0;
+        // Every pair of roles, in both directions: the key of one listed in the other.
+        let roles = ["root", "timestamp", "snapshot", "targets"];
+        for (i, from) in roles.iter().enumerate() {
+            for (j, to) in roles.iter().enumerate() {
+                if i == j {
+                    continue;
+                }
+                let borrowed = root_value()["roles"][from]["keyids"][0].clone();
+                let mut v = root_value();
+                // `to` lists the key of `from` as its only key (threshold 1).
+                v["roles"][to] = json!({"keyids": [borrowed], "threshold": 1});
+                let e = Root::from_signed(&v).unwrap_err();
+                assert!(
+                    matches!(&e, TufError::Malformed { why, .. } if why.contains("serves both")),
+                    "{from} -> {to}: {e:?}"
+                );
+            }
+        }
+        // The same key twice in one role is its own error.
+        let v = edited(root_value(), |v| {
+            v["roles"]["snapshot"]["keyids"] = json!([id(3), id(3)])
+        });
+        assert!(matches!(
+            Root::from_signed(&v),
+            Err(TufError::Malformed { why, .. }) if why.contains("twice")
+        ));
+    }
+
+    #[test]
+    fn the_typed_views_read_only_their_own_role() {
+        // A signed snapshot offered as a timestamp (and every other pair) is not one.
+        let signed = |kind: &str| {
+            json!({"_type": kind, "spec_version": "1.0.31", "version": 1,
+                "expires": "2027-11-15T00:00:00Z",
+                "meta": {"snapshot.json": {"version": 1}, "targets.json": {"version": 1}},
+                "targets": {}, "keys": {}, "roles": {}, "consistent_snapshot": true})
+        };
+        type View = fn(&Value) -> Result<(), TufError>;
+        let views: [(&str, View); 4] = [
+            ("root", |v| Root::from_signed(v).map(drop)),
+            ("timestamp", |v| Timestamp::from_signed(v).map(drop)),
+            ("snapshot", |v| Snapshot::from_signed(v).map(drop)),
+            ("targets", |v| Targets::from_signed(v).map(drop)),
+        ];
+        for (offered, _) in views {
+            for (read_as, read) in views {
+                if offered == read_as {
+                    continue;
+                }
+                let e = read(&signed(offered)).unwrap_err();
+                assert!(
+                    matches!(&e, TufError::Malformed { why, .. } if why.contains("_type")),
+                    "{offered} read as {read_as}: {e:?}"
+                );
+            }
+        }
+        // (A timestamp, snapshot or targets that is right passes its own view.)
+        Timestamp::from_signed(&signed("timestamp")).unwrap();
+        Snapshot::from_signed(&signed("snapshot")).unwrap();
+        Targets::from_signed(&signed("targets")).unwrap();
     }
 
     fn hash(n: u8) -> String {

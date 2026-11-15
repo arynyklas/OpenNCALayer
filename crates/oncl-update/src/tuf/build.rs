@@ -23,6 +23,7 @@
 use serde_json::{Map, Value, json};
 use time::OffsetDateTime;
 
+use super::client::Limits;
 use super::ed25519::SigningKey;
 use super::error::{Role, TufError};
 use super::keys::PublicKey;
@@ -59,7 +60,7 @@ pub struct RootDef {
 
 /// The `signed` of a root: `version` (1 for the first, then the one before plus one),
 /// expiring at `expires` (whole seconds, UTC), with the keys of `def`. No key may serve two
-/// roles.
+/// roles (the client refuses a root where one does).
 ///
 /// # Errors
 ///
@@ -73,18 +74,11 @@ pub fn root(version: u64, expires: OffsetDateTime, def: &RootDef) -> Result<Valu
         (Role::Targets, &def.targets),
     ];
     let mut keys = Map::new();
-    let mut role_of_key = std::collections::BTreeMap::new();
     let mut role_members = Map::new();
     for (role, role_def) in roles {
         let mut keyids = Vec::new();
         for key in &role_def.keys {
             let id = key.key_id();
-            if let Some(other) = role_of_key.insert(id, role) {
-                return Err(TufError::malformed(
-                    "root",
-                    format!("the key {id} serves both the {other} and the {role} role"),
-                ));
-            }
             keys.insert(id.to_hex(), key.to_value());
             keyids.push(Value::String(id.to_hex()));
         }
@@ -198,14 +192,17 @@ pub fn timestamp(
     Ok(signed)
 }
 
-/// The file made of `signed` and its signatures by `keys` (each key once).
+/// The file made of `signed` and its signatures by `keys` (each key once). A root,
+/// timestamp, snapshot or targets file larger than the client's default limit for it
+/// ([`Limits::default`]) is refused: the client would never read it.
 ///
 /// `signed` may be any JSON that has a canonical form, also with members this client does not
 /// read: they are signed as they are.
 ///
 /// # Errors
 ///
-/// [`TufError::Float`] or [`TufError::TooDeep`] if `signed` has no canonical form.
+/// [`TufError::Float`] or [`TufError::TooDeep`] if `signed` has no canonical form;
+/// [`TufError::TooLarge`] for a file over the client's limit.
 pub fn sign(signed: &Value, keys: &[&SigningKey]) -> Result<Vec<u8>, TufError> {
     let envelope = Envelope {
         signed: signed.clone(),
@@ -220,7 +217,7 @@ pub fn sign(signed: &Value, keys: &[&SigningKey]) -> Result<Vec<u8>, TufError> {
 ///
 /// # Errors
 ///
-/// The errors of [`Envelope::parse`].
+/// The errors of [`Envelope::parse`]; [`TufError::TooLarge`] as for [`sign`].
 pub fn add_signatures(file: &[u8], keys: &[&SigningKey]) -> Result<Vec<u8>, TufError> {
     let envelope = Envelope::parse(file, MAX_FILE_LEN, "the file to sign")?;
     sign_envelope(envelope, keys)
@@ -233,7 +230,23 @@ fn sign_envelope(mut envelope: Envelope, keys: &[&SigningKey]) -> Result<Vec<u8>
         envelope.signatures.retain(|s| s.keyid != signature.keyid);
         envelope.signatures.push(signature);
     }
-    envelope.to_file()
+    let file = envelope.to_file()?;
+    let limits = Limits::default();
+    let kind = envelope.signed.get("_type").and_then(Value::as_str);
+    let limit = match kind {
+        Some("root") => limits.root,
+        Some("timestamp") => limits.timestamp,
+        Some("snapshot") => limits.snapshot,
+        Some("targets") => limits.targets,
+        _ => return Ok(file),
+    };
+    if file.len() as u64 > limit {
+        return Err(TufError::TooLarge {
+            what: format!("the {} file", kind.unwrap_or_default()),
+            limit,
+        });
+    }
+    Ok(file)
 }
 
 /// The files of the repository as the consistent snapshot layout stores them: for each

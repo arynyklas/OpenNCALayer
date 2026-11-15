@@ -9,7 +9,6 @@ use time::{Duration, OffsetDateTime};
 use super::build::{self, RoleDef, RootDef};
 use super::layout;
 use super::model::{Digest, Envelope};
-use super::store::{SnapshotState, TimestampState};
 use super::*;
 
 const T0: OffsetDateTime = datetime!(2026-11-15 12:00 UTC);
@@ -248,11 +247,11 @@ fn refresh_from_scratch_trusts_the_index_and_downloads_it() {
     );
 
     let stable = c
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap();
     assert_eq!(stable, STABLE);
     assert_eq!(
-        c.download_target(&trusted, "indexes/beta.json", BIG)
+        c.download_target(&trusted, "indexes/beta.json", BIG, T0)
             .unwrap(),
         BETA
     );
@@ -273,14 +272,6 @@ fn refresh_from_scratch_trusts_the_index_and_downloads_it() {
     assert_eq!(state.timestamp.as_ref().unwrap().version, 1000);
     assert_eq!(state.snapshot.as_ref().unwrap().version, 1);
     assert_eq!(state.targets, Some(1));
-    assert_eq!(
-        state.accepted["indexes/stable.json"].length,
-        STABLE.len() as u64
-    );
-    assert_eq!(
-        state.accepted["indexes/stable.json"].sha256,
-        Digest::of(STABLE)
-    );
 }
 
 #[test]
@@ -396,7 +387,7 @@ fn the_root_chain_is_followed_through_rotations() {
     let trusted = refresh(&anchor, &repo, &mut store).unwrap();
     assert_eq!(trusted.root().version, 3);
     assert_eq!(trusted.root().root.keyids, [k3.root.key_id()]);
-    let state_root = Root::from_signed(&store.state.root.as_ref().unwrap().signed).unwrap();
+    let state_root = Root::from_signed(&store.state.roots.last().unwrap().signed).unwrap();
     assert_eq!(state_root.version, 3, "the chain was saved");
 
     // The next run starts from root 3, not from the built-in root 1.
@@ -470,7 +461,7 @@ fn a_root_that_does_not_rotate_those_keys_keeps_their_versions() {
     assert!(matches!(e, TufError::Rollback { .. }), "{e:?}");
     assert_eq!(store.state.timestamp.as_ref().unwrap().version, 9000);
     assert_eq!(
-        Root::from_signed(&store.state.root.as_ref().unwrap().signed)
+        Root::from_signed(&store.state.roots.last().unwrap().signed)
             .unwrap()
             .version,
         2,
@@ -516,7 +507,11 @@ fn a_new_root_signed_only_by_the_old_keys_is_refused() {
         signature_error(refresh(&anchor, &repo, &mut store).unwrap_err());
     assert!(what.contains("its own keys"), "{what}");
     assert_eq!((valid, threshold), (0, 1));
-    assert_eq!(store.saves, 0, "nothing was kept");
+    assert!(
+        store.state.roots.is_empty(),
+        "the refused root was not kept"
+    );
+    assert_eq!(store.state.root_version, 1);
 }
 
 #[test]
@@ -532,7 +527,11 @@ fn a_new_root_signed_only_by_the_new_keys_is_refused() {
         signature_error(refresh(&anchor, &repo, &mut store).unwrap_err());
     assert!(what.contains("keys of root 1"), "{what}");
     assert_eq!((valid, threshold), (0, 1));
-    assert_eq!(store.saves, 0);
+    assert!(
+        store.state.roots.is_empty(),
+        "the refused root was not kept"
+    );
+    assert_eq!(store.state.root_version, 1);
 }
 
 #[test]
@@ -662,7 +661,7 @@ fn an_expired_intermediate_root_is_accepted_and_an_expired_final_root_is_not() {
     // Nothing past the root was fetched, and the root that was followed is remembered.
     assert!(!repo.requests().iter().any(|p| p == layout::TIMESTAMP_PATH));
     assert_eq!(
-        Root::from_signed(&fresh.state.root.as_ref().unwrap().signed)
+        Root::from_signed(&fresh.state.roots.last().unwrap().signed)
             .unwrap()
             .version,
         2
@@ -684,30 +683,45 @@ fn an_expired_intermediate_root_is_accepted_and_an_expired_final_root_is_not() {
 }
 
 #[test]
-fn only_so_many_roots_are_followed_in_one_refresh() {
-    let keys_: Vec<Keys> = (0..5).map(|i| keys(1 + 10 * i)).collect();
-    let (repo, anchor) = standard(&keys_[0]);
+fn a_chain_of_roots_longer_than_the_limit_is_followed_over_several_refreshes() {
+    // The same keys in every root: only the limit can stop the chain (a root that changed the
+    // keys would stop it at the timestamp all the same).
+    let k = keys(1);
+    let (repo, anchor) = standard(&k);
     for v in 2..=5u64 {
-        rotate(&repo, v, &keys_[v as usize - 2], &keys_[v as usize - 1]);
+        repo.put(
+            layout::root_path(v),
+            root_file(v, T0 + days(365), &def(&k), &[&k.root]),
+        );
     }
-    publish(&repo, &keys_[4], &release());
-    let limits = Limits {
-        max_roots: 2,
+    let limits = |max_roots| Limits {
+        max_roots,
         ..Limits::default()
     };
-    let mut store = MemoryStore::default();
-    let mut c = TufClient::new(&anchor, &repo, &mut store, limits).unwrap();
-    // Two roots per refresh, and the publication is by the last keys: the first refresh
-    // stops at root 3 and cannot verify the timestamp, the second reaches root 5.
-    assert!(c.refresh(T0).is_err());
-    assert_eq!(c.refresh(T0).unwrap().root().version, 5);
-    assert_eq!(
+    let roots_asked = |repo: &MemoryFetcher| {
         repo.requests()
             .iter()
             .filter(|p| p.ends_with(".root.json"))
-            .count(),
-        4
-    );
+            .count()
+    };
+
+    let mut store = MemoryStore::default();
+    let mut c = TufClient::new(&anchor, &repo, &mut store, limits(2)).unwrap();
+    // Roots 2 and 3 are followed; root 4 is there: an error, not a silent stop on root 3.
+    let e = c.refresh(T0).unwrap_err();
+    assert!(matches!(e, TufError::RootChainTooLong(2)), "{e:?}");
+    assert_eq!(roots_asked(&repo), 3, "2, 3, and a look at 4");
+    assert_eq!(store.state.root_version, 3, "the roots followed are kept");
+    // The next refresh goes on from root 3: 4 and 5, then the 404 of 6 ends the chain.
+    repo.clear_requests();
+    let mut c = TufClient::new(&anchor, &repo, &mut store, limits(2)).unwrap();
+    assert_eq!(c.refresh(T0).unwrap().root().version, 5);
+    assert_eq!(roots_asked(&repo), 3, "4, 5, and the 404 of 6");
+
+    // A chain exactly as long as the limit is fine.
+    let mut fresh = MemoryStore::default();
+    let mut c = TufClient::new(&anchor, &repo, &mut fresh, limits(4)).unwrap();
+    assert_eq!(c.refresh(T0).unwrap().root().version, 5);
 }
 
 #[test]
@@ -1271,20 +1285,18 @@ fn a_target_of_another_hash_or_length_is_refused() {
     same_len[3] ^= 1;
     repo.put(path.clone(), same_len);
     let e = c
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(matches!(e, TufError::Hash { .. }), "{e:?}");
     // A byte fewer.
     repo.put(path.clone(), STABLE[1..].to_vec());
     let e = c
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(
         matches!(e, TufError::Length { expected, actual, .. } if expected == STABLE.len() as u64 && actual == expected - 1),
         "{e:?}"
     );
-    // Nothing was accepted by any of those.
-    assert!(c.store().state.accepted.is_empty());
 }
 
 #[test]
@@ -1299,7 +1311,7 @@ fn a_target_of_exactly_its_length_is_read_and_one_byte_more_is_refused() {
     );
 
     // Exactly the listed length: the fetcher was asked for that many and gave them all.
-    let exact = c.download_target(&trusted, "indexes/stable.json", STABLE.len() as u64);
+    let exact = c.download_target(&trusted, "indexes/stable.json", STABLE.len() as u64, T0);
     assert_eq!(exact.unwrap(), STABLE);
 
     let mut longer = STABLE.to_vec();
@@ -1307,7 +1319,7 @@ fn a_target_of_exactly_its_length_is_read_and_one_byte_more_is_refused() {
     repo.put(path.clone(), longer.clone());
     // A fetcher that honours its limit refuses the extra byte ...
     let e = c
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(matches!(e, TufError::Fetch(_)), "{e:?}");
     // ... and the client does not rely on that.
@@ -1320,7 +1332,7 @@ fn a_target_of_exactly_its_length_is_read_and_one_byte_more_is_refused() {
     .unwrap();
     let trusted = lying.refresh(T0).unwrap();
     let e = lying
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(
         matches!(e, TufError::TooLarge { limit, .. } if limit == STABLE.len() as u64),
@@ -1337,18 +1349,18 @@ fn only_listed_targets_within_the_callers_limit_are_downloaded() {
     let trusted = c.refresh(T0).unwrap();
     repo.clear_requests();
     let e = c
-        .download_target(&trusted, "indexes/nightly.json", BIG)
+        .download_target(&trusted, "indexes/nightly.json", BIG, T0)
         .unwrap_err();
     assert!(
         matches!(&e, TufError::NoSuchTarget(p) if p == "indexes/nightly.json"),
         "{e:?}"
     );
     let e = c
-        .download_target(&trusted, "../indexes/stable.json", BIG)
+        .download_target(&trusted, "../indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(matches!(e, TufError::NoSuchTarget(_)), "{e:?}");
     let e = c
-        .download_target(&trusted, "indexes/stable.json", STABLE.len() as u64 - 1)
+        .download_target(&trusted, "indexes/stable.json", STABLE.len() as u64 - 1, T0)
         .unwrap_err();
     assert!(matches!(e, TufError::TargetTooLarge { .. }), "{e:?}");
     assert!(repo.requests().is_empty(), "no request for any of those");
@@ -1360,7 +1372,7 @@ fn only_listed_targets_within_the_callers_limit_are_downloaded() {
     );
     repo.remove(&path);
     let e = c
-        .download_target(&trusted, "indexes/stable.json", BIG)
+        .download_target(&trusted, "indexes/stable.json", BIG, T0)
         .unwrap_err();
     assert!(matches!(&e, TufError::NotFound(p) if *p == path), "{e:?}");
 }
@@ -1389,51 +1401,399 @@ fn the_state_in_a_directory_keeps_rollback_protection_between_runs() {
     run(FileStore::in_data_dir(tempfile::tempdir().unwrap().path())).unwrap();
 }
 
+// --- the saved state ---
+
+use super::store::{FileStore as Files, STATE_FILE, TrustState};
+
+fn envelope(file: &[u8]) -> Envelope {
+    Envelope::parse(file, 1 << 20, "root").unwrap()
+}
+
 #[test]
-fn a_newer_built_in_root_replaces_the_saved_one_and_drops_versions_it_rotates() {
+fn a_newer_built_in_root_overtakes_the_saved_chain_and_drops_versions_it_rotates() {
     let (k1, k2) = (keys(1), keys(11));
     let (repo, anchor1) = standard(&k1);
     let mut high = release();
     high.timestamp_version = 9000;
     publish(&repo, &k1, &high);
+    // Run 1: the built-in root is 1, the repository has an (unrotating) root 2.
+    let mut same = def(&k1);
+    same.root = role(&k2.root);
+    let v2 = root_file(2, T0 + days(365), &same, &[&k1.root, &k2.root]);
+    repo.put(layout::root_path(2), v2.clone());
     let mut store = MemoryStore::default();
     refresh(&anchor1, &repo, &mut store).unwrap();
+    assert_eq!((store.state.root_version, store.state.roots.len()), (2, 1));
     assert_eq!(store.state.timestamp.as_ref().unwrap().version, 9000);
 
-    // The program is updated and now carries root 2, which rotates the timestamp key.
-    let mut v2 = def(&k1);
-    v2.timestamp = role(&k2.timestamp);
-    let anchor2 = root_file(2, T0 + days(365), &v2, &[&k1.root]);
+    // The program is updated: it carries root 2 (which rotates nothing): the chain it
+    // overtakes is dropped, the versions stay.
+    let trusted = refresh(&v2, &repo, &mut store).unwrap();
+    assert_eq!(trusted.state_was_reset(), None);
+    assert_eq!(store.state.root_version, 2);
+    assert_eq!(store.state.timestamp.as_ref().unwrap().version, 9000);
+
+    // A program with root 3, which rotates the timestamp key, forgets the versions saved
+    // under the old one: the repository's low timestamp, signed by the new key, is taken.
+    let mut rotated = same.clone();
+    rotated.timestamp = role(&k2.timestamp);
+    let v3 = root_file(3, T0 + days(365), &rotated, &[&k2.root]);
     let mut s = signers(&k1);
     s.timestamp = vec![&k2.timestamp];
     publish_with(&repo, &release(), &s);
-    let trusted = refresh(&anchor2, &repo, &mut store).unwrap();
-    assert_eq!(trusted.root().version, 2);
+    let trusted = refresh(&v3, &repo, &mut store).unwrap();
+    assert_eq!(trusted.root().version, 3);
     assert_eq!(trusted.timestamp().version, 1000);
+    assert_eq!(store.state.keys_epoch, 3);
+}
 
-    // A saved root newer than the built-in one wins: root 1 again does not undo root 2.
+#[test]
+fn a_saved_root_is_trusted_only_as_part_of_a_chain_that_starts_at_the_built_in_root() {
+    let (k1, evil) = (keys(1), keys(41));
+    let (repo, anchor) = standard(&k1);
+    // Whoever writes the state file writes a root 2 of its own keys, signed by itself only.
+    let forged = root_file(2, T0 + days(365), &def(&evil), &[&evil.root]);
+    let forged_state = TrustState {
+        root_version: 2,
+        roots: vec![envelope(&forged)],
+        ..TrustState::default()
+    };
+
+    // A repository of the attacker's keys is not accepted on the strength of it ...
+    let hostile = MemoryFetcher::new();
+    hostile.put(
+        layout::root_path(1),
+        repo.get(&layout::root_path(1)).unwrap(),
+    );
+    publish(&hostile, &evil, &release());
+    let mut store = MemoryStore {
+        state: forged_state.clone(),
+        saves: 0,
+    };
+    let e = refresh(&anchor, &hostile, &mut store).unwrap_err();
+    assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+
+    // ... and the honest repository is: the forged root is dropped, said so, and replaced.
+    let mut store = MemoryStore {
+        state: forged_state,
+        saves: 0,
+    };
+    let trusted = refresh(&anchor, &repo, &mut store).unwrap();
+    assert_eq!(trusted.root().version, 1);
+    let why = trusted.state_was_reset().unwrap();
+    assert!(why.contains("saved root 2 does not follow"), "{why}");
+    assert!(store.state.roots.is_empty(), "the forged root is not kept");
+    assert_eq!(
+        refresh(&anchor, &repo, &mut store)
+            .unwrap()
+            .state_was_reset(),
+        None
+    );
+}
+
+#[test]
+fn a_saved_chain_is_checked_again_from_the_built_in_root() {
+    let (k1, k2, k3) = (keys(1), keys(11), keys(21));
+    let (repo, anchor) = standard(&k1);
+    rotate(&repo, 2, &k1, &k2);
+    rotate(&repo, 3, &k2, &k3);
+    publish(&repo, &k3, &release());
     let mut store = MemoryStore::default();
-    store.state.root = Some(Envelope::parse(&anchor2, 10_000, "root").unwrap());
-    let trusted = refresh(&anchor1, &repo, &mut store).unwrap();
-    assert_eq!(trusted.root().version, 2);
-    // A saved root that is not valid is dropped, with what was saved beside it.
-    publish(&repo, &k1, &release());
-    let mut store = MemoryStore::default();
-    let mut broken = Envelope::parse(&anchor2, 10_000, "root").unwrap();
-    broken.signatures.clear();
-    store.state.root = Some(broken);
-    store.state.timestamp = Some(TimestampState {
-        version: 99_999,
-        snapshot: model::MetaFile {
-            version: 1,
-            length: None,
-            sha256: None,
-        },
-    });
-    store.state.snapshot = Some(SnapshotState {
-        version: 1,
-        meta: Default::default(),
-    });
-    let trusted = refresh(&anchor1, &repo, &mut store).unwrap();
-    assert_eq!(trusted.timestamp().version, 1000);
+    assert_eq!(
+        refresh(&anchor, &repo, &mut store).unwrap().root().version,
+        3
+    );
+    assert_eq!(store.state.roots.len(), 2);
+    // The honest chain is used as it is: nothing is asked for until root 4.
+    repo.clear_requests();
+    let trusted = refresh(&anchor, &repo, &mut store).unwrap();
+    assert_eq!(trusted.state_was_reset(), None);
+    assert_eq!(repo.requests()[0], "metadata/4.root.json");
+
+    // The chain with a link replaced by a root of other keys, signed by those: it does not
+    // pass from root 1 and from root 2 on, and the state is dropped.
+    let evil = keys(41);
+    let mut broken = store.state.clone();
+    broken.roots[1] = envelope(&root_file(3, T0 + days(365), &def(&evil), &[&evil.root]));
+    let mut store = MemoryStore {
+        state: broken,
+        saves: 0,
+    };
+    let trusted = refresh(&anchor, &repo, &mut store).unwrap();
+    assert!(trusted.state_was_reset().unwrap().contains("saved root 3"));
+    assert_eq!(
+        trusted.root().version,
+        3,
+        "the repository's chain was followed again"
+    );
+}
+
+#[test]
+fn a_state_that_does_not_hold_is_dropped_for_every_reason_and_rewritten() {
+    let (k1, k2) = (keys(1), keys(11));
+    let (repo, anchor) = standard(&k1);
+    rotate(&repo, 2, &k1, &k2);
+    let mut s = signers(&k2);
+    s.targets = vec![&k2.targets];
+    publish(&repo, &k2, &release());
+    let dir = tempfile::tempdir().unwrap();
+    let run = || {
+        TufClient::new(&anchor, &repo, Files::new(dir.path()), Limits::default())
+            .unwrap()
+            .refresh(T0)
+    };
+    let good = run().unwrap();
+    assert_eq!((good.state_was_reset(), good.root().version), (None, 2));
+    let path = dir.path().join(STATE_FILE);
+    let text = std::fs::read_to_string(&path).unwrap();
+    let valid = Files::new(dir.path()).load().unwrap();
+
+    let evil = keys(41);
+    let forged = envelope(&root_file(2, T0 + days(365), &def(&evil), &[&evil.root]));
+    let not_a_root = Envelope {
+        signed: json!({"_type": "targets"}),
+        signatures: vec![],
+    };
+    let v3 = envelope(&rotate(&repo, 3, &k2, &keys(21)));
+    repo.remove(&layout::root_path(3));
+    let structured = |f: &dyn Fn(&mut TrustState)| {
+        let mut state = valid.clone();
+        f(&mut state);
+        serde_json::to_vec_pretty(&{
+            let mut v = serde_json::to_value(&state).unwrap();
+            v["schema"] = json!(1);
+            v
+        })
+        .unwrap()
+    };
+    let cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        ("not JSON", b"nope".to_vec(), "not readable"),
+        (
+            "another schema",
+            text.replace("\"schema\": 1", "\"schema\": 9").into_bytes(),
+            "not readable",
+        ),
+        (
+            "an extra member",
+            text.replacen('{', "{\"extra\": 1,", 1).into_bytes(),
+            "not readable",
+        ),
+        (
+            "too large",
+            vec![b' '; super::store::MAX_STATE_LEN as usize + 1],
+            "not readable",
+        ),
+        (
+            "a duplicate key",
+            text.replacen('{', "{\"schema\": 1,", 1).into_bytes(),
+            "not readable",
+        ),
+        (
+            "a chain entry that is not a root",
+            structured(&|s| s.roots[0] = not_a_root.clone()),
+            "not a root",
+        ),
+        (
+            "a forged root",
+            structured(&|s| s.roots[0] = forged.clone()),
+            "saved root 2 does not follow",
+        ),
+        (
+            "a gap in the chain",
+            structured(&|s| s.roots = vec![v3.clone()]),
+            "saved root 3 does not follow",
+        ),
+        (
+            "a root version the chain does not reach",
+            structured(&|s| s.root_version = 5),
+            "its chain ends at 2",
+        ),
+    ];
+    for (name, bytes, reason) in cases {
+        std::fs::write(&path, bytes).unwrap();
+        let trusted = run().unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let why = trusted
+            .state_was_reset()
+            .unwrap_or_else(|| panic!("{name}: no reason"));
+        assert!(why.contains(reason), "{name}: {why}");
+        assert_eq!(
+            trusted.root().version,
+            2,
+            "{name}: started over from the built-in root"
+        );
+        // The state was rewritten: the next run is clean, and the file is a valid state.
+        assert_eq!(Files::new(dir.path()).load().unwrap(), valid, "{name}");
+        assert_eq!(run().unwrap().state_was_reset(), None, "{name}");
+    }
+}
+
+#[test]
+fn a_state_that_cannot_be_read_for_another_reason_is_an_error_not_a_reset() {
+    struct Broken;
+    impl Store for Broken {
+        fn load(&self) -> Result<TrustState, TufError> {
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied).into())
+        }
+        fn save(&mut self, _: &TrustState) -> Result<TrustState, TufError> {
+            unreachable!()
+        }
+        fn overwrite(&mut self, _: &TrustState) -> Result<(), TufError> {
+            unreachable!()
+        }
+    }
+    let k = keys(1);
+    let (repo, anchor) = standard(&k);
+    let e = TufClient::new(&anchor, &repo, Broken, Limits::default())
+        .unwrap()
+        .refresh(T0)
+        .unwrap_err();
+    assert!(
+        matches!(e, TufError::Store(ref io) if io.kind() == std::io::ErrorKind::PermissionDenied)
+    );
+}
+
+// --- roles of keys ---
+
+#[test]
+fn a_key_that_serves_two_roles_is_refused_in_the_built_in_root_and_in_a_new_one() {
+    let (k1, k2) = (keys(1), keys(11));
+    // The timestamp key, which is online, listed for the targets too.
+    let shared = |k: &Keys, version: u64| {
+        let mut signed = build::root(version, T0 + days(365), &def(k)).unwrap();
+        signed["roles"]["targets"]["keyids"] = signed["roles"]["timestamp"]["keyids"].clone();
+        build::sign(&signed, &[&k.root, &k1.root]).unwrap()
+    };
+    let new = |file: &[u8]| {
+        TufClient::new(
+            file,
+            MemoryFetcher::new(),
+            MemoryStore::default(),
+            Limits::default(),
+        )
+        .err()
+    };
+    assert!(
+        matches!(new(&shared(&k1, 1)), Some(TufError::Malformed { ref why, .. }) if why.contains("serves both"))
+    );
+
+    let (repo, anchor) = standard(&k1);
+    repo.put(layout::root_path(2), shared(&k2, 2));
+    let e = refresh(&anchor, &repo, &mut MemoryStore::default()).unwrap_err();
+    assert!(
+        matches!(e, TufError::Malformed { ref why, .. } if why.contains("serves both")),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn a_file_of_one_role_is_not_accepted_in_place_of_another() {
+    let k = keys(1);
+    let (repo, anchor) = standard(&k);
+    let files = |repo: &MemoryFetcher| {
+        (
+            repo.get(layout::TIMESTAMP_PATH).unwrap(),
+            repo.get(&layout::snapshot_path(1)).unwrap(),
+            repo.get(&layout::targets_path(1)).unwrap(),
+        )
+    };
+    let (timestamp, snapshot, targets) = files(&repo);
+    let refused = |repo: &MemoryFetcher, what: &str| {
+        let e = refresh(&anchor, repo, &mut MemoryStore::default()).unwrap_err();
+        assert!(
+            matches!(e, TufError::Signature { .. } | TufError::Malformed { .. }),
+            "{what}: {e:?}"
+        );
+    };
+    // Each in the slot of the one above or below, the listing above made to match its hash
+    // so that only the role can refuse it.
+    for (name, file) in [("snapshot", &snapshot), ("targets", &targets)] {
+        repo.put(layout::TIMESTAMP_PATH, file.clone());
+        refused(&repo, &format!("{name} as the timestamp"));
+    }
+    repo.put(layout::TIMESTAMP_PATH, timestamp.clone());
+    for (name, file) in [("timestamp", &timestamp), ("targets", &targets)] {
+        repo.put(layout::snapshot_path(1), file.clone());
+        let listing = build::timestamp(1000, T0 + days(7), 1, file).unwrap();
+        repo.put(
+            layout::TIMESTAMP_PATH,
+            build::sign(&listing, &[&k.timestamp]).unwrap(),
+        );
+        refused(&repo, &format!("{name} as the snapshot"));
+    }
+    repo.put(layout::snapshot_path(1), snapshot.clone());
+    repo.put(layout::TIMESTAMP_PATH, timestamp);
+    for (name, file) in [
+        ("timestamp", &repo.get(layout::TIMESTAMP_PATH).unwrap()),
+        ("snapshot", &snapshot),
+    ] {
+        repo.put(layout::targets_path(1), file.clone());
+        let listing = build::snapshot(1, T0 + days(30), 1, file).unwrap();
+        let listed = build::sign(&listing, &[&k.snapshot]).unwrap();
+        repo.put(layout::snapshot_path(1), listed.clone());
+        let ts = build::timestamp(1000, T0 + days(7), 1, &listed).unwrap();
+        repo.put(
+            layout::TIMESTAMP_PATH,
+            build::sign(&ts, &[&k.timestamp]).unwrap(),
+        );
+        refused(&repo, &format!("{name} as the targets"));
+    }
+}
+
+// --- the clock at download time, the size of what the builder makes ---
+
+#[test]
+fn a_trusted_set_is_not_used_past_its_expiry() {
+    let k = keys(1);
+    let (repo, anchor) = standard(&k);
+    let mut c = TufClient::new(&anchor, &repo, MemoryStore::default(), Limits::default()).unwrap();
+    let trusted = c.refresh(T0).unwrap();
+    // The timestamp is the first to expire, 7 days on.
+    c.download_target(
+        &trusted,
+        "indexes/stable.json",
+        BIG,
+        T0 + days(7) - Duration::seconds(1),
+    )
+    .unwrap();
+    for later in [T0 + days(7), T0 + days(8), T0 + days(30)] {
+        let e = c
+            .download_target(&trusted, "indexes/stable.json", BIG, later)
+            .unwrap_err();
+        assert!(
+            matches!(
+                e,
+                TufError::Expired {
+                    role: Role::Timestamp,
+                    ..
+                }
+            ),
+            "{later}: {e:?}"
+        );
+    }
+    assert!(trusted.ensure_fresh(T0).is_ok());
+    assert!(matches!(
+        trusted.ensure_fresh(T0 + days(31)),
+        Err(TufError::Expired {
+            role: Role::Timestamp,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn the_builder_refuses_a_file_the_client_would_not_read() {
+    let k = keys(1);
+    let paths: Vec<String> = (0..4000)
+        .map(|i| format!("plugins/some-long-plugin-name-{i}.onclp"))
+        .collect();
+    let files: Vec<(&str, &[u8])> = paths.iter().map(|p| (p.as_str(), &b"x"[..])).collect();
+    let signed = build::targets(1, T0 + days(30), &files).unwrap();
+    let e = build::sign(&signed, &[&k.targets]).unwrap_err();
+    assert!(
+        matches!(e, TufError::TooLarge { limit, .. } if limit == Limits::default().targets),
+        "{e:?}"
+    );
+    // The client itself refuses it as metadata of that size.
+    let small = build::targets(1, T0 + days(30), &files[..10]).unwrap();
+    build::sign(&small, &[&k.targets]).unwrap();
 }

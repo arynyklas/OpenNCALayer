@@ -101,6 +101,10 @@ pub enum TufError {
         /// The version inside the file.
         found: u64,
     },
+    /// More new roots than one refresh follows, and another one is there: the chain is too
+    /// long to follow in one go (the roots followed so far are kept; refresh again).
+    #[error("the root chain is longer than the {0} roots one refresh follows")]
+    RootChainTooLong(u32),
     /// Metadata past its `expires` (a freeze attack, or a repository nobody re-signed).
     #[error("the {role} metadata expired at {expires}")]
     Expired {
