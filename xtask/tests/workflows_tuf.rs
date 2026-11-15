@@ -585,7 +585,8 @@ fn real_workflows() -> Vec<(String, String)> {
         if path.extension().is_some_and(|e| e == "yml" || e == "yaml") {
             files.push((
                 path.file_name().unwrap().to_string_lossy().into_owned(),
-                fs::read_to_string(&path).unwrap(),
+                // A Windows checkout may have CRLF line ends: the mutations are written with LF.
+                fs::read_to_string(&path).unwrap().replace("\r\n", "\n"),
             ));
         }
     }
