@@ -770,7 +770,7 @@ pub fn check_path_revocation(
     // none), so there is no second acceptable status for a `good` to hide; an extra fetch
     // would also reach endpoints the host's network policy may deny.
     let status = if !matches!(status, Ok(CertStatus::Good | CertStatus::Revoked { .. })) {
-        match crl::fetch_status_for(&path[0], issuer, http, ocsp::TIMEOUT, now) {
+        match crl::fetch_status_for(&path[0], issuer, http, crl::TIMEOUT, now) {
             Ok(CrlStatus::Good) => Ok(CertStatus::Good),
             Ok(CrlStatus::Revoked { time, reason }) => Ok(CertStatus::Revoked { time, reason }),
             Err(_) => status,
@@ -790,7 +790,7 @@ pub fn check_path_revocation(
         Ok(CertStatus::Unknown) | Err(_) => unavailable = true,
     }
     for pair in path[1..].windows(2) {
-        match crl::fetch_status_for(&pair[0], &pair[1], http, ocsp::TIMEOUT, now) {
+        match crl::fetch_status_for(&pair[0], &pair[1], http, crl::TIMEOUT, now) {
             Ok(CrlStatus::Good) => {}
             Ok(CrlStatus::Revoked { time, .. }) => {
                 let revoked = PathRevoked { time };
