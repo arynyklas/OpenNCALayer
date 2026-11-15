@@ -989,5 +989,5 @@ fn admitted_truncated_declared_body_is_typed_and_releases_its_upload_slot() {
         assert_eq!(report.operation_id, 2);
         assert_eq!(report.bytes_in, 3);
     });
-    process.stop();
+    process.stop_after_aborts();
 }

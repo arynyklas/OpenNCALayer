@@ -405,7 +405,7 @@ pub(crate) fn acquire(
                     cert,
                     issuer,
                     &transport,
-                    std::time::Duration::from_secs(30),
+                    oncl_pki::crl::TIMEOUT,
                     current_context.now,
                 )
                 .map_err(|e| XmlSourceError::Acquisition(e.to_string()))?;

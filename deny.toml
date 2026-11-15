@@ -3,7 +3,7 @@ all-features = true
 
 [advisories]
 ignore = [
-    { id = "RUSTSEC-2023-0071", reason = "No patched rsa0.9 exists: production oncl-pki uses it only for generation/decoding/public operations; private prehash/OAEP use BCrypt on Windows and aws-lc-rs1.19.0 on Unix. Synthetic-fixture tests/xtask and the test-only token emulator perform raw RSA with synthetic keys, never server/user private operations." },
+    { id = "RUSTSEC-2023-0071", reason = "No patched rsa0.9 exists: production oncl-pki uses it only for generation/decoding/public operations; private prehash/OAEP/PKCS#1 v1.5 decryption (legacy envelopes) use BCrypt on Windows and aws-lc-rs1.19.0 on Unix. Synthetic-fixture tests/xtask and the test-only token emulator perform raw RSA with synthetic keys, never server/user private operations." },
     # Unmaintained (no vulnerability, no maintained release yet) deep in Slint's winit
     # backend on Linux: Wayland title bar fonts, and the zbus split crates of AT-SPI.
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser: transitive via winit/sctk-adwaita, unmaintained only" },

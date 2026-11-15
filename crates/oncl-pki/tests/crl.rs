@@ -1223,3 +1223,45 @@ fn crl_without_next_update_needs_thisupdate_after_the_proof_less_the_skew() {
     );
     assert_eq!(at_proof(&issued(now), &issuer, P, now), Ok(CrlStatus::Good));
 }
+
+/// Answers nothing and records what each request was given to do it in.
+struct Timeouts(Mutex<Vec<(String, Duration)>>);
+
+impl HttpTransport for Timeouts {
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpReply, HttpError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((request.url.to_owned(), request.opts.timeout));
+        Err(HttpError::other("no answer"))
+    }
+}
+
+#[test]
+fn path_revocation_downloads_a_crl_within_the_crl_timeout_and_asks_ocsp_within_its_own() {
+    // A CRL of an NCA CA runs to megabytes: 5 s (the OCSP request timeout) is not enough
+    // for it, 30 s is.
+    let path = [
+        leaf_with_cdp(&entry("inter-user-gost2015-sign").cert, &[INTER_CRL]),
+        cer("inter-gost2015"),
+        cer("root-gost2015"),
+    ];
+    let http = Timeouts(Mutex::new(Vec::new()));
+    let _ = oncl_pki::validation::check_path_revocation(&path, now(), &http, now());
+    let seen = http.0.into_inner().unwrap();
+    let crls: Vec<_> = seen
+        .iter()
+        .filter(|(url, _)| url.ends_with(".crl"))
+        .collect();
+    // The signer's CRL (OCSP gave no status) and the intermediate CA's.
+    assert!(
+        crls.iter().any(|(url, _)| url == INTER_CRL) && crls.iter().any(|(url, _)| url == ROOT_CRL),
+        "{seen:?}"
+    );
+    for (url, timeout) in &crls {
+        assert_eq!(*timeout, TIMEOUT, "{url}");
+    }
+    for (url, timeout) in seen.iter().filter(|(url, _)| !url.ends_with(".crl")) {
+        assert_eq!(*timeout, oncl_pki::ocsp::TIMEOUT, "{url}");
+    }
+}

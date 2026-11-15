@@ -462,10 +462,11 @@ fn tls_wizard_answers_its_question_no_to_escape_and_to_enter() {
 }
 
 #[test]
-fn about_window_reaches_the_repository_link_from_the_keyboard() {
+fn about_window_reaches_the_repository_and_chat_links_from_the_keyboard() {
     offscreen::install();
     let ui = AboutWindow::new().unwrap();
     ui.set_repository("https://example.test/openncalayer".into());
+    ui.set_chat("https://example.test/chat".into());
     actions_stay_reachable(&ui, Class::Wide, |ui| ui.get_actions_reachable(), "about");
     let (dismissed, on_dismiss) = counter();
     ui.on_dismiss(on_dismiss);
@@ -474,7 +475,9 @@ fn about_window_reaches_the_repository_link_from_the_keyboard() {
 
     let (opened, on_open) = counter();
     ui.on_open_repository(on_open);
-    // Tab through the window, pressing Space on each stop: the link is one of them.
+    let (chat_opened, on_open_chat) = counter();
+    ui.on_open_chat(on_open_chat);
+    // Tab through the window, pressing Space on each stop: both links are among them.
     for _ in 0..12 {
         press(&ui, Key::Tab);
         ui.window()
@@ -484,7 +487,11 @@ fn about_window_reaches_the_repository_link_from_the_keyboard() {
     }
     assert!(
         opened.get() >= 1,
-        "the link cannot be reached from the keyboard"
+        "the repository link cannot be reached from the keyboard"
+    );
+    assert!(
+        chat_opened.get() >= 1,
+        "the chat link cannot be reached from the keyboard"
     );
 }
 
@@ -1208,6 +1215,7 @@ fn service_windows_drawn() {
 
             let ui = AboutWindow::new().unwrap();
             ui.set_repository("https://example.test/openncalayer".into());
+            ui.set_chat("https://example.test/chat".into());
             draw(&ui, wide, step, &n("about"));
         }
     }

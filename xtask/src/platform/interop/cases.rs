@@ -8,6 +8,8 @@ use super::Case;
 mod cms;
 #[path = "cases/common.rs"]
 pub mod common;
+#[path = "cases/envelope.rs"]
+mod envelope;
 #[path = "cases/extras.rs"]
 mod extras;
 #[path = "cases/jose.rs"]
@@ -33,6 +35,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(jose::cases());
     cases.extend(x509::cases());
     cases.extend(extras::cases());
+    cases.extend(envelope::cases());
     cases.extend(large::cases());
     cases
 }

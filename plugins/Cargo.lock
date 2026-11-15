@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-acbank"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "base64",
  "oncl-pdk",
@@ -547,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-arta"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -557,7 +557,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-bas"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-pki",
@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-buhta"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "base64",
  "oncl-pdk",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-devart"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-documentolog"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "aes",
  "base64",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-dogovor24"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-pki",
@@ -606,7 +606,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-doodocs"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -615,7 +615,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-efactoring"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-energy"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-pki",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-eot"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-legacy",
@@ -640,14 +640,14 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-eproc"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
 ]
 
 [[package]]
 name = "oncl-port-esf-osdkz"
-version = "1.0.0-beta.3"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-pki",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-eup"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-pki",
@@ -671,7 +671,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-fhs"
-version = "1.0.0-beta.5"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -682,7 +682,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-idocs"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-k2sign"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -712,7 +712,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-knp"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "base64",
  "der",
@@ -734,7 +734,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-market"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-metadoc"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 dependencies = [
  "cms",
  "der",
@@ -753,7 +753,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-motiw"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -763,7 +763,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-nursign"
-version = "1.0.0-beta.3"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -793,14 +793,14 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-qiwi"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
 ]
 
 [[package]]
 name = "oncl-port-qoltanba"
-version = "1.0.0-beta.3"
+version = "1.0.0"
 dependencies = [
  "base64",
  "der",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-rating1c"
-version = "1.0.0-beta.4"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -831,7 +831,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-skf"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "base64",
  "der",
@@ -843,14 +843,14 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-taxtech"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
 ]
 
 [[package]]
 name = "oncl-port-thundercrypt"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "der",
  "oncl-pdk",
@@ -860,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-uchet"
-version = "1.0.0-beta.6"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -869,7 +869,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-uchet-esf"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-workspace"
-version = "1.0.0-beta.2"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-kit",
@@ -886,7 +886,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-xdox"
-version = "1.0.0-beta.3"
+version = "1.0.0"
 dependencies = [
  "oncl-pdk",
  "oncl-port-legacy",

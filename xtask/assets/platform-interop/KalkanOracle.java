@@ -16,6 +16,13 @@
 //   jws  <compact-jws-file> <cert.der>
 //        header.payload.signature; the signing input is the ASCII of "header.payload", the
 //        algorithm of the header must be ECGOST3410-2015-512.
+//   envelope-make <cert.der> <data-file> <envelope-file>
+//        Kalkan's CMSEnvelopedDataGenerator makes an EnvelopedData for the recipient
+//        certificate (the only thing it can make: RSA key transport, DES-EDE3-CBC). {"ok":false,
+//        "refused":...} when Kalkan cannot make one for that certificate (a GOST key).
+//   envelope-open <pkcs8.der> <envelope-file> <plaintext-file>
+//        Kalkan decrypts the first recipient of an envelope with an RSA private key.
+//        {"ok":false,"refused":...} when it cannot read the envelope or the key.
 //   wsse <soap.xml> [cert.der]
 //        every ds:Signature of the message: the SignatureValue over the canonical SignedInfo
 //        and the digest of every Reference are checked separately. Without cert.der the
@@ -31,18 +38,29 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.GeneralSecurityException;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.Security;
 import java.security.Signature;
 import java.security.SignatureException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collection;
 import java.util.List;
 import java.util.Set;
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilderFactory;
+import kz.gov.pki.kalkan.jce.provider.cms.CMSEnvelopedData;
+import kz.gov.pki.kalkan.jce.provider.cms.CMSEnvelopedDataGenerator;
+import kz.gov.pki.kalkan.jce.provider.cms.CMSEnvelopedGenerator;
+import kz.gov.pki.kalkan.jce.provider.cms.CMSException;
+import kz.gov.pki.kalkan.jce.provider.cms.CMSProcessableByteArray;
+import kz.gov.pki.kalkan.jce.provider.cms.RecipientInformation;
 import org.apache.xml.security.algorithms.SignatureAlgorithm;
 import org.apache.xml.security.signature.SignedInfo;
 import org.apache.xml.security.signature.XMLSignature;
@@ -79,13 +97,15 @@ public final class KalkanOracle {
         System.setOut(System.err);
         try {
             if (args.length == 0) {
-                throw new OracleError("usage: <raw|jws|wsse> <args...>");
+                throw new OracleError("usage: <raw|jws|wsse|envelope-make|envelope-open> <args...>");
             }
             Security.addProvider(new kz.gov.pki.kalkan.jce.provider.KalkanProvider());
             String json = switch (args[0]) {
                 case "raw" -> raw(args);
                 case "jws" -> jws(args);
                 case "wsse" -> wsse(args);
+                case "envelope-make" -> envelopeMake(args);
+                case "envelope-open" -> envelopeOpen(args);
                 default -> throw new OracleError("unknown mode " + args[0]);
             };
             answer.println(json);
@@ -127,6 +147,53 @@ public final class KalkanOracle {
             return verifier.verify(signature);
         } catch (SignatureException rejected) {
             return false;
+        }
+    }
+
+    // ---- envelope ----------------------------------------------------------------------
+
+    private static String envelopeMake(String[] args) throws Exception {
+        if (args.length != 4) {
+            throw new OracleError("envelope-make <cert.der> <data-file> <envelope-file>");
+        }
+        X509Certificate cert = certificate(Files.readAllBytes(Path.of(args[1])));
+        byte[] data = Files.readAllBytes(Path.of(args[2]));
+        try {
+            CMSEnvelopedDataGenerator generator = new CMSEnvelopedDataGenerator();
+            generator.addKeyTransRecipient(cert);
+            byte[] der = generator
+                    .generate(new CMSProcessableByteArray(data), CMSEnvelopedGenerator.DES_EDE3_CBC, "KALKAN")
+                    .getEncoded();
+            Files.write(Path.of(args[3]), der);
+            return "{\"ok\":true,\"mode\":\"envelope-make\",\"key_alg\":"
+                    + quote(cert.getPublicKey().getAlgorithm()) + ",\"bytes\":" + der.length + "}";
+        } catch (CMSException | GeneralSecurityException | RuntimeException refused) {
+            return "{\"ok\":false,\"mode\":\"envelope-make\",\"key_alg\":"
+                    + quote(cert.getPublicKey().getAlgorithm()) + ",\"refused\":"
+                    + quote(refused.getClass().getSimpleName() + ": " + refused.getMessage()) + "}";
+        }
+    }
+
+    private static String envelopeOpen(String[] args) throws Exception {
+        if (args.length != 4) {
+            throw new OracleError("envelope-open <pkcs8.der> <envelope-file> <plaintext-file>");
+        }
+        PrivateKey key = KeyFactory.getInstance("RSA", "KALKAN")
+                .generatePrivate(new PKCS8EncodedKeySpec(Files.readAllBytes(Path.of(args[1]))));
+        byte[] message = Files.readAllBytes(Path.of(args[2]));
+        try {
+            CMSEnvelopedData envelope = new CMSEnvelopedData(message);
+            Collection<?> recipients = envelope.getRecipientInfos().getRecipients();
+            if (recipients.isEmpty()) {
+                throw new OracleError("the envelope has no recipient Kalkan understands");
+            }
+            RecipientInformation recipient = (RecipientInformation) recipients.iterator().next();
+            byte[] plaintext = recipient.getContent(key, "KALKAN");
+            Files.write(Path.of(args[3]), plaintext);
+            return "{\"ok\":true,\"mode\":\"envelope-open\",\"plaintext_bytes\":" + plaintext.length + "}";
+        } catch (CMSException | GeneralSecurityException | RuntimeException refused) {
+            return "{\"ok\":false,\"mode\":\"envelope-open\",\"refused\":"
+                    + quote(refused.getClass().getSimpleName() + ": " + refused.getMessage()) + "}";
         }
     }
 

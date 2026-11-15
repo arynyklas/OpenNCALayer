@@ -118,6 +118,17 @@ fn is_signature_or_manifest(path: &str) -> bool {
                 .any(|ext| upper.ends_with(ext))
 }
 
+/// The certificate of the first signer of the signature block `bytes` (a PKCS#7 `SignedData`),
+/// found by that signer's `IssuerAndSerialNumber`: the block's `certificates` hold the whole
+/// chain in no useful order, so the first of them may be the root. `None` for an unreadable
+/// block, a signer identified by a key identifier, or one whose certificate is not included.
+fn signer_certificate(bytes: &[u8]) -> Option<Certificate> {
+    let certs = oncl_pki::cms::certificates(bytes).ok()?;
+    certs
+        .into_iter()
+        .find(|c| oncl_pki::cms::signer_index_of(bytes, c) == Ok(Some(0)))
+}
+
 /// The facts of a JAR whose entries are `entries`; embedded manifests are verified against
 /// `trusted`.
 pub fn jar_facts(
@@ -152,10 +163,9 @@ pub fn jar_facts(
         if is_signature_or_manifest(path)
             && !upper.ends_with(".SF")
             && upper != "META-INF/MANIFEST.MF"
-            && let Ok(certs) = oncl_pki::cms::certificates(bytes)
-            && let Some(first) = certs.first()
+            && let Some(signer) = signer_certificate(bytes)
         {
-            signers.insert(path.clone(), cert_ref(first));
+            signers.insert(path.clone(), cert_ref(&signer));
         }
     }
 
@@ -380,4 +390,92 @@ fn is_url(s: &str) -> bool {
         s.strip_prefix(p)
             .is_some_and(|rest| !rest.is_empty() && !rest.chars().any(char::is_whitespace))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use der::Encode;
+    use oncl_pki::cms::{AttrSpec, CertSpec, CoSign, Content, SignSpec, sign_spec};
+    use time::{Date, Month};
+
+    use super::*;
+    use crate::upstream::testkit::{synthetic_root, synthetic_signer};
+
+    /// A signature block by `CN=<name>` (issued by the synthetic root) whose certificate set
+    /// lists the root before the signer, as a DER `SET OF` does when the root's encoding
+    /// sorts first.
+    fn block(name: &str) -> (Vec<u8>, Certificate, Certificate) {
+        let root = synthetic_root();
+        let leaf = synthetic_signer(name);
+        let time = Date::from_calendar_date(2026, Month::October, 1)
+            .expect("valid date")
+            .midnight()
+            .assume_utc();
+        let spec = SignSpec {
+            content: Content::Data(b"signature file"),
+            encapsulate: false,
+            cosign: CoSign::Never,
+            econtent_type: None,
+            digest: None,
+            attrs: AttrSpec::cades(time),
+            certificates: CertSpec::Extra(vec![root.cert.clone()]),
+        };
+        let mut cms = sign_spec(&leaf, &[], &spec).expect("synthetic signer signs");
+        // The builder writes the signer first and the chain after it: swap them in place
+        // (same total length, so every enclosing length stays right).
+        let leaf_der = leaf.cert.to_der().expect("leaf encodes");
+        let root_der = root.cert.to_der().expect("root encodes");
+        let at = cms
+            .windows(leaf_der.len() + root_der.len())
+            .position(|w| {
+                w[..leaf_der.len()] == leaf_der[..] && w[leaf_der.len()..] == root_der[..]
+            })
+            .expect("leaf then root in the certificate set");
+        let swapped = [root_der.as_slice(), leaf_der.as_slice()].concat();
+        cms[at..at + swapped.len()].copy_from_slice(&swapped);
+        (cms, root.cert, leaf.cert)
+    }
+
+    #[test]
+    fn signer_is_the_leaf_not_the_first_certificate_of_the_chain() {
+        let (cms, root, leaf) = block("Publisher");
+        let certs = oncl_pki::cms::certificates(&cms).expect("certificates read");
+        assert_eq!(certs, [root.clone(), leaf.clone()]);
+
+        let mut entries = BTreeMap::new();
+        entries.insert("META-INF/PUBLISHER.RSA".to_owned(), cms);
+        let facts = jar_facts(&entries, 0, &[]);
+        assert_eq!(
+            facts.signers.get("META-INF/PUBLISHER.RSA"),
+            Some(&cert_ref(&leaf))
+        );
+        assert_ne!(cert_ref(&root), cert_ref(&leaf));
+    }
+
+    #[test]
+    fn no_signer_is_recorded_when_its_certificate_is_not_in_the_block() {
+        let (mut cms, _, leaf) = block("Publisher");
+        // The SignerInfo names the signer by issuer and serial number; its serial is the
+        // last occurrence of the leaf's in the block (the certificate comes first). Change
+        // it (same length), so that the SignerInfo names a certificate the block lacks.
+        let serial = leaf.tbs_certificate().serial_number().as_bytes().to_vec();
+        let at = cms
+            .windows(serial.len())
+            .rposition(|w| w == serial.as_slice())
+            .expect("serial in the SignerInfo");
+        let in_certificate = cms
+            .windows(serial.len())
+            .position(|w| w == serial.as_slice())
+            .expect("serial in the certificate");
+        assert!(
+            at > in_certificate,
+            "two occurrences: certificate and SignerInfo"
+        );
+        *cms[at..at + serial.len()].last_mut().unwrap() ^= 1;
+
+        assert!(signer_certificate(&cms).is_none());
+        let mut entries = BTreeMap::new();
+        entries.insert("META-INF/PUBLISHER.RSA".to_owned(), cms);
+        assert!(jar_facts(&entries, 0, &[]).signers.is_empty());
+    }
 }

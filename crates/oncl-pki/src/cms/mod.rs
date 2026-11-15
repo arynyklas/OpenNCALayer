@@ -15,6 +15,7 @@
 //!   ones unless already there).
 
 pub(crate) mod asn1;
+pub mod envelope;
 pub(crate) mod report;
 mod sign;
 pub mod stream;

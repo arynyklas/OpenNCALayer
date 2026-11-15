@@ -521,7 +521,7 @@ fn actual_process_overload_heartbeat_and_disconnect() {
     eprintln!(
         "standalone: held body causes CapacityExceeded/NotApplied, health progresses, disconnect releases actual worker/root; bad token refused before body"
     );
-    process.stop();
+    process.stop_after_aborts();
 }
 
 #[test]
@@ -558,7 +558,7 @@ fn actual_process_deadline_covers_incomplete_intake() {
     eprintln!(
         "standalone: incomplete unknown-length intake expires as DeadlineExceeded/NotApplied; next abc succeeds"
     );
-    process.stop();
+    process.stop_after_aborts();
 }
 
 fn delivery_fixture() -> (

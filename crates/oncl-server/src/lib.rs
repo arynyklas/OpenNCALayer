@@ -1,4 +1,5 @@
 //! Headless host composition, bounded execution and durable private-use audit.
+mod abort_log;
 pub mod audit;
 pub mod auth;
 pub mod config;
