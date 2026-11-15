@@ -36,3 +36,5 @@ xtask/src/upstream/templates/*.md text eol=lf
 # The pinned WinGet manifest schemas (sha256 checked by `xtask/src/winget/schema.rs`): byte for byte.
 xtask/assets/winget/schema-1.12.0/*.json -text
 xtask/assets/winget/schema-1.12.0/LICENSE -text
+# TUF oracle vectors (python-tuf, xtask/assets/tuf-oracle/gen.py) are compared byte for byte: no end-of-line conversion.
+crates/oncl-update/tests/fixtures/tuf/** -text
