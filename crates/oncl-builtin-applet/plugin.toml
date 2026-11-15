@@ -1,6 +1,6 @@
 id = "io.github.arynyklas.openncalayer.builtin.applet"
-version = "0.1.0-rc.1"
-min_core = "0.1.0-rc.1"
+version = "0.1.0-rc.2"
+min_core = "0.1.0-rc.2"
 modules = ["kz.gov.pki.knca.applet.Applet"]
 builtin = true
 
