@@ -67,7 +67,7 @@ sha2.workspace = true
 spki.workspace = true
 # `ext-e2e`: the browsers' short TMPDIR.
 tempfile.workspace = true
-time.workspace = true
+time = { workspace = true, features = ["formatting", "parsing"] }
 # `licenses`: the accepted licences of `deny.toml`; `package platform`: the smoke test's
 # configuration, written from the shipped example.
 toml = { workspace = true, features = ["display"] }

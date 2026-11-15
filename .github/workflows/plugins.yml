@@ -154,8 +154,9 @@ jobs:
             echo "1. optionally lower \`rollout\` of the new versions;"
             echo "2. \`cargo xtask sign updates/v1/beta.json --key <secret key>\`;"
             echo "3. \`cargo xtask index check updates/v1 --base origin/main\`;"
-            echo "4. commit the index and its \`.minisig\` file and push: the index check runs on that push;"
-            echo "5. merge: GitHub Pages publishes \`updates/\`."
+            echo "4. once the TUF repository exists (\`tuf/v1\` in the tree): \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over this index (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
+            echo "5. commit the index, its \`.minisig\` file and \`tuf/v1\` and push: the index check runs on that push;"
+            echo "6. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
             echo
             echo "Stable gets a plugin version by hand, once it has proved itself in beta and its port's \`registry.toml\` says \`conformance = \"confirmed\"\`: \`cargo xtask index add-plugin --channel stable\`."
           } > "$RUNNER_TEMP/index-pr.md"

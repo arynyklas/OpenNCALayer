@@ -27,6 +27,10 @@ crates/oncl-pki/testing-data/** -text
 # Update indexes are signed byte for byte (`cargo xtask sign`) and published as committed:
 # no end-of-line conversion.
 updates/** -text
+# The TUF repository and its trust anchor: every file is hashed and signed byte for byte
+# (`cargo xtask tuf`), and the client embeds the anchor as it is: no end-of-line conversion.
+tuf/** -text
+crates/oncl-update/keys/root.json -text
 # Qoltanba's report font and its license, as published (sha256 in its README).
 plugins/qoltanba/fonts/*.ttf -text
 plugins/qoltanba/fonts/OFL.txt -text

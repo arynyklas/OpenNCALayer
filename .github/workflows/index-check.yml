@@ -4,7 +4,11 @@ name: Index check
 # the project's releases answering HEAD with 200, `seq` growth against the base, the update
 # key in the tag of every new version, the `vm-smoke` commit status on the tag of every new
 # version and the `conformance` status on the tag of every new stable version) when a pull
-# request or a push to `main` changes the update indexes or the update keys. It runs on
+# request or a push to `main` changes the update indexes or the update keys, and
+# `cargo xtask tuf check --no-timestamp` (the TUF repository `tuf/v1` verified with the
+# client's code from the trust anchor, its targets equal to the indexes, history unchanged
+# against the base) when it changes `tuf/` or the anchor too. Without `tuf/` and the anchor
+# (before the owner's ceremony) that check says so and passes. It runs on
 # every pull request and push to `main` and decides in the job whether those changed, so
 # the check always reports and can be a required status check: with nothing relevant
 # changed, only the cargo step is skipped and the check passes.
@@ -46,7 +50,7 @@ jobs:
             && git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
             base="$BEFORE"
             changed="$(git diff --name-only --no-renames "$base" HEAD)"
-          elif [ -e updates ] || [ -e crates/oncl-update/keys ]; then
+          elif [ -e updates ] || [ -e crates/oncl-update/keys ] || [ -e tuf ]; then
             # A new branch or a history this clone does not have: check without a base.
             base=""
             changed="updates/"
@@ -56,11 +60,11 @@ jobs:
             base=""
             changed=""
           fi
-          if printf '%s\n' "$changed" | grep -qE '^(updates/|crates/oncl-update/keys/)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(updates/|tuf/|crates/oncl-update/keys/)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "nothing under updates/ or crates/oncl-update/keys/ changed: no index to check"
+            echo "nothing under updates/, tuf/ or crates/oncl-update/keys/ changed: no index to check"
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
       - name: Install toolchain (rust-toolchain.toml)
@@ -78,4 +82,17 @@ jobs:
             cargo xtask index check updates/v1 --base "$BASE" --vm-smoke --conformance
           else
             cargo xtask index check updates/v1 --no-base --vm-smoke --conformance
+          fi
+      # The repository of the update indexes' TUF metadata: errors fail the check, an expiring
+      # or expired file is a warning here (the weekly `tuf-expiry` workflow and the daily
+      # Pages run are the ones that go red for it). With no `tuf/v1` and no anchor it passes.
+      - name: Check the TUF repository
+        if: steps.changes.outputs.relevant == 'true'
+        env:
+          BASE: ${{ steps.changes.outputs.base }}
+        run: |
+          if [ -n "$BASE" ]; then
+            cargo xtask tuf check --no-timestamp --base "$BASE"
+          else
+            cargo xtask tuf check --no-timestamp
           fi
