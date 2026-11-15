@@ -1210,3 +1210,17 @@ fn key_files_are_readable_by_their_owner_only() {
         assert_eq!(mode & 0o777, 0o600, "{name}");
     }
 }
+
+#[test]
+fn a_timestamp_key_with_the_line_end_of_a_secret_still_signs() {
+    // `gh secret set < timestamp.key` and `Get-Content -Raw timestamp.key | gh secret set`
+    // keep the line end of the file: LF, or CRLF from PowerShell.
+    for end in ["\n", "\r\n", ""] {
+        let w = world();
+        let line = fs::read_to_string(w.keys().join("timestamp.key")).unwrap();
+        let key = w.p("secret.key");
+        fs::write(&key, format!("{}{end}", line.trim_end())).unwrap();
+        w.timestamp_at(&w.repo(), t0() + Duration::hours(1), &key)
+            .unwrap_or_else(|e| panic!("{end:?}: {e:#}"));
+    }
+}

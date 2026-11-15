@@ -181,6 +181,17 @@ pub enum TufCommand {
     },
 }
 
+/// On Windows the key files are written with the permissions of their folder.
+fn windows_key_warning(command: &str) {
+    if cfg!(windows) {
+        println!(
+            "{command}: warning: on Windows the key files get the permissions of their \
+             folder (no owner-only mode is set): keep the key directory where only you can \
+             read it, on an encrypted volume"
+        );
+    }
+}
+
 fn workspace(path: Option<PathBuf>, default: &str) -> PathBuf {
     path.unwrap_or_else(|| oncl_testkit::workspace_root().join(default))
 }
@@ -225,13 +236,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             for file in &made.key_files {
                 println!("  {}", file.display());
             }
-            if cfg!(windows) {
-                println!(
-                    "tuf init: warning: on Windows the key files get the permissions of their \
-                     folder (no owner-only mode is set): keep the key directory where only you \
-                     can read it, on an encrypted volume"
-                );
-            }
+            windows_key_warning("tuf init");
             println!("tuf init: wrote {}", made.root.display());
             println!("tuf init: wrote the trust anchor {}", made.anchor.display());
             println!(
@@ -332,6 +337,9 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             );
             for (role, id, path) in &made.new_keys {
                 println!("tuf root: new {role} key {id}: {}", path.display());
+            }
+            if !made.new_keys.is_empty() {
+                windows_key_warning("tuf root");
             }
             if rotate_targets || rotate_snapshot {
                 println!(

@@ -23,9 +23,9 @@ name: Pages
 # `main` only), read by the one step of the `timestamp` job that signs. That job runs only in
 # this repository, only on `main`, only on events that the maintainers (or the schedule)
 # start, never on a pull request; it has no write permission, every action in it is pinned by
-# commit, and its last step is the one with the secret. It hands the signed file, which is
-# not secret, to `build` as a job output, so no action runs after the secret is in the
-# environment, and `build` (which assembles the site from this repository's files) never
+# commit, it restores no build cache, and its last step is the one with the secret. It
+# hands the signed file, which is not secret, to `build` as a job output, so no action runs
+# after the secret is in the environment, and `build` (which assembles the site from this repository's files) never
 # sees the key. Once `tuf/v1` exists, a missing secret, a repository the client would refuse
 # or a snapshot that has expired fails the run and nothing is deployed: the site that is
 # served keeps its timestamp (valid for 7 days) rather than lose it. `oracle` checks the
@@ -102,12 +102,9 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         if: steps.tree.outputs.exists == 'true'
         run: rustup toolchain install
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        if: steps.tree.outputs.exists == 'true'
-        with:
-          shared-key: tuf-timestamp
-      # Compiled here, before the secret is in any environment: the build scripts and
-      # dependencies never run with the key.
+      # No build cache in this job: whatever it restored would be compiled code that runs
+      # next to the key. Compiled here, before the secret is in any environment: the build
+      # scripts and dependencies never run with the key.
       - name: Build xtask
         if: steps.tree.outputs.exists == 'true'
         run: cargo build -p xtask
@@ -376,7 +373,7 @@ jobs:
 
   deploy:
     needs: [build, oracle]
-    if: ${{ !cancelled() && needs.build.result == 'success' && needs.oracle.result != 'failure' && needs.build.outputs.publish == 'true' }}
+    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.oracle.result) && needs.build.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

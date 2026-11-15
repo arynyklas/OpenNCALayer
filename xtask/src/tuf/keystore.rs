@@ -46,13 +46,6 @@ pub fn file_name(role: Role, root_version: Option<u64>) -> String {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
-}
-
 fn unhex_32(text: &str) -> Option<Zeroizing<[u8; 32]>> {
     // `from_str_radix` also takes a sign: only hex digits are a seed.
     if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -141,8 +134,13 @@ pub fn generate_seed() -> anyhow::Result<(SigningKey, Zeroizing<String>)> {
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(&mut seed[..]).map_err(|e| anyhow::anyhow!("the random generator: {e}"))?;
     let key = SigningKey::from_seed(&seed).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let digits = Zeroizing::new(hex(&seed[..]));
-    let line = Zeroizing::new(format!("{SEED_PREFIX}{}\n", digits.as_str()));
+    // One buffer of the final size, so that no copy of the digits is left behind.
+    let mut line = Zeroizing::new(String::with_capacity(SEED_PREFIX.len() + 65));
+    line.push_str(SEED_PREFIX);
+    for byte in seed.iter() {
+        let _ = write!(*line, "{byte:02x}");
+    }
+    line.push('\n');
     Ok((key, line))
 }
 
@@ -336,6 +334,9 @@ mod tests {
         assert!(line.ends_with('\n') && line.lines().count() == 1);
         assert_eq!(parse_seed(&line).unwrap().key_id(), key.key_id());
         assert_eq!(parse_seed(line.trim_end()).unwrap().key_id(), key.key_id());
+        // `gh secret set < file` and PowerShell's `Get-Content -Raw` keep the line end.
+        let crlf = format!("{}\r\n", line.trim_end());
+        assert_eq!(parse_seed(&crlf).unwrap().key_id(), key.key_id());
         assert!(parse_seed("oncl-tuf-ed25519-seed-v1:abcd").is_err());
         assert!(parse_seed(&"ab".repeat(32)).is_err());
     }

@@ -535,6 +535,67 @@ fn check_pages(text: &str) -> Vec<String> {
     {
         bad.push("the step with the secret does not mask it".to_owned());
     }
+    // The graph of jobs: nothing is deployed unless the timestamp job did not fail and the
+    // oracle did not fail; the oracle has no secret, no environment and writes no artifact.
+    let list = |v: Option<&Value>| -> Vec<String> {
+        match v {
+            Some(Value::String(s)) => vec![s.clone()],
+            Some(Value::Array(a)) => a
+                .iter()
+                .filter_map(|x| x.as_str().map(str::to_owned))
+                .collect(),
+            _ => Vec::new(),
+        }
+    };
+    let text = |job: &str, key: &str| {
+        jobs.get(job)
+            .and_then(|j| j.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned()
+    };
+    if !list(jobs.get("build").and_then(|j| j.get("needs"))).contains(&"timestamp".to_owned()) {
+        bad.push("build does not need the timestamp job".to_owned());
+    }
+    if !text("build", "if").contains("needs.timestamp.result != 'failure'") {
+        bad.push("build runs although the timestamp job failed".to_owned());
+    }
+    let deploy_needs = list(jobs.get("deploy").and_then(|j| j.get("needs")));
+    for needed in ["build", "oracle"] {
+        if !deploy_needs.contains(&needed.to_owned()) {
+            bad.push(format!("deploy does not need {needed}"));
+        }
+    }
+    let deploy_if = text("deploy", "if");
+    for part in [
+        "needs.build.result == 'success'",
+        "contains(fromJSON('[\"success\",\"skipped\"]'), needs.oracle.result)",
+    ] {
+        if !deploy_if.contains(part) {
+            bad.push(format!("the condition of deploy lacks {part}"));
+        }
+    }
+    match jobs.get("oracle") {
+        None => bad.push("there is no oracle job".to_owned()),
+        Some(oracle) => {
+            if oracle.get("secrets").is_some() || oracle.get("environment").is_some() {
+                bad.push("the oracle job has secrets or an environment".to_owned());
+            }
+            if oracle.get("permissions") != Some(&serde_json::json!({"contents": "read"})) {
+                bad.push(
+                    "the oracle job's permissions are not exactly `contents: read`".to_owned(),
+                );
+            }
+            let mut inside = Vec::new();
+            leaves(oracle, &mut Vec::new(), &mut inside);
+            if inside
+                .iter()
+                .any(|(_, v)| v.to_lowercase().contains("secrets.") || v.contains("upload-"))
+            {
+                bad.push("the oracle job reads secrets or uploads an artifact".to_owned());
+            }
+        }
+    }
     // Writing Pages: the deploy job only.
     let writes = |permissions: Option<&Value>| {
         permissions.and_then(Value::as_object).is_some_and(|p| {
@@ -558,8 +619,10 @@ fn check_workflows(files: &[(String, String)]) -> Vec<String> {
     let mut bad = Vec::new();
     for (name, text) in files {
         let lower = text.to_lowercase();
-        for banned in ["tojson(secrets)", "secrets: inherit", "secrets["] {
-            if lower.contains(banned) {
+        // Without white space: `toJSON( secrets )` and `secrets [` are the same thing.
+        let compact: String = lower.split_whitespace().collect();
+        for banned in ["tojson(secrets)", "secrets:inherit", "secrets["] {
+            if compact.contains(banned) {
                 bad.push(format!("{name} reads secrets wholesale ({banned})"));
             }
         }
@@ -812,4 +875,71 @@ fn what_the_parser_does_not_read_is_an_error_and_not_a_pass() {
     assert!(check_condition("github.ref == 'refs/heads/main' && github.repository == 'arynyklas/OpenNCALayer' && (github.event_name == 'push')").is_ok());
     assert!(check_condition("github.ref == 'refs/heads/main' && github.repository == 'arynyklas/OpenNCALayer' && (github.event_name == 'push') || (github.event_name == 'release')").is_err());
     assert!(check_condition("github.event_name == 'release' || github.ref == 'refs/heads/main' && github.repository == 'arynyklas/OpenNCALayer' && (github.event_name == 'push')").is_err());
+}
+
+#[test]
+fn the_graph_of_jobs_is_pinned() {
+    assert_found(
+        mutated("    needs: timestamp\n", "", &[]),
+        "build does not need the timestamp job",
+    );
+    assert_found(
+        mutated("needs.timestamp.result != 'failure' && ", "", &[]),
+        "build runs although the timestamp job failed",
+    );
+    assert_found(
+        mutated("    needs: [build, oracle]\n", "    needs: [build]\n", &[]),
+        "deploy does not need oracle",
+    );
+    assert_found(
+        mutated("    needs: [build, oracle]\n", "    needs: [oracle]\n", &[]),
+        "deploy does not need build",
+    );
+    assert_found(
+        mutated(
+            "contains(fromJSON('[\"success\",\"skipped\"]'), needs.oracle.result)",
+            "needs.oracle.result != 'failure'",
+            &[],
+        ),
+        "the condition of deploy lacks",
+    );
+    assert_found(
+        mutated("needs.build.result == 'success' && ", "", &[]),
+        "the condition of deploy lacks",
+    );
+    assert_found(
+        mutated(
+            "  oracle:\n    needs: build\n",
+            "  oracle:\n    needs: build\n    environment: tuf-timestamp\n",
+            &[],
+        ),
+        "oracle job has secrets or an environment",
+    );
+    assert_found(
+        mutated(
+            "--index \"$RUNNER_TEMP/site/updates/v1\"\n",
+            "--index \"$RUNNER_TEMP/site/updates/v1\"\n      - uses: actions/upload-artifact@v5\n        with:\n          path: x\n",
+            &[],
+        ),
+        "uploads an artifact",
+    );
+    assert_found(
+        mutated(
+            "  oracle:\n    needs: build\n",
+            "  oracle:\n    needs: build\n    secrets: inherit\n",
+            &[],
+        ),
+        "wholesale",
+    );
+}
+
+#[test]
+fn white_space_does_not_hide_a_wholesale_read_of_secrets() {
+    for text in [
+        "env:\n  A: ${{ toJSON( secrets ) }}\n",
+        "env:\n  A: ${{ secrets [ 'X' ] }}\n",
+        "jobs:\n  a:\n    secrets:   inherit\n",
+    ] {
+        assert_found(mutated("", "", &[("x.yml", text)]), "wholesale");
+    }
 }
