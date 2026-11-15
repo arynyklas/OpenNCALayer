@@ -14,20 +14,20 @@
 //! (`--refresh` is not needed). A new timestamp key is for the GitHub secret.
 //!
 //! Everything is made in memory, the new keys are written, then the root; the chain of
-//! roots is verified with the client's code, and the root is removed again if it does not
-//! hold.
+//! roots is verified with the client's code, and the root and the new keys are removed
+//! again if it does not hold.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use oncl_update::tuf::build::{self, RoleDef, RootDef};
-use oncl_update::tuf::{KeyId, Limits, Role, SigningKey, layout};
+use oncl_update::tuf::{KeyId, Role, SigningKey, layout};
 use time::{Duration, OffsetDateTime};
 
 use super::check;
 use super::keystore::{self, Unlock};
-use super::repo::{self, Listing};
+use super::repo;
 use super::{PassphraseSource, ROOT_DAYS, expiry};
 
 /// What [`root`] does.
@@ -74,23 +74,13 @@ pub struct Rotated {
 pub fn root(options: &Options) -> anyhow::Result<Rotated> {
     let anchor = repo::read(options.out, &layout::root_path(1))
         .context("the repository has no root version 1: run `cargo xtask tuf init` first")?;
-    let listing = Listing::read(options.out)?;
     // The root in force may have expired: renewing it is what this is for, so the chain is
-    // followed with a clock inside its validity.
-    let (last, _, _) = listing.highest();
-    let last_file = repo::read(options.out, &layout::root_path(last))?;
-    let expires_at = oncl_update::tuf::Envelope::parse(
-        &last_file,
-        Limits::default().root,
-        &layout::root_path(last),
-    )
-    .and_then(|env| oncl_update::tuf::Root::from_signed(&env.signed))
-    .map_err(|e| anyhow::anyhow!("{}: {e}", layout::root_path(last)))?
-    .expires;
+    // followed with a clock at the start of time (signatures and thresholds are what it
+    // verifies; the expiry of the root in force is the owner's to see).
     let old = check::final_root(
         options.out,
         &anchor,
-        options.now.min(expires_at - Duration::seconds(1)),
+        OffsetDateTime::UNIX_EPOCH + Duration::seconds(1),
     )?;
     let version = old.version + 1;
 
@@ -130,17 +120,15 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
     };
 
     // New keys, in memory.
-    let mut fresh: Vec<(Role, SigningKey, String)> = Vec::new();
+    let mut fresh: Vec<(Role, SigningKey, zeroize::Zeroizing<String>)> = Vec::new();
     for (role, rotate) in rotated {
         if !rotate {
             continue;
         }
         let (key, text) = if role == Role::Timestamp {
-            let (key, line) = keystore::generate_seed()?;
-            (key, line.to_string())
+            keystore::generate_seed()?
         } else {
-            let (key, text) = keystore::generate_encrypted(role, unlock.passphrase()?)?;
-            (key, text.to_string())
+            keystore::generate_encrypted(role, unlock.passphrase()?)?
         };
         fresh.push((role, key, text));
     }
@@ -192,14 +180,18 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
     match verified {
         Ok(r) if r.version == version => {}
         other => {
+            // The new keys go with the root: a retry must not meet them as existing files.
             let _ = fs::remove_file(&path);
+            for (_, _, file) in &new_keys {
+                let _ = fs::remove_file(file);
+            }
             let why = match other {
                 Ok(r) => format!("the chain ends at root {}", r.version),
                 Err(e) => format!("{e:#}"),
             };
             bail!(
-                "the chain of roots does not verify with root {version} (removed; the new key \
-                 files stay): {why}"
+                "the chain of roots does not verify with root {version} (the root and the new key \
+                 files were removed): {why}"
             );
         }
     }

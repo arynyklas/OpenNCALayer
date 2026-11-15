@@ -7,9 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
-use oncl_update::tuf::{
-    Fetcher, Limits, MemoryStore, Role, TufClient, TufError, layout, model::Root,
-};
+use oncl_update::tuf::{Limits, MemoryStore, Role, TufClient, TufError, build};
 use time::{Duration, OffsetDateTime};
 use xtask::tuf::check::{self, Expiry, Options, Outcome, Report, TimestampMode};
 use xtask::tuf::keystore;
@@ -67,7 +65,6 @@ static TEMPLATE: LazyLock<PathBuf> = LazyLock::new(|| {
         keys: &dir.join("keys"),
         out: &dir.join("repo"),
         anchor: &dir.join("anchor/root.json"),
-        spare_root: false,
         now: t0(),
         passphrase: &source,
     })
@@ -443,7 +440,6 @@ fn a_wrong_passphrase_writes_nothing_and_keys_are_not_overwritten() {
             keys,
             out,
             anchor,
-            spare_root: false,
             now: t0(),
             passphrase: &w.pass(),
         })
@@ -458,38 +454,6 @@ fn a_wrong_passphrase_writes_nothing_and_keys_are_not_overwritten() {
         !w.p("keys2").exists() && !w.p("repo2").exists(),
         "nothing was made"
     );
-}
-
-#[test]
-fn a_spare_root_key_can_sign_the_next_root_alone() {
-    let dir = tempfile::tempdir().unwrap();
-    fs::write(dir.path().join("pass.txt"), PASSPHRASE).unwrap();
-    let source = PassphraseSource::File(dir.path().join("pass.txt"));
-    let made = init::init(&init::Options {
-        keys: &dir.path().join("keys"),
-        out: &dir.path().join("repo"),
-        anchor: &dir.path().join("root.json"),
-        spare_root: true,
-        now: t0(),
-        passphrase: &source,
-    })
-    .unwrap();
-    assert_eq!(made.key_ids.len(), 5);
-    // The main root key is lost; the spare signs root 2 and the chain holds.
-    fs::remove_file(dir.path().join("keys/root.key")).unwrap();
-    let rotated = root::root(&root::Options {
-        keys: &dir.path().join("keys"),
-        out: &dir.path().join("repo"),
-        rotate_root: false,
-        rotate_targets: false,
-        rotate_snapshot: false,
-        rotate_timestamp: false,
-        now: t0() + Duration::days(300),
-        passphrase: &source,
-    })
-    .unwrap();
-    assert_eq!(rotated.version, 2);
-    assert_eq!(rotated.expires, t0() + Duration::days(300 + 365));
 }
 
 fn rotation_case(role: Role) {
@@ -603,10 +567,11 @@ fn a_plain_root_is_a_renewal_with_the_same_keys() {
         report.verified.unwrap().root.expires,
         later + Duration::days(365)
     );
-    // A renewal of an expired root works too (that is what it is for).
+    // A renewal of an expired root works too (that is what it is for), and the chain from the
+    // anchor holds with the new root, which is then in force.
     let w = world();
     let expired = t0() + Duration::days(400);
-    root::root(&root::Options {
+    let renewed = root::root(&root::Options {
         keys: &w.keys(),
         out: &w.repo(),
         rotate_root: false,
@@ -617,6 +582,12 @@ fn a_plain_root_is_a_renewal_with_the_same_keys() {
         passphrase: &w.pass(),
     })
     .unwrap();
+    assert_eq!(renewed.version, 2);
+    assert_eq!(renewed.expires, expired + Duration::days(365));
+    let anchor = fs::read(w.anchor()).unwrap();
+    let in_force = check::final_root(&w.repo(), &anchor, expired).unwrap();
+    assert_eq!(in_force.version, 2);
+    assert_eq!(in_force.expires, expired + Duration::days(365));
 }
 
 fn git(dir: &Path, args: &[&str]) {
@@ -773,7 +744,6 @@ fn timestamp_refuses_a_repository_the_client_would_refuse() {
         keys: &other.path().join("keys"),
         out: &other.path().join("repo"),
         anchor: &other.path().join("root.json"),
-        spare_root: false,
         now: t0(),
         passphrase: &PassphraseSource::File(other.path().join("pass.txt")),
     })
@@ -944,16 +914,299 @@ fn the_check_command_has_stable_exit_codes_and_messages() {
     assert!(String::from_utf8_lossy(&no_anchor.stderr).contains("error[anchor-missing]"));
 }
 
+/// Version 2 of the targets and snapshot, signed with the world's keys and made to order:
+/// the expiry of each, and one more target.
+fn craft(
+    w: &World,
+    targets_expires: OffsetDateTime,
+    snapshot_expires: OffsetDateTime,
+    extra: Option<(&str, &[u8])>,
+) {
+    let targets_key = keystore::load_encrypted(&w.keys().join("targets.key"), PASSPHRASE).unwrap();
+    let snapshot_key =
+        keystore::load_encrypted(&w.keys().join("snapshot.key"), PASSPHRASE).unwrap();
+    let stable = fs::read(w.indexes().join("stable.json")).unwrap();
+    let beta = fs::read(w.indexes().join("beta.json")).unwrap();
+    let mut refs: Vec<(&str, &[u8])> = vec![
+        ("indexes/stable.json", &stable),
+        ("indexes/beta.json", &beta),
+    ];
+    refs.extend(extra);
+    let targets = build::sign(
+        &build::targets(2, targets_expires, &refs).unwrap(),
+        &[&targets_key],
+    )
+    .unwrap();
+    let snapshot = build::sign(
+        &build::snapshot(2, snapshot_expires, 2, &targets).unwrap(),
+        &[&snapshot_key],
+    )
+    .unwrap();
+    for (path, content) in build::target_files(&refs).unwrap() {
+        let full = w.repo().join(path);
+        if !full.exists() {
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, content).unwrap();
+        }
+    }
+    fs::write(w.repo().join("metadata/2.targets.json"), targets).unwrap();
+    fs::write(w.repo().join("metadata/2.snapshot.json"), snapshot).unwrap();
+}
+
+/// A world with its own keys whose first targets list only `channels`.
+fn fresh_world(channels: &[&str]) -> World {
+    let dir = tempfile::tempdir().unwrap();
+    let w = World { dir };
+    fs::create_dir_all(w.indexes()).unwrap();
+    fs::write(w.p("pass.txt"), PASSPHRASE).unwrap();
+    for channel in channels {
+        fs::write(
+            w.indexes().join(format!("{channel}.json")),
+            index(channel, 1),
+        )
+        .unwrap();
+    }
+    init::init(&init::Options {
+        keys: &w.keys(),
+        out: &w.repo(),
+        anchor: &w.anchor(),
+        now: t0(),
+        passphrase: &w.pass(),
+    })
+    .unwrap();
+    w.update(t0(), false).unwrap();
+    w
+}
+
 #[test]
-fn a_root_of_the_chain_is_the_one_the_client_embeds() {
-    // The anchor is a valid root file the client reads, and it is version 1.
+fn a_missing_and_a_removed_repository_are_told_apart() {
     let w = world();
-    let bytes = fs::read(w.anchor()).unwrap();
-    let env = oncl_update::tuf::Envelope::parse(&bytes, 1 << 16, "anchor").unwrap();
-    assert_eq!(Root::from_signed(&env.signed).unwrap().version, 1);
-    let fetcher = DirFetcher::new(w.repo());
-    assert!(matches!(
-        fetcher.fetch(&layout::root_path(2), 1 << 16).unwrap(),
-        oncl_update::tuf::Response::NotFound
-    ));
+    // The anchor is there, the directory is not.
+    let report = match check::check(&Options {
+        dir: &w.p("no-such-repository"),
+        index: None,
+        anchor: Some(&w.anchor()),
+        now: t0(),
+        timestamp: TimestampMode::Absent,
+        expiry: Expiry {
+            min_days: 10,
+            min_root_days: 45,
+            fail: false,
+        },
+        base: None,
+    })
+    .unwrap()
+    {
+        Outcome::Checked(report) => report,
+        Outcome::NoRepository => panic!("the anchor is there"),
+    };
+    assert_eq!(codes(&report), ["repository-missing"]);
+
+    // A repository in the base, and now neither it nor the anchor: clients would be left
+    // without updates.
+    git(w.dir.path(), &["init", "-q"]);
+    git(w.dir.path(), &["add", "repo"]);
+    git(w.dir.path(), &["commit", "-q", "-m", "base"]);
+    fs::remove_dir_all(w.repo()).unwrap();
+    let gone = |base| {
+        check::check(&Options {
+            dir: &w.repo(),
+            index: None,
+            anchor: Some(&w.p("no-anchor.json")),
+            now: t0(),
+            timestamp: TimestampMode::Absent,
+            expiry: Expiry {
+                min_days: 10,
+                min_root_days: 45,
+                fail: false,
+            },
+            base,
+        })
+        .unwrap()
+    };
+    match gone(Some("HEAD")) {
+        Outcome::Checked(report) => assert_eq!(codes(&report), ["repository-removed"]),
+        Outcome::NoRepository => panic!("the base has a repository"),
+    }
+    // Without a base that has one, it is only the state before the ceremony.
+    assert!(matches!(gone(None), Outcome::NoRepository));
+}
+
+#[test]
+fn an_anchor_that_is_not_a_root_of_the_repository_and_a_gap_in_the_roots_are_detected() {
+    let w = world();
+    let other = fresh_world(&["stable"]);
+    let report = check::check(&Options {
+        dir: &w.repo(),
+        index: None,
+        anchor: Some(&other.anchor()),
+        now: t0(),
+        timestamp: TimestampMode::Absent,
+        expiry: Expiry {
+            min_days: 10,
+            min_root_days: 45,
+            fail: false,
+        },
+        base: None,
+    })
+    .unwrap();
+    let Outcome::Checked(report) = report else {
+        panic!()
+    };
+    assert!(
+        codes(&report).contains(&"anchor-mismatch"),
+        "{:?}",
+        report.problems
+    );
+
+    root::root(&root::Options {
+        keys: &w.keys(),
+        out: &w.repo(),
+        rotate_root: false,
+        rotate_targets: false,
+        rotate_snapshot: false,
+        rotate_timestamp: false,
+        now: t0() + Duration::days(1),
+        passphrase: &w.pass(),
+    })
+    .unwrap();
+    assert!(w.tree(t0() + Duration::days(1)).problems.is_empty());
+    fs::remove_file(w.repo().join("metadata/1.root.json")).unwrap();
+    let report = w.tree(t0() + Duration::days(1));
+    assert!(
+        codes(&report).contains(&"root-gap"),
+        "{:?}",
+        report.problems
+    );
+}
+
+#[test]
+fn files_without_a_version_an_unlisted_index_and_a_foreign_target_are_detected() {
+    // Files added against the base and no version higher.
+    let w = world();
+    git(w.dir.path(), &["init", "-q"]);
+    git(w.dir.path(), &["add", "repo"]);
+    git(w.dir.path(), &["commit", "-q", "-m", "base"]);
+    fs::write(w.repo().join("notes.txt"), b"x").unwrap();
+    let report = w.check(TimestampMode::Absent, t0(), false, Some("HEAD"));
+    let found = codes(&report);
+    assert!(found.contains(&"no-version-bump"), "{found:?}");
+    assert!(found.contains(&"stray-file"), "{found:?}");
+
+    // An index file the targets do not list.
+    let w = fresh_world(&["stable"]);
+    assert!(w.tree(t0()).problems.is_empty());
+    fs::write(w.indexes().join("beta.json"), index("beta", 1)).unwrap();
+    assert_eq!(codes(&w.tree(t0())), ["index-not-listed"]);
+
+    // A target that is not an index.
+    let w = world();
+    craft(
+        &w,
+        t0() + Duration::days(30),
+        t0() + Duration::days(30),
+        Some(("notes/readme.txt", b"x")),
+    );
+    let found = codes(&w.tree(t0()));
+    assert!(found.contains(&"unexpected-target"), "{found:?}");
+    assert!(found.contains(&"stray-file"), "{found:?}");
+}
+
+#[test]
+fn timestamp_refuses_an_early_clock_and_expiring_root_and_targets() {
+    // The clock is three days before the snapshot was signed.
+    let w = world();
+    let err = w.timestamp(t0() - Duration::days(3)).unwrap_err();
+    assert!(
+        err.to_string().contains("before snapshot 1 was signed"),
+        "{err}"
+    );
+    assert!(!w.repo().join("metadata/timestamp.json").exists());
+
+    // The root has half a day left; the targets and snapshot were just refreshed.
+    let late = t0() + Duration::days(364) + Duration::hours(1);
+    w.update(late, true).unwrap();
+    let err = w.timestamp(late + Duration::hours(11)).unwrap_err();
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("expiring") && text.contains("root 1"),
+        "{text}"
+    );
+    assert!(!text.contains("targets 2"), "{text}");
+    assert!(!w.repo().join("metadata/timestamp.json").exists());
+
+    // Only the targets are about to expire.
+    let w = world();
+    craft(
+        &w,
+        t0() + Duration::hours(12),
+        t0() + Duration::days(30),
+        None,
+    );
+    let err = w.timestamp(t0() + Duration::hours(1)).unwrap_err();
+    let text = format!("{err:#}");
+    assert!(
+        text.contains("expiring") && text.contains("targets 2"),
+        "{text}"
+    );
+    assert!(!text.contains("snapshot 2"), "{text}");
+    assert!(!w.repo().join("metadata/timestamp.json").exists());
+}
+
+#[test]
+fn a_root_that_does_not_verify_takes_the_new_keys_with_it() {
+    let w = world();
+    // A file where root 3 would be: the client follows the chain to it once root 2 is there.
+    fs::write(w.repo().join("metadata/3.root.json"), b"not a root").unwrap();
+    let rotate = || {
+        root::root(&root::Options {
+            keys: &w.keys(),
+            out: &w.repo(),
+            rotate_root: false,
+            rotate_targets: true,
+            rotate_snapshot: false,
+            rotate_timestamp: true,
+            now: t0() + Duration::days(1),
+            passphrase: &w.pass(),
+        })
+    };
+    let err = rotate().unwrap_err();
+    assert!(err.to_string().contains("does not verify"), "{err}");
+    assert!(!w.repo().join("metadata/2.root.json").exists());
+    assert!(!w.keys().join("targets.v2.key").exists());
+    assert!(!w.keys().join("timestamp.v2.key").exists());
+    // The retry does not meet files it made.
+    fs::remove_file(w.repo().join("metadata/3.root.json")).unwrap();
+    let rotated = rotate().unwrap();
+    assert_eq!(rotated.new_keys.len(), 2);
+}
+
+#[test]
+fn new_keys_need_a_long_passphrase() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("pass.txt"), "too short").unwrap();
+    let err = init::init(&init::Options {
+        keys: &dir.path().join("keys"),
+        out: &dir.path().join("repo"),
+        anchor: &dir.path().join("root.json"),
+        now: t0(),
+        passphrase: &PassphraseSource::File(dir.path().join("pass.txt")),
+    })
+    .unwrap_err();
+    assert!(err.to_string().contains("at least 12"), "{err}");
+    assert!(!dir.path().join("keys").exists() && !dir.path().join("repo").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn key_files_are_readable_by_their_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let w = world();
+    for name in ["root.key", "targets.key", "snapshot.key", "timestamp.key"] {
+        let mode = fs::metadata(w.keys().join(name))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "{name}");
+    }
 }

@@ -24,7 +24,8 @@ pub enum TufCommand {
     /// The owner's ceremony: make the root, targets, snapshot and timestamp keys, root
     /// version 1 in the repository, and a copy of it as the client's trust anchor. The
     /// root, targets and snapshot keys are written encrypted with one passphrase (asked
-    /// twice); the timestamp key is one unencrypted line, for the GitHub secret
+    /// twice, at least 12 characters; one passphrase for the three is the owner's choice);
+    /// the timestamp key is one unencrypted line, for the GitHub secret
     /// `TUF_TIMESTAMP_KEY`. Nothing existing is overwritten.
     Init {
         /// The directory of the secret keys: outside the repository, or git-ignored.
@@ -36,10 +37,6 @@ pub enum TufCommand {
         /// The trust anchor file [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
-        /// Also make a second root key (the threshold stays 1), to keep in another safe
-        /// place: either signs the next root.
-        #[arg(long)]
-        spare_root: bool,
         /// The signing time, RFC 3339 or Unix seconds [default: now].
         #[arg(long, value_parser = parse_time)]
         now: Option<OffsetDateTime>,
@@ -207,7 +204,6 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             keys,
             out,
             anchor,
-            spare_root,
             now,
             passphrase_file: file,
         } => {
@@ -218,7 +214,6 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
                 keys: &keys,
                 out: &out,
                 anchor: &anchor,
-                spare_root,
                 now: now_or(now),
                 passphrase: &source,
             })?;
@@ -229,6 +224,13 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             println!("tuf init: secret keys (keep them offline, never in the repository)");
             for file in &made.key_files {
                 println!("  {}", file.display());
+            }
+            if cfg!(windows) {
+                println!(
+                    "tuf init: warning: on Windows the key files get the permissions of their \
+                     folder (no owner-only mode is set): keep the key directory where only you \
+                     can read it, on an encrypted volume"
+                );
             }
             println!("tuf init: wrote {}", made.root.display());
             println!("tuf init: wrote the trust anchor {}", made.anchor.display());

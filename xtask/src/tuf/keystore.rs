@@ -46,9 +46,6 @@ pub fn file_name(role: Role, root_version: Option<u64>) -> String {
     }
 }
 
-/// The file name of the second root key.
-pub const SPARE_ROOT_FILE: &str = "root-spare.key";
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().fold(String::new(), |mut out, b| {
         let _ = write!(out, "{b:02x}");
@@ -57,7 +54,8 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 fn unhex_32(text: &str) -> Option<Zeroizing<[u8; 32]>> {
-    if text.len() != 64 || !text.is_ascii() {
+    // `from_str_radix` also takes a sign: only hex digits are a seed.
+    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let mut out = Zeroizing::new([0u8; 32]);
@@ -67,15 +65,23 @@ fn unhex_32(text: &str) -> Option<Zeroizing<[u8; 32]>> {
     Some(out)
 }
 
+/// The shortest passphrase new keys are encrypted with. The key derivation is minisign's
+/// fixed, light scrypt: the length of the passphrase is what protects a stolen key file.
+pub const MIN_PASSPHRASE_CHARS: usize = 12;
+
 /// A new encrypted key: the signing key and the text of its file.
 ///
 /// # Errors
 ///
-/// If the key cannot be generated or encrypted.
+/// If the passphrase is shorter than [`MIN_PASSPHRASE_CHARS`], or the key cannot be
+/// generated or encrypted.
 pub fn generate_encrypted(
     role: Role,
     passphrase: &str,
 ) -> anyhow::Result<(SigningKey, Zeroizing<String>)> {
+    if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
+        bail!("the passphrase of new keys must have at least {MIN_PASSPHRASE_CHARS} characters");
+    }
     let pair = KeyPair::generate_encrypted_keypair(Some(passphrase.to_owned()))
         .context("generating the key")?;
     // The comment is not part of what the passphrase protects, so the box is made twice: to
@@ -135,7 +141,8 @@ pub fn generate_seed() -> anyhow::Result<(SigningKey, Zeroizing<String>)> {
     let mut seed = Zeroizing::new([0u8; 32]);
     getrandom::fill(&mut seed[..]).map_err(|e| anyhow::anyhow!("the random generator: {e}"))?;
     let key = SigningKey::from_seed(&seed).map_err(|e| anyhow::anyhow!("{e}"))?;
-    let line = Zeroizing::new(format!("{SEED_PREFIX}{}\n", hex(&seed[..])));
+    let digits = Zeroizing::new(hex(&seed[..]));
+    let line = Zeroizing::new(format!("{SEED_PREFIX}{}\n", digits.as_str()));
     Ok((key, line))
 }
 
@@ -254,7 +261,7 @@ pub fn find_keys(
         .collect();
     paths.sort();
     for path in paths {
-        let Ok(text) = fs::read_to_string(&path) else {
+        let Ok(text) = fs::read_to_string(&path).map(Zeroizing::new) else {
             continue;
         };
         let key = if role == Role::Timestamp && text.trim_start().starts_with(SEED_PREFIX) {
@@ -298,6 +305,14 @@ pub fn find_keys(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_passphrase_makes_no_key_and_a_seed_has_only_hex_digits() {
+        assert!(generate_encrypted(Role::Root, "eleven char").is_err());
+        let signed = format!("{SEED_PREFIX}+{}", "a".repeat(63));
+        assert!(parse_seed(&signed).is_err());
+        assert!(parse_seed(&format!("{SEED_PREFIX}{}", "A".repeat(64))).is_ok());
+    }
 
     #[test]
     fn an_encrypted_key_round_trips_and_a_wrong_passphrase_fails() {

@@ -22,8 +22,6 @@ pub struct Options<'a> {
     pub out: &'a Path,
     /// The trust anchor file the client embeds.
     pub anchor: &'a Path,
-    /// A second root key (threshold stays 1), for a safe place.
-    pub spare_root: bool,
     /// The signing time.
     pub now: time::OffsetDateTime,
     /// Where the passphrase of the encrypted keys comes from (asked twice when prompted).
@@ -33,7 +31,7 @@ pub struct Options<'a> {
 /// What [`init`] made.
 #[derive(Debug)]
 pub struct Initialized {
-    /// The key ids, by what they are for: `root`, `root-spare`, `targets`, `snapshot`,
+    /// The key ids, by what they are for: `root`, `targets`, `snapshot`,
     /// `timestamp`.
     pub key_ids: Vec<(&'static str, KeyId)>,
     /// The secret key files.
@@ -51,15 +49,12 @@ pub struct Initialized {
 /// If any file to write exists already, a key file would be committable, or writing fails.
 pub fn init(options: &Options) -> anyhow::Result<Initialized> {
     // Everything that may refuse comes before anything is made or written.
-    let mut names: Vec<(&'static str, String)> = vec![
+    let names: Vec<(&'static str, String)> = vec![
         ("root", keystore::file_name(Role::Root, None)),
         ("targets", keystore::file_name(Role::Targets, None)),
         ("snapshot", keystore::file_name(Role::Snapshot, None)),
         ("timestamp", keystore::file_name(Role::Timestamp, None)),
     ];
-    if options.spare_root {
-        names.push(("root-spare", keystore::SPARE_ROOT_FILE.to_owned()));
-    }
     for (_, name) in &names {
         keystore::key_path(options.keys, name)?;
     }
@@ -78,18 +73,9 @@ pub fn init(options: &Options) -> anyhow::Result<Initialized> {
     let (targets_key, targets_text) = keystore::generate_encrypted(Role::Targets, &passphrase)?;
     let (snapshot_key, snapshot_text) = keystore::generate_encrypted(Role::Snapshot, &passphrase)?;
     let (timestamp_key, timestamp_line) = keystore::generate_seed()?;
-    let spare = options
-        .spare_root
-        .then(|| keystore::generate_encrypted(Role::Root, &passphrase))
-        .transpose()?;
-
-    let mut root_keys = vec![root_key.public()];
-    if let Some((spare_key, _)) = &spare {
-        root_keys.push(spare_key.public());
-    }
     let def = RootDef {
         root: RoleDef {
-            keys: root_keys,
+            keys: vec![root_key.public()],
             threshold: 1,
         },
         timestamp: RoleDef {
@@ -119,7 +105,7 @@ pub fn init(options: &Options) -> anyhow::Result<Initialized> {
     .map_err(|e| anyhow::anyhow!("the root just made is not usable as an anchor: {e}"))?;
 
     let mut key_files = Vec::new();
-    let mut key_ids = vec![
+    let key_ids = vec![
         ("root", root_key.key_id()),
         ("targets", targets_key.key_id()),
         ("snapshot", snapshot_key.key_id()),
@@ -145,14 +131,6 @@ pub fn init(options: &Options) -> anyhow::Result<Initialized> {
         &names[3].1,
         &timestamp_line,
     )?);
-    if let Some((spare_key, spare_text)) = &spare {
-        key_files.push(keystore::write_key_file(
-            options.keys,
-            keystore::SPARE_ROOT_FILE,
-            spare_text,
-        )?);
-        key_ids.insert(1, ("root-spare", spare_key.key_id()));
-    }
 
     let root = repo::write_new(options.out, &root_path, &file)
         .context("the keys are written; the repository is not")?;
