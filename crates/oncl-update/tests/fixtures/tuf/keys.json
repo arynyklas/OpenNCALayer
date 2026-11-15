@@ -1,0 +1,61 @@
+{
+  "seed_prefix": "oncl-tuf-oracle-v1/",
+  "note": "SYNTHETIC test keys. seed = sha256(seed_prefix + name); Ed25519 private key from the 32-byte seed.",
+  "keys": {
+    "root-a": {
+      "seed_hex": "f461c83864ca83f4991a55d141dc66250fae2a2f07e85205abf7faae399002d8",
+      "public_hex": "cfaa5e2e8b3abd5237aeada9643aa498811ca413bfed7711e6761b3654a6d973",
+      "keyid": "ef44ca6055ac74925e4155dca516c99a2e0d1dc526a4e38d056df766f91b9282"
+    },
+    "root-b": {
+      "seed_hex": "bc6fd1e0d0b49f301fe5a6100e976c668d5d24ca1b8925d3af1f04c62e465b67",
+      "public_hex": "a9db5955c93adecf4ff734a66a9e58b90e4dddb5182a719945678a6d8aa9b342",
+      "keyid": "905761cda5822d2c1e11928375afcf8f86ac7603e071dee14340b5734fae9795"
+    },
+    "targets": {
+      "seed_hex": "6f476a8f16b94edb3c4e07ef0c679b2f0857e3e123f4a0bdec8606771d0efc8b",
+      "public_hex": "be43908bc8de609a04c1cb68cf8809d7f4642e98d8d356f9f5020fc3839d15e2",
+      "keyid": "5d7f9b92a07febc3f3740f556219d58b3d0410c89719ddff4a2dd19232cfc146"
+    },
+    "snapshot": {
+      "seed_hex": "2191f7533d9c556651632671fb6efc0fd366010ebdfb726010f384d4207c52c9",
+      "public_hex": "44efef77e0d8001f6c221b981bd0e571d8a8f9a8f523ef85390aadd8e4acc142",
+      "keyid": "9acc66b6286cb1bec6c965d216eba52e4267632df8889973701de2d5da499964"
+    },
+    "timestamp-1": {
+      "seed_hex": "a55b1258f96d6ce3c851954468887464acb9f7e6c2da1c321cc8b6965b78feb1",
+      "public_hex": "6d8bcd708cb8e9c83bf3728fdfedeeed6893738947102bbaacdfb5bb107b5728",
+      "keyid": "5670a746ed489ac911a611e5605d2fd3ad848baf93baac565ef26dce996a642d"
+    },
+    "timestamp-2": {
+      "seed_hex": "1a72d6929ce5ff86a82b2b97634f89023a0ae8e2632f548f5887de81547c0386",
+      "public_hex": "725ac05cd1ff31946a7cb443e0838a9d34d19e08d61b78ea90ceefe480b8daf9",
+      "keyid": "e837e8b183c59a2b7ebcd3173500127f0c1ef57d5d590e0673c8190dd9536976"
+    }
+  },
+  "roles": {
+    "root-v1": {
+      "root": "root-a",
+      "targets": "targets",
+      "snapshot": "snapshot",
+      "timestamp": "timestamp-1"
+    },
+    "root-v2": {
+      "root": "root-a",
+      "targets": "targets",
+      "snapshot": "snapshot",
+      "timestamp": "timestamp-2"
+    },
+    "root-v3": {
+      "root": "root-b",
+      "targets": "targets",
+      "snapshot": "snapshot",
+      "timestamp": "timestamp-2"
+    }
+  },
+  "times": {
+    "signed_at": "2026-11-15T00:00:00Z",
+    "now": "2026-11-16T00:00:00Z",
+    "timestamp_version": 1794700800
+  }
+}
