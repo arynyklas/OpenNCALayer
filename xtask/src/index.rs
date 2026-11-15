@@ -956,7 +956,7 @@ fn base_index(dir: &Path, rev: &str, channel: Channel) -> anyhow::Result<Option<
 /// was published yet), where git runs, and the path from it down to `dir` (`a/b/`, empty
 /// for `dir` itself). A relative `dir` is taken from the current directory, so
 /// `updates/v1` without `updates/` resolves to the current directory, not to `""`.
-fn existing_ancestor(dir: &Path) -> anyhow::Result<(PathBuf, String)> {
+pub(crate) fn existing_ancestor(dir: &Path) -> anyhow::Result<(PathBuf, String)> {
     let dir = std::path::absolute(dir).with_context(|| format!("resolving {}", dir.display()))?;
     let repo = dir
         .ancestors()
@@ -970,7 +970,7 @@ fn existing_ancestor(dir: &Path) -> anyhow::Result<(PathBuf, String)> {
     Ok((repo.to_owned(), below))
 }
 
-fn git(dir: &Path, args: &[&str]) -> anyhow::Result<Output> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> anyhow::Result<Output> {
     Command::new("git")
         .arg("-C")
         .arg(dir)

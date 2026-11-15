@@ -126,6 +126,12 @@ enum Command {
         #[command(subcommand)]
         command: PackageCommand,
     },
+    /// The TUF repository that authenticates the update indexes (`tuf/v1`): keys, targets and
+    /// snapshot, the timestamp, roots, offline and published checks.
+    Tuf {
+        #[command(subcommand)]
+        command: xtask::tuf::cli::TufCommand,
+    },
     /// Update index tasks (`updates/v1/<channel>.json`).
     Index {
         #[command(subcommand)]
@@ -1201,6 +1207,7 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Upstream { command } => xtask::upstream::cli::run(command),
+        Command::Tuf { command } => xtask::tuf::cli::run(command),
         Command::Winget { command } => xtask::winget::cli::run(command),
         Command::Win7 {
             arch,

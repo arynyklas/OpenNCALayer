@@ -263,7 +263,7 @@ fn plain(path: PathBuf) -> PathBuf {
 
 /// Writes a file that must not exist yet; `private` makes it readable by its owner only
 /// (on Unix).
-fn write_new(path: &Path, bytes: &[u8], private: bool) -> anyhow::Result<()> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8], private: bool) -> anyhow::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
