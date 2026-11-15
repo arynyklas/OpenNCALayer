@@ -137,6 +137,38 @@ impl KeyUseGuard for ConsentGuard {
     }
 }
 
+/// Creates `spool` (and the directories above it) if it is missing, owner-only on Unix, and
+/// makes an existing one owner-only.
+///
+/// The temporary store refuses a parent that group or others may write to unless it is sticky
+/// (`oncl_pki::io`): the spool is the parent of every store that is made in it. A directory
+/// made with the process's umask is `0775` under the default umask of Ubuntu and Fedora
+/// (`0002`), and the daemon then failed to start with "temporary parent permits foreign name
+/// replacement". An existing spool of an earlier run is repaired the same way; one that this
+/// user does not own is left as it is, and the store refuses it.
+fn prepare_spool(spool: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(spool)?;
+        // `symlink_metadata`: a link is not followed, so a link to another directory of this
+        // user does not have its mode changed.
+        let metadata = std::fs::symlink_metadata(spool)?;
+        if metadata.is_dir() && metadata.permissions().mode() & 0o777 != 0o700 {
+            // Not the owner: the store refuses the directory, as it did.
+            let _ = std::fs::set_permissions(spool, std::fs::Permissions::from_mode(0o700));
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(spool)
+    }
+}
+
 /// The engine of the desktop's tools and signing: hashing and inspecting need nothing, signing
 /// needs the key sources, the guard, the validation of the certificate and a place for frozen
 /// documents. `spool` is a directory this program owns.
@@ -147,7 +179,7 @@ pub fn desktop_engine(
     spool: &Path,
     clock: Arc<dyn Fn() -> OffsetDateTime + Send + Sync>,
 ) -> Result<(Engine, Arc<ConsentGuard>), OperationError> {
-    std::fs::create_dir_all(spool).map_err(oncl_pki::resource::ProcessingError::from)?;
+    prepare_spool(spool).map_err(oncl_pki::resource::ProcessingError::from)?;
     // Only the process that holds the spool's owner lock may clean it: a live spool of another
     // process on the same data directory is never touched.
     let spool_lock = claim_spool(spool);
@@ -742,6 +774,41 @@ mod tests {
 
     fn store_name(n: u8) -> String {
         format!("oncl-{n:032x}")
+    }
+
+    /// The temporary store refuses a parent that group may write to, and a directory made under
+    /// the default umask of Ubuntu and Fedora (`0002`) is `0775`: the daemon did not start there.
+    /// A new spool is made owner-only whatever the umask, an old group-writable one (made by an
+    /// earlier version) is repaired, and a store can be made in both.
+    #[cfg(unix)]
+    #[test]
+    fn the_spool_is_owner_only_and_a_group_writable_one_is_repaired() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = tempfile::tempdir().unwrap();
+
+        let fresh = dir.path().join("a").join("spool");
+        prepare_spool(&fresh).unwrap();
+        assert_eq!(mode(&fresh), 0o700);
+        TemporaryStore::new(&fresh).expect("a store can be made in a new spool");
+
+        // What `create_dir_all` made under `umask 002`, whatever the umask of this process.
+        let old = dir.path().join("old-spool");
+        std::fs::create_dir(&old).unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o775)).unwrap();
+        assert!(
+            TemporaryStore::new(&old).is_err(),
+            "the store refuses a group-writable parent: this is what made the daemon exit"
+        );
+        prepare_spool(&old).unwrap();
+        assert_eq!(mode(&old), 0o700);
+        TemporaryStore::new(&old).expect("a store can be made in the repaired spool");
+
+        // A spool that is already right is left as it is, with what is in it.
+        std::fs::write(old.join("keep"), b"x").unwrap();
+        prepare_spool(&old).unwrap();
+        assert_eq!(mode(&old), 0o700);
+        assert!(old.join("keep").exists());
     }
 
     /// Only the temporary store's own names are removed from the spool; anything else stays.
