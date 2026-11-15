@@ -17,6 +17,8 @@ minisign-verify.workspace = true
 # `fsutil` (the state file, written atomically) and the `HttpTransport` the index is fetched
 # through.
 oncl-pki.workspace = true
+# Ed25519 for the TUF verifier (`tuf::ed25519`); `oncl-pki` already has it.
+ring.workspace = true
 semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,11 +31,16 @@ zip.workspace = true
 [build-dependencies]
 # The key files are decoded at build time: a malformed one fails the build.
 minisign-verify.workspace = true
+# `keys/root.json` is checked at build time with the code of `src/tuf` that reads a root
+# (`canonical`, `keys`, `model`, which need no signature algorithm).
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["parsing"] }
 
 [dev-dependencies]
 base64.workspace = true
 minisign.workspace = true
-# A minisign signature in the legacy (not prehashed) mode, which `minisign` cannot make.
-ring.workspace = true
 tempfile.workspace = true
 time = { workspace = true, features = ["macros"] }

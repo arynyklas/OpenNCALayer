@@ -1,0 +1,50 @@
+//! TUF (The Update Framework, specification 1.0.37) as OpenNCALayer uses it: a verifier for
+//! the client and a builder for the tools that publish.
+//!
+//! The update indexes (`updates/v1/<channel>.json`, [`crate::index`]) are the *targets* of a
+//! TUF repository, under the target paths `indexes/stable.json` and `indexes/beta.json`;
+//! everything here is the authentication around them, and nothing in this module reads an
+//! index. The subset implemented, anything else is refused:
+//!
+//! - roles `root`, `timestamp`, `snapshot` and top-level `targets`; no delegations, no
+//!   mirrors, no path hash prefixes;
+//! - Ed25519 keys and signatures only, sha256 only ([`keys`], [`ed25519`]);
+//! - consistent snapshots are required ([`layout`]);
+//! - signatures over the OLPC canonical JSON of the `signed` value, whatever it holds
+//!   ([`canonical`]).
+//!
+//! The layers:
+//!
+//! - [`canonical`], [`keys`], [`model`], [`ed25519`], [`layout`]: bytes in, verdicts out; no
+//!   network, no disk, no clock. `build.rs` compiles [`canonical`], [`keys`] and [`model`]
+//!   to check the embedded root.
+//! - [`client`]: [`TufClient`] runs the specification's client workflow over a [`Fetcher`]
+//!   ([`HttpFetcher`], [`MemoryFetcher`]) and a [`Store`] ([`FileStore`], [`MemoryStore`]).
+//! - [`build`]: makes the metadata and signs it, with the same code.
+//!
+//! None of this is used until a root is built in (`keys/root.json`,
+//! [`crate::embedded_root`]); without one there is nothing to trust and the updater is off.
+
+pub mod build;
+pub mod canonical;
+pub mod client;
+pub mod ed25519;
+mod error;
+pub mod fetch;
+pub mod keys;
+pub mod layout;
+pub mod model;
+pub mod store;
+
+pub use client::{Limits, Trusted, TufClient};
+pub use ed25519::SigningKey;
+pub use error::{Role, TufError};
+pub use fetch::{Fetcher, HttpFetcher, MemoryFetcher, Response};
+pub use keys::{KeyId, PublicKey};
+pub use model::{
+    Digest, Envelope, MetaFile, RoleKeys, Root, Signature, Snapshot, Target, Targets, Timestamp,
+};
+pub use store::{AcceptedTarget, FileStore, MemoryStore, Store, TrustState};
+
+#[cfg(test)]
+mod tests;
