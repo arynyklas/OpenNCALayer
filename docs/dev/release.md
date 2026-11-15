@@ -279,7 +279,7 @@ cargo xtask index check updates/v1 --base origin/main
 
    Правило репозитория: окружение `tuf-timestamp` пускает **только `main`**, а секрет `TUF_TIMESTAMP_KEY` существует **только в нём** (`gh secret list` без `--env` его не показывает; если такой секрет есть среди секретов репозитория, его удаляют: `gh secret delete TUF_TIMESTAMP_KEY`). Требований к проверяющим у окружения нет: job подписывает по расписанию без человека.
 
-3. Закоммитить `tuf/v1/metadata/1.root.json` и `crates/oncl-update/keys/root.json` вместе с первым `cargo xtask tuf update` (шаг 2а раздела 4) в PR выпуска rc.2 и слить. Первая публикация Pages подпишет timestamp, а ежедневная повторяет это.
+3. Закоммитить `tuf/v1/metadata/1.root.json` и `crates/oncl-update/keys/root.json` вместе с первым `cargo xtask tuf update` (шаг 2а раздела 4) в ближайший PR индекса и слить **до тега rc.2**: сборка тега встраивает якорь из своего дерева, и без него rc.2 не обновляется. Первая публикация Pages подпишет timestamp, а ежедневная повторяет это.
 4. Проверить: после деплоя job `verify` workflow Pages зелёный, а `https://arynyklas.github.io/OpenNCALayer/tuf/v1/metadata/timestamp.json` отдаёт файл.
 
 До церемонии (нет `tuf/v1` и якоря) всё работает как раньше: `tuf check` пишет «no TUF repository yet» и проходит, Pages не публикует `/tuf/`, job `timestamp` ничего не делает. **После** церемонии пустой или отсутствующий секрет — ошибка: запуск Pages красный, ничего не деплоится (старый сайт с ещё действующим timestamp продолжает отдаваться до 7 дней). «Без timestamp» допустимо только пока нет `tuf/v1` (и в форках, где job `timestamp` не запускается: `github.repository` должен быть `arynyklas/OpenNCALayer`).
