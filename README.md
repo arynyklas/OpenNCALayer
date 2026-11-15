@@ -4,6 +4,8 @@ OpenNCALayer — открытая замена NCALayer на Rust. Сайты (e
 
 OpenNCALayer — независимый проект и не связан с НУЦ РК.
 
+Чат проекта в Telegram: [t.me/OpenNCALayer](https://t.me/OpenNCALayer) — вопросы по установке и работе, обсуждение. Об ошибках лучше сообщать в [Issues](https://github.com/arynyklas/OpenNCALayer/issues), чтобы они не потерялись.
+
 ## Статус
 
 Ранняя разработка. Выпускаются предварительные версии `0.1.0-alpha.N` ([Releases](https://github.com/arynyklas/OpenNCALayer/releases)); stable-релиза пока нет. Что надёжно и что нет:

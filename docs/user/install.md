@@ -61,3 +61,7 @@ DLL экспортируют только эти функции и обраща�
 - [«История оригинала»](https://arynyklas.github.io/OpenNCALayer/upstream/) — версии бандлов оригинального NCALayer и их изменения по данным наблюдателя.
 
 Данные сайта — `plugins/*/plugin.toml` и `registry.toml`, индексы обновлений `updates/v1/`, список релизов и ветка `upstream`. Сайт публикуется на GitHub Pages тем же workflow, что и индексы обновлений, индексы при этом не меняются ни на байт ([`docs/dev/release.md`](../dev/release.md), раздел 7в).
+
+## Вопросы и ошибки
+
+Вопросы по установке и работе — в чате проекта в Telegram: [t.me/OpenNCALayer](https://t.me/OpenNCALayer). Об ошибках сообщайте в [Issues](https://github.com/arynyklas/OpenNCALayer/issues): приложите версию программы (окно «О программе»), систему и журнал, не прикладывая ключи, пароли и документы. Ссылка на чат есть и в окне «О программе».
