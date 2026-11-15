@@ -855,8 +855,8 @@ impl UreqTransport {
     }
 }
 
-/// The reply of a `ureq` response, with at most `max_len` bytes of body, and its
-/// `Location`.
+/// The reply of a `ureq` response, with at most `max_len` bytes of body (a body of exactly
+/// `max_len` bytes is fine), and its `Location`.
 fn reply(
     response: Result<ureq::http::Response<ureq::Body>, ureq::Error>,
     max_len: u64,
@@ -872,12 +872,21 @@ fn reply(
     };
     let content_type = header(ureq::http::header::CONTENT_TYPE);
     let location = header(ureq::http::header::LOCATION);
+    // `ureq` 3.5.0 and 3.5.1 fail a body of exactly `limit` bytes: their limit reader refuses
+    // the final read, the one that returns EOF, once nothing is left to read. Read one byte
+    // past the limit and enforce `max_len` here, so the exact size is accepted and one byte
+    // more is refused, whatever the version of `ureq`.
     let body = response
         .body_mut()
         .with_config()
-        .limit(max_len)
+        .limit(max_len.saturating_add(1))
         .read_to_vec()
         .map_err(http_error)?;
+    if body.len() as u64 > max_len {
+        return Err(HttpError::other(format!(
+            "the response body is larger than request limit: {max_len}"
+        )));
+    }
     let reply = HttpReply {
         status: response.status().as_u16(),
         content_type,
@@ -1640,6 +1649,33 @@ mod tests {
         assert_eq!(heads.join().unwrap().len(), 2);
     }
 
+    /// A body of exactly `max_len` bytes is read; one byte more is refused. `ureq` 3.5.0 and
+    /// 3.5.1 failed the exact size (their limit reader refuses the read that returns EOF), which
+    /// made every package download of the updater fail: the updater asks for exactly the size
+    /// of the package in the index.
+    #[test]
+    fn a_body_of_exactly_max_len_is_read_and_one_byte_more_is_refused() {
+        // 70 000 is past the 8 KiB reads of the scoped reader and of `ureq` itself.
+        for len in [1usize, 4096, 70_000] {
+            let exact = GetOptions {
+                max_len: len as u64,
+                ..GetOptions::default()
+            };
+            let reply = direct().get_with(&serve_once(body_of(len)), exact).unwrap();
+            assert_eq!(reply.status, 200);
+            assert_eq!(reply.body.len(), len, "a body of exactly max_len = {len}");
+
+            let error = direct()
+                .get_with(&serve_once(body_of(len + 1)), exact)
+                .unwrap_err();
+            assert!(
+                error.message.contains("larger than request limit"),
+                "max_len = {len}: {}",
+                error.message
+            );
+        }
+    }
+
     #[test]
     fn locations_are_resolved_against_the_request() {
         let base = "https://h:8443/a/b/c?q=1";
@@ -2297,7 +2333,13 @@ fn read_scoped_reply<'a>(
     let location = header(ureq::http::header::LOCATION);
     let status = response.status().as_u16();
     let mut body = Vec::new();
-    let mut reader = response.body_mut().with_config().limit(max_len).reader();
+    // One byte more than `max_len`, for the reason given in `reply`: `append` refuses what is
+    // past `max_len`.
+    let mut reader = response
+        .body_mut()
+        .with_config()
+        .limit(max_len.saturating_add(1))
+        .reader();
     let mut chunk = [0u8; 8192];
     loop {
         resources.checkpoint()?;
