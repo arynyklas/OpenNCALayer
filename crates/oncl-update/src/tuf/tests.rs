@@ -2076,3 +2076,44 @@ fn the_state_limit_is_the_same_for_reading_and_writing_and_a_file_at_it_is_not_t
         assert_eq!(e.contains("larger than"), larger, "{len}: {e}");
     }
 }
+
+#[test]
+fn having_seen_the_repository_survives_a_rotation_and_a_reset() {
+    let (k1, k2) = (keys(1), keys(11));
+    let (anchor, dir, repo) = refreshed(&k1);
+    let flag = || Files::in_data_dir(dir.path()).load().unwrap();
+    assert!(flag().ever_published);
+    // Every key rotates: the saved timestamp is forgotten, the fact that there was one is not.
+    rotate(&repo, 2, &k1, &k2);
+    let mut c = TufClient::new(
+        &anchor,
+        &repo,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(c.refresh(T0).is_err());
+    let saved = flag();
+    assert!(saved.timestamp.is_none() && saved.ever_published);
+    // A state that did not hold is reset, and then it is not known that nothing was seen.
+    let store = Files::in_data_dir(dir.path());
+    std::fs::write(store.path(), b"nope").unwrap();
+    let none = MemoryFetcher::new();
+    let mut c = TufClient::new(
+        &anchor,
+        &none,
+        Files::in_data_dir(dir.path()),
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(c.refresh(T0).is_err());
+    assert!(c.last_reset().is_some() && flag().ever_published);
+    // A state saved before the flag existed reads as never published.
+    let mut old = flag();
+    old.ever_published = false;
+    assert!(
+        !serde_json::to_string(&old)
+            .unwrap()
+            .contains("ever_published")
+    );
+}

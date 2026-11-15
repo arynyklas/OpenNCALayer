@@ -39,10 +39,6 @@ pub use state::{PendingHealth, State};
 
 use tuf::TufError;
 
-/// What [`TufError::TooLarge`] says of the saved state: a state that cannot be written is
-/// tried again, a file of the repository that is too large is refused.
-const STATE: &str = "the TUF state";
-
 /// Why an index or a package is refused, or the repository that holds the index.
 #[derive(Debug, thiserror::Error)]
 pub enum UpdateError {
@@ -121,9 +117,6 @@ impl UpdateError {
     /// expired or rolled-back role, a signature, a hash, a length) stays refused until the
     /// next ordinary check, and a channel not published is not tried again soon either.
     pub fn retry_soon(&self) -> bool {
-        if let UpdateError::Tuf(TufError::TooLarge { what, .. }) = self {
-            return what == STATE;
-        }
         matches!(
             self,
             UpdateError::Io(_)
@@ -131,6 +124,7 @@ impl UpdateError {
                     TufError::Fetch(_)
                         | TufError::NotFound(_)
                         | TufError::Store(_)
+                        | TufError::StateTooLarge(_)
                         | TufError::RootChainTooLong(_)
                 )
         )
@@ -166,10 +160,7 @@ mod tests {
         assert!(retry(TufError::Store(std::io::Error::other("disk"))));
         assert!(retry(TufError::RootChainTooLong(128)));
         // A state too large to be written is tried again; a file of the repository is refused.
-        assert!(retry(TufError::TooLarge {
-            what: "the TUF state".into(),
-            limit: 1
-        }));
+        assert!(retry(TufError::StateTooLarge(1)));
         assert!(!retry(TufError::TooLarge {
             what: "snapshot".into(),
             limit: 1

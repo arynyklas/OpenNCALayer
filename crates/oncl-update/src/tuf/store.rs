@@ -57,6 +57,16 @@ pub struct TrustState {
     /// chain of roots.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets_file: Option<Envelope>,
+    /// The client has accepted a timestamp of this repository at least once. Never cleared by
+    /// a rotation of keys or by dropping the saved versions (a reset of a state that did
+    /// not hold sets it: nothing can be known then), so that a 404 for the timestamp is "not
+    /// published" only for a client that never saw the repository. Absent means false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ever_published: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -133,6 +143,7 @@ impl TrustState {
             snapshot,
             targets,
             targets_file,
+            ever_published: disk.ever_published || mine.ever_published,
         }
     }
 }
@@ -163,7 +174,7 @@ pub trait Store {
     ///
     /// # Errors
     ///
-    /// [`TufError::Store`] if it cannot be written; [`TufError::TooLarge`] if the state is
+    /// [`TufError::Store`] if it cannot be written; [`TufError::StateTooLarge`] if the state is
     /// larger than [`MAX_STATE_LEN`].
     fn save(&mut self, state: &TrustState) -> Result<TrustState, TufError>;
 
@@ -299,10 +310,7 @@ impl FileStore {
         let mut body = serde_json::to_vec_pretty(&file).map_err(io::Error::other)?;
         body.push(b'\n');
         if body.len() as u64 > MAX_STATE_LEN {
-            return Err(TufError::TooLarge {
-                what: "the TUF state".to_owned(),
-                limit: MAX_STATE_LEN,
-            });
+            return Err(TufError::StateTooLarge(MAX_STATE_LEN));
         }
         write_atomically(&self.path(), &body, Access::Default)?;
         Ok(())
@@ -379,6 +387,7 @@ mod tests {
             snapshot: Some(snap(7)),
             targets: Some(3),
             targets_file: None,
+            ever_published: false,
         }
     }
 
@@ -460,14 +469,11 @@ mod tests {
         big.root_version = 40_000;
         assert!(matches!(
             store.save(&big),
-            Err(TufError::TooLarge {
-                limit: MAX_STATE_LEN,
-                ..
-            })
+            Err(TufError::StateTooLarge(MAX_STATE_LEN))
         ));
         assert!(matches!(
             store.overwrite(&big),
-            Err(TufError::TooLarge { .. })
+            Err(TufError::StateTooLarge(_))
         ));
         assert_eq!(store.load().unwrap(), state());
         // Too large to read: not read at all, an invalid state.
@@ -492,6 +498,7 @@ mod tests {
             snapshot: Some(snap(1)),
             targets: Some(1),
             targets_file: None,
+            ever_published: false,
         };
         assert_eq!(s.save(&older).unwrap(), state());
         // An older root with higher versions of its own: the root stays, the versions of the
@@ -504,6 +511,7 @@ mod tests {
             snapshot: None,
             targets: None,
             targets_file: None,
+            ever_published: false,
         };
         let merged = s.save(&stale_root).unwrap();
         assert_eq!(merged.root_version, 3);
@@ -521,6 +529,7 @@ mod tests {
             snapshot: None,
             targets: None,
             targets_file: None,
+            ever_published: false,
         };
         let merged = s.save(&rotated).unwrap();
         assert_eq!((merged.root_version, merged.keys_epoch), (4, 4));

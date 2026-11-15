@@ -167,6 +167,10 @@ impl Repository {
             Err(UpdateError::NotPublished(_)) => {
                 info!(%channel, "the update repository has no index of the channel yet");
             }
+            // A published repository that lost a file: refused, though tried again soon.
+            Err(e @ UpdateError::Tuf(TufError::NotFound(_))) => {
+                warn!(error = %e, %channel, "the update repository lost a file; trying again later");
+            }
             Err(e) if e.retry_soon() => {
                 info!(error = %e, %channel, "cannot read the update repository; trying again later");
             }
@@ -211,11 +215,15 @@ impl Repository {
             .offline
             .store()
             .load()
-            .map(|state| state.timestamp.is_none())
+            .map(|state| !state.ever_published)
             .unwrap_or(false);
         let of_channel = |e| UpdateError::from_tuf(e, channel);
         let trusted = client.refresh(now).map_err(|e| match e {
-            TufError::NotFound(path) if never_published && path == layout::TIMESTAMP_PATH => {
+            TufError::NotFound(path)
+                if never_published
+                    && client.last_reset().is_none()
+                    && path == layout::TIMESTAMP_PATH =>
+            {
                 UpdateError::NotPublished(channel)
             }
             e => of_channel(e),

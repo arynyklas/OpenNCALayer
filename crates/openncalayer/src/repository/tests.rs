@@ -384,15 +384,23 @@ fn a_caller_waiting_for_another_check_keeps_to_its_own_deadline() {
     );
     server.publish(&transport, Channel::Stable, &index(Channel::Stable, 1));
     let r = Arc::new(repository(&server, dir.path(), &transport));
-    // While the first check is at its first request, a second one, with 300 ms, asks.
+    // While the first check is at its first request, a second one, with 300 ms, asks from
+    // another thread; the first waits for its answer for up to 10 s, which is a failure.
     let (r2, outcome) = (Arc::clone(&r), Arc::new(Mutex::new(None)));
     let o = Arc::clone(&outcome);
     transport.during(&refresh_url(), move || {
-        let started = std::time::Instant::now();
-        let e = r2
-            .index(Channel::Stable, None, Duration::from_millis(300))
-            .unwrap_err();
-        *o.lock().unwrap() = Some((e, started.elapsed()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let e = r2
+                .index(Channel::Stable, None, Duration::from_millis(300))
+                .unwrap_err();
+            let _ = tx.send((e, started.elapsed()));
+        });
+        let got = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second call did not return within its own deadline");
+        *o.lock().unwrap() = Some(got);
     });
     r.index(Channel::Stable, None, TIMEOUT).unwrap();
     let (e, waited) = outcome.lock().unwrap().take().unwrap();
@@ -404,6 +412,31 @@ fn a_caller_waiting_for_another_check_keeps_to_its_own_deadline() {
         waited >= Duration::from_millis(300) && waited < Duration::from_secs(5),
         "{waited:?}"
     );
+}
+
+#[test]
+fn a_404_for_the_timestamp_after_a_reset_of_the_state_is_still_a_refusal() {
+    let (server, transport, dir) = (
+        Server::new(),
+        Arc::new(FakeTransport::default()),
+        tempfile::tempdir().unwrap(),
+    );
+    server.publish(&transport, Channel::Stable, &index(Channel::Stable, 1));
+    let r = repository(&server, dir.path(), &transport);
+    r.index(Channel::Stable, None, TIMEOUT).unwrap();
+    let state = FileStore::in_data_dir(dir.path()).path();
+    std::fs::write(&state, b"nope").unwrap();
+    transport.reply(&timestamp_url(), 404, b"");
+    // Run 1: the state did not hold; run 2: the reset state. Neither is "not published".
+    for run in 1..=2 {
+        let e = repository(&server, dir.path(), &transport)
+            .index(Channel::Stable, None, TIMEOUT)
+            .unwrap_err();
+        assert!(
+            matches!(&e, UpdateError::Tuf(_)) && e.retry_soon(),
+            "run {run}: {e}"
+        );
+    }
 }
 
 #[test]

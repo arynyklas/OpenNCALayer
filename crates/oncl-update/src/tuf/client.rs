@@ -262,6 +262,8 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         }
         if reset.is_some() {
             state.root_version = root.version;
+            // Nothing can be known of what a state that did not hold had seen.
+            state.ever_published = true;
             self.store.overwrite(&state)?;
         }
 
@@ -433,6 +435,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         // 5.4.4: a freeze attack.
         ensure_fresh(Role::Timestamp, timestamp.expires, now)?;
         // 5.4.5: persist.
+        state.ever_published = true;
         state.timestamp = Some(TimestampState {
             version: timestamp.version,
             snapshot: timestamp.snapshot.clone(),
