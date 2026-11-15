@@ -250,3 +250,37 @@ pub(super) fn decrypt(
     out.truncate(len);
     Ok(out)
 }
+
+pub(super) fn decrypt_pkcs1_v15(
+    pkcs8: &[u8],
+    ciphertext: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, KeyError> {
+    let key = private(pkcs8)?;
+    if ciphertext.len() != key.size {
+        return Err(KeyError::DecryptionFailed);
+    }
+    let mut out = Zeroizing::new(vec![0; key.size]);
+    let mut len = 0;
+    unsafe {
+        status(BCryptDecrypt(
+            key.handle,
+            ciphertext.as_ptr(),
+            ciphertext.len() as u32,
+            ptr::null(),
+            ptr::null_mut(),
+            0,
+            out.as_mut_ptr(),
+            out.len() as u32,
+            &mut len,
+            BCRYPT_PAD_PKCS1,
+        ))
+        .map_err(|_| KeyError::DecryptionFailed)?;
+    }
+    let len = usize::try_from(len).map_err(|_| KeyError::DecryptionFailed)?;
+    if len > out.len() {
+        return Err(KeyError::DecryptionFailed);
+    }
+    out[len..].fill(0);
+    out.truncate(len);
+    Ok(out)
+}

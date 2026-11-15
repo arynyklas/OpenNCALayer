@@ -624,6 +624,15 @@ impl PrivateKey {
         }
     }
 
+    /// RSAES-PKCS1-v1_5 decryption: only for legacy foreign data, never a default.
+    /// The caller must not expose success or failure to an untrusted party (padding oracle).
+    pub(crate) fn decrypt_pkcs1_v15(&self, ciphertext: &[u8]) -> Result<Vec<u8>, KeyError> {
+        match self {
+            Self::Rsa(key) => crate::rsa::decrypt_pkcs1_v15(&key.pkcs8, ciphertext),
+            _ => Err(KeyError::UnsupportedAlgorithm),
+        }
+    }
+
     /// RSA OAEP SHA256/MGF1-SHA256 with an exact byte label.
     pub fn decrypt_oaep_sha256(
         &self,

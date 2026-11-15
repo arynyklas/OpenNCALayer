@@ -29,6 +29,12 @@ const KALKAN_ROWS: [&str; 12] = [
     "plugin-sign-raw-gost2015",
 ];
 
+/// The CMS envelope rows Kalkan judges: what its envelope maker/reader does and does not do.
+const KALKAN_ENVELOPE_ROWS: [&str; 2] = [
+    "envelope-ours-opens-kalkan-rsa-3des-legacy",
+    "envelope-kalkan-gost-refused",
+];
+
 fn descriptor(artifacts: Vec<Artifact>) -> OracleDescriptor {
     OracleDescriptor {
         id: "kalkan".to_owned(),
@@ -76,7 +82,7 @@ fn the_descriptor_pins_both_jars_by_sha256_and_is_local_only() {
 }
 
 #[test]
-fn exactly_the_twelve_rows_that_had_no_independent_gost_judge_use_the_kalkan_oracle() {
+fn exactly_the_signature_rows_and_the_envelope_rows_use_the_kalkan_oracle() {
     let coverage = Coverage::load().unwrap();
     let using: BTreeSet<&str> = coverage
         .case
@@ -84,7 +90,11 @@ fn exactly_the_twelve_rows_that_had_no_independent_gost_judge_use_the_kalkan_ora
         .filter(|row| row.oracles.iter().any(|o| o == "kalkan"))
         .map(|row| row.id.as_str())
         .collect();
-    assert_eq!(using, BTreeSet::from(KALKAN_ROWS));
+    let expected: BTreeSet<&str> = KALKAN_ROWS
+        .into_iter()
+        .chain(KALKAN_ENVELOPE_ROWS)
+        .collect();
+    assert_eq!(using, expected);
     for row in &coverage.case {
         assert!(
             !row.expected.contains("requires independent"),
