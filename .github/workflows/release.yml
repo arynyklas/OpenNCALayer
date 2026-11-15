@@ -804,8 +804,9 @@ jobs:
               echo "   - \`cargo xtask sign updates/v1/$channel.json --key <secret key>\`"
             done
             echo "3. \`cargo xtask index check updates/v1 --base origin/main\`;"
-            echo "4. commit the indexes and their \`.minisig\` files and push: the index check runs on that push;"
-            echo "5. merge: GitHub Pages publishes \`updates/\`."
+            echo "4. once the TUF repository exists (\`tuf/v1\` in the tree): \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over these indexes (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
+            echo "5. commit the indexes, their \`.minisig\` files and \`tuf/v1\` and push: the index check runs on that push and refuses indexes that \`tuf/v1\` does not list;"
+            echo "6. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
           } > "$RUNNER_TEMP/index-pr.md"
           echo "subject=$subject" >> "$GITHUB_OUTPUT"
       - name: Open the index pull request

@@ -1,0 +1,36 @@
+name: TUF expiry
+
+# The weekly reminder: `cargo xtask tuf check --fail-on-expiring` on `main` fails (and
+# GitHub mails the failure of a scheduled run) when the targets or snapshot expire in less
+# than 10 days (the owner signs a new version: `cargo xtask tuf update --refresh`, monthly),
+# or the root in less than 45 days (`cargo xtask tuf root`, yearly), or any of them has
+# expired. It reads only the committed tree: the timestamp is Pages' business (the daily
+# Pages run goes red when it cannot be signed or published). With no `tuf/v1` and no anchor
+# yet (before the owner's ceremony) it passes. No secret is used or reachable here.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  expiry:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: pages
+      - name: Check the expiry
+        run: cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45

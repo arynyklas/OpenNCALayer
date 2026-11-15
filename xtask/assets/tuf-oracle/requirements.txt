@@ -1,0 +1,3 @@
+# The independent implementation `verify_repo.py` runs: python-tuf's ngclient. Pinned to the
+# version the oracle vectors of `crates/oncl-update/tests/fixtures/tuf` were made with.
+tuf==7.0.1

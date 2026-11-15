@@ -15,12 +15,24 @@ name: Pages
 #
 # Pages must be enabled with "GitHub Actions" as the source in the repository settings;
 # until then the site is built and checked, and nothing is deployed.
+#
+# TUF (`docs/design/tuf.md`, `docs/dev/release.md`): if `tuf/v1` exists, it is published
+# under `/tuf/v1/` beside the indexes, with a `metadata/timestamp.json` made on every run.
+# The timestamp is the only thing CI signs, and its key is the one secret CI has:
+# `TUF_TIMESTAMP_KEY`, a secret of the environment `tuf-timestamp` (deployment branches:
+# `main` only), read by the one step of the `timestamp` job that signs. That job runs only on
+# `main`, only on events that the maintainers (or the schedule) start, never on a pull
+# request; it has no write permission; its last step is the one with the secret. It hands the
+# signed file, which is not secret, to `build` as a job output, so no action runs after the
+# secret is in the environment, and `build` (which assembles the site from this repository's
+# files) never sees the key. `xtask/tests/workflows_tuf.rs` pins these rules.
 on:
   push:
     branches: [main]
     paths:
       - "updates/**"
       - "crates/oncl-update/keys/**"
+      - "tuf/**"
       - "site/**"
       - "plugins/*/plugin.toml"
       - "plugins/*/registry.toml"
@@ -51,6 +63,72 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The timestamp of the TUF repository, signed with the online key (see the header). It
+  # does nothing without `tuf/v1` or without the secret; a failure here (a repository the
+  # client would refuse, a snapshot that has expired) makes the run red, and `build` still
+  # publishes the rest, without a timestamp.
+  timestamp:
+    if: >-
+      github.ref == 'refs/heads/main' && (
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: tuf-timestamp
+    permissions:
+      contents: read
+    outputs:
+      file: ${{ steps.sign.outputs.file }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Is there a TUF repository?
+        id: tree
+        run: |
+          if [ -d tuf/v1 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::no tuf/v1 yet: no timestamp to sign"
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install toolchain (rust-toolchain.toml)
+        if: steps.tree.outputs.exists == 'true'
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.tree.outputs.exists == 'true'
+        with:
+          shared-key: pages
+      # Compiled here, before the secret is in any environment: the build scripts and
+      # dependencies never run with the key.
+      - name: Build xtask
+        if: steps.tree.outputs.exists == 'true'
+        run: cargo build -p xtask
+      # The last step. `xtask tuf timestamp` verifies the repository from the committed
+      # anchor first, with the client's code (the chain of roots, signatures, versions,
+      # hashes of every file, the targets against `updates/v1`, a day of validity left),
+      # and signs only if it holds.
+      - name: Sign the timestamp
+        id: sign
+        if: steps.tree.outputs.exists == 'true'
+        env:
+          TUF_TIMESTAMP_KEY: ${{ secrets.TUF_TIMESTAMP_KEY }}
+        run: |
+          if [ -z "$TUF_TIMESTAMP_KEY" ]; then
+            echo "::notice::the secret TUF_TIMESTAMP_KEY is not set in the environment tuf-timestamp: the TUF repository is published without a timestamp"
+            exit 0
+          fi
+          echo "::add-mask::$TUF_TIMESTAMP_KEY"
+          copy="$RUNNER_TEMP/tuf"
+          cp -R tuf/v1 "$copy"
+          target/debug/xtask tuf timestamp --out "$copy"
+          {
+            echo "file<<TUF_TIMESTAMP_EOF"
+            cat "$copy/metadata/timestamp.json"
+            echo "TUF_TIMESTAMP_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   dispatch:
     if: github.event_name == 'release'
     runs-on: ubuntu-24.04
@@ -65,7 +143,10 @@ jobs:
         run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
 
   build:
-    if: github.event_name != 'release'
+    needs: timestamp
+    # Also when the timestamp job was skipped (no event it signs on) or failed: the rest of
+    # the site is published without a timestamp, and the run is red.
+    if: ${{ !cancelled() && github.event_name != 'release' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -74,6 +155,7 @@ jobs:
       deployments: read
     outputs:
       publish: ${{ steps.pages.outputs.publish }}
+      tuf: ${{ steps.tuf.outputs.state }}
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -85,6 +167,8 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: pages
       # Nothing unsigned, expired or pointing elsewhere is published, even if pushed past the
       # pull request check. Changed content needs a greater `seq` than the base: on a push the
       # commit before it; otherwise the commit Pages serves now (the newest successful
@@ -93,6 +177,7 @@ jobs:
       # `updates/v1` is published only if neither the base nor the deployed commit has it:
       # removing the indexes would leave the installed clients without updates.
       - name: Check the indexes
+        id: indexes
         env:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event_name == 'push' && github.event.before || '' }}
@@ -115,6 +200,7 @@ jobs:
               base="$BEFORE"
             fi
           fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
           for commit in "$base" "$deployed"; do
             if [ -n "$commit" ]; then
               git cat-file -e "$commit^{commit}"
@@ -201,6 +287,52 @@ jobs:
             diff -r updates _site/updates
           fi
           cargo xtask registry check _site
+      # The TUF repository, from a copy: the committed tree gets no timestamp. With the
+      # signed timestamp of the `timestamp` job, the copy is verified as the client would
+      # read it (and the other implementation, python-tuf, must accept it too: its
+      # acceptance is necessary, not sufficient; the Rust check is the contract), and the
+      # published run is red when targets or snapshot are about to expire (the owner's
+      # monthly `cargo xtask tuf update --refresh`).
+      - name: The TUF repository
+        id: tuf
+        env:
+          BASE: ${{ steps.indexes.outputs.base }}
+          TIMESTAMP: ${{ needs.timestamp.outputs.file }}
+        run: |
+          if [ ! -d tuf/v1 ]; then
+            echo "state=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The committed tree: its own checks, as in the pull request.
+          base_args=()
+          if [ -n "$BASE" ]; then
+            base_args=(--base "$BASE")
+          fi
+          cargo xtask tuf check --no-timestamp "${base_args[@]}"
+          test ! -e _site/tuf
+          mkdir -p _site/tuf
+          cp -R tuf/v1 _site/tuf/v1
+          if [ -z "$TIMESTAMP" ]; then
+            echo "::warning::the TUF repository is published without a timestamp (the secret TUF_TIMESTAMP_KEY is not set, or the timestamp job failed)"
+            echo "state=unsigned" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$TIMESTAMP" > _site/tuf/v1/metadata/timestamp.json
+          # Three days: closer than that the timestamp job refuses (a day) and the weekly
+          # tuf-expiry workflow has long been red.
+          cargo xtask tuf check --dir _site/tuf/v1 --fail-on-expiring --min-days 3
+          echo "state=signed" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@v6
+        if: steps.tuf.outputs.state == 'signed'
+        with:
+          python-version: "3.12"
+      - name: The same repository through python-tuf
+        if: steps.tuf.outputs.state == 'signed'
+        run: |
+          python -m venv "$RUNNER_TEMP/tuf-oracle"
+          "$RUNNER_TEMP/tuf-oracle/bin/pip" install -r xtask/assets/tuf-oracle/requirements.txt
+          "$RUNNER_TEMP/tuf-oracle/bin/python" xtask/assets/tuf-oracle/verify_repo.py \
+            --dir _site/tuf/v1 --root crates/oncl-update/keys/root.json --index updates/v1
       - uses: actions/upload-pages-artifact@v5
         if: steps.pages.outputs.publish == 'true'
         with:
@@ -217,6 +349,41 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
         uses: actions/deploy-pages@v5
+
+  # The smoke check after the deployment: the real client over HTTPS against the site. A
+  # red run here is how an expired or broken timestamp reaches the owner (GitHub mails the
+  # failure of a scheduled run).
+  verify:
+    needs: [build, deploy]
+    if: needs.build.outputs.tuf == 'signed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: pages
+      # Pages caches files for ten minutes; a few tries cover the deployment's propagation.
+      - name: Verify the published TUF repository
+        env:
+          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
+        run: |
+          for attempt in 1 2 3 4; do
+            if cargo xtask tuf verify-published --url "${PAGE_URL%/}/tuf/v1/"; then
+              exit 0
+            fi
+            echo "::warning::attempt $attempt failed"
+            sleep 60
+          done
+          exit 1
