@@ -1562,6 +1562,79 @@ fn bounded_spec_preflights_combined_host_and_request_material_without_encoding_c
     }
 }
 
+/// The CRL limit of a host that configured no evidence limits, on the SIGNING side: the
+/// per-item quota is the profile's `max_metadata_bytes` (256 KiB). A CRL of exactly that
+/// size is admitted by the preflight, one byte more is `EvidenceError::Limit`, before any
+/// byte of the document is read. (A full NCA CRL, about 20 MB, is far above it.)
+#[test]
+fn default_signing_limits_refuse_a_crl_one_byte_over_the_markup_cap() {
+    use oncl_pki::{cms::ades::ValidationMaterial, evidence::EvidenceError};
+    use oncl_xml::xades::{XadesLevel, XadesServices, XadesSpec};
+    const CAP: usize = 262144;
+    assert_eq!(XmlSignProfile::default().max_metadata_bytes, CAP);
+    let pki = Pki::new("user-rsa-sign");
+    let store = TemporaryStore::new(&std::env::temp_dir()).unwrap();
+    let now = time::macros::datetime!(2026-11-02 12:00 UTC);
+    let context = ValidationContext {
+        policy: ValidationPolicy::StrictOnline,
+        now,
+        anchors: &pki.anchors,
+        intermediates: &[],
+        http: &pki.http,
+    };
+    let network =
+        NetworkPolicy::only_endpoints(["http://tsa.synthetic.test", "http://ocsp.synthetic.test"])
+            .unwrap();
+    for (len, admitted) in [(CAP, true), (CAP + 1, false)] {
+        let crl = vec![0x30u8; len];
+        let crls: [&[u8]; 1] = [&crl];
+        let limits = ResourceLimits::default();
+        let mut scope = Arc::new(SharedBudget::new(limits.clone()).unwrap())
+            .begin(limits, Arc::new(Control))
+            .unwrap();
+        let services = XadesServices {
+            validation: &context,
+            network: &network,
+            temporary: &store,
+            tsa: Some(&pki.tsa),
+            material: ValidationMaterial {
+                certificates: &[],
+                ocsp: &[],
+                crls: &crls,
+            },
+            evidence_limits: None,
+            host_clock: None,
+        };
+        let spec = XadesSpec {
+            level: XadesLevel::Lt,
+            tsa: Some(pki.tsa.clone()),
+            chain: vec![],
+            signature_method: Some("http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"),
+            digest_method: None,
+        };
+        let prepared = oncl_xml::xades::prepare_spec_source(
+            Source::sequential(&mut Cursor::new(b"<r/>"), None),
+            &spec,
+            now,
+            &services,
+            &mut scope,
+        );
+        if admitted {
+            assert!(prepared.is_ok(), "{len} bytes: {:?}", prepared.err());
+        } else {
+            assert!(
+                matches!(
+                    prepared,
+                    Err(oncl_xml::XmlSourceError::Evidence(EvidenceError::Limit))
+                ),
+                "{len} bytes: {:?}",
+                prepared.err()
+            );
+            assert_eq!(scope.progress().bytes_in, 0);
+        }
+    }
+}
+
 #[test]
 fn wsse_embedding_retains_baseline_properties_and_every_carried_proof_check() {
     use oncl_pki::{evidence::AdesLevel, validation::Verdict};
