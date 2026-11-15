@@ -91,6 +91,7 @@ impl UploadPace {
         let first = std::future::poll_fn(|cx| std::task::Poll::Ready(next.as_mut().poll(cx))).await;
         if let std::task::Poll::Ready(ready) = first {
             self.arrived(Duration::ZERO, Self::data_len(&ready))?;
+            Self::failed(&ready);
             return Ok(ready);
         }
         let mut idle_left = self.config.idle;
@@ -104,6 +105,7 @@ impl UploadPace {
                 frame = wait => {
                     let frame = frame.map_err(|_| ProcessingError::DeadlineExceeded)?;
                     self.arrived(waited + began.elapsed(), Self::data_len(&frame))?;
+                    Self::failed(&frame);
                     return Ok(frame);
                 }
                 () = dirty.notified() => {
@@ -123,6 +125,13 @@ impl UploadPace {
             .and_then(|f| f.as_ref().ok())
             .and_then(Frame::data_ref)
             .map_or(0, |data| data.len() as u64)
+    }
+    /// A frame that failed to arrive because the client went away is reported (once per
+    /// request, see `abort_log`); the caller still ends the request with its own refusal.
+    fn failed(frame: &Option<Result<Frame<Bytes>, axum::Error>>) {
+        if let Some(Err(error)) = frame {
+            crate::abort_log::body_failed(error);
+        }
     }
 }
 

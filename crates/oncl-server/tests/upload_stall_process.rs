@@ -239,7 +239,7 @@ fn stalled_uploads_take_neither_an_admission_slot_nor_a_native_worker() {
         "stalled multipart spool must be released: {:?}",
         walk(&scratch)
     );
-    process.stop();
+    process.stop_after_aborts();
 }
 
 fn walk(root: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -300,7 +300,7 @@ fn upload_cap_exhaustion_is_a_typed_503_after_the_admission_wait_and_frees_when_
         let reply = small_operation(&process, path);
         assert_eq!(reply.status, 200, "{path}: {}", reply.body);
     }
-    process.stop();
+    process.stop_after_aborts();
 }
 
 /// A client that arrives while every upload slot is taken waits for one within
@@ -333,7 +333,7 @@ fn a_client_at_the_upload_cap_waits_for_a_slot_within_admission_wait() {
             assert_typed_refusal(&held.finish(), 504, "DeadlineExceeded");
         }
     }
-    process.stop();
+    process.stop_after_aborts();
 }
 
 /// A client that disconnects in the middle of its upload releases the upload slot, the
@@ -390,7 +390,7 @@ fn a_disconnect_during_the_upload_releases_slot_spool_and_temp() {
             walk(&scratch)
         );
     }
-    process.stop();
+    process.stop_after_aborts();
 }
 
 /// What the server has received is in the spool before it waits for the client again: a
@@ -445,7 +445,7 @@ fn a_stalled_upload_has_what_the_server_received_in_the_spool() {
     upload.stream.shutdown(std::net::Shutdown::Both).unwrap();
     drop(upload.stream);
     let _ = upload.collector.join();
-    process.stop();
+    process.stop_after_aborts();
 }
 
 /// A `hash` operation over a document of exactly `size` bytes.
@@ -552,7 +552,7 @@ fn a_trickle_below_the_minimum_rate_is_refused_long_before_the_operation_deadlin
             reply.elapsed
         );
     }
-    process.stop();
+    process.stop_after_aborts();
 }
 
 #[test]
@@ -763,5 +763,5 @@ fn a_stalled_json_body_is_ended_by_the_idle_timeout() {
         "{:?}",
         started.elapsed()
     );
-    process.stop();
+    process.stop_after_aborts();
 }
