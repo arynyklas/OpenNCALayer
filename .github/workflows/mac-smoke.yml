@@ -1,0 +1,407 @@
+name: Mac smoke
+
+# What the project's lab does for Windows and Linux (the `vm-smoke` status), for the macOS
+# `.pkg`, on GitHub-hosted Macs: the lab has no Mac. The released `.pkg` of a tag is
+# installed for the current user on an Apple silicon runner and on an Intel runner, and the
+# installed program is checked: its version, both slices of the universal binaries, the
+# integration the `.pkg` makes, the daemon (listening on 127.0.0.1:13579 only, data
+# directory, log, built-in modules, the TLS self-test page and the protocol over wss), and
+# the uninstallation (the integration goes, the app is removed, the data stays). Every
+# check is a line `PASS|FAIL <name> <detail>`; any FAIL fails the job. The log of each
+# runner is an artifact.
+#
+# It runs after the Release workflow of a tag has completed, and by hand for a tag
+# (`workflow_dispatch`, input `tag`). A pre-release is a draft until the maintainer
+# publishes it, and a draft is not readable with this read-only token: the `.pkg` then comes
+# from the artifact of the Release run (`release-packages-osx`), and is checked against its
+# build provenance attestation instead of `SHA256SUMS`. The installer is unsigned and not
+# notarized, and it is installed from the command line: Gatekeeper, which a download in a
+# browser meets, is not exercised here.
+#
+# No secrets and no write permissions. Third-party actions are pinned to a commit, with the
+# release tag in a comment.
+on:
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag, v<version>
+        required: true
+
+permissions:
+  contents: read
+  # The artifacts of the Release run, for a draft pre-release.
+  actions: read
+
+concurrency:
+  group: mac-smoke-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    # A tag's Release run (its `head_branch` is the tag), or a manual run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+        && startsWith(github.event.workflow_run.head_branch, 'v'))
+    name: smoke (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon (arm64). GitHub's runner images:
+          # https://github.com/actions/runner-images#available-images
+          - name: apple-silicon
+            runner: macos-15
+            arch: arm64
+          # Intel (x86_64): `macos-15-intel` replaced `macos-13`, retired in December 2025;
+          # GitHub supports Intel macOS until the macOS 15 image is retired in fall 2027
+          # https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down
+          - name: intel
+            runner: macos-15-intel
+            arch: x86_64
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+      RUNNER_NAME_SHORT: ${{ matrix.name }}
+      EXPECT_ARCH: ${{ matrix.arch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Smoke
+        # No `-e`: a failed check is a line, and the run goes on to the summary.
+        shell: bash {0}
+        run: |
+          OUT="$RUNNER_TEMP/mac-smoke"
+          DL="$OUT/download"
+          mkdir -p "$DL" "$OUT/app-logs"
+          LOG="$OUT/mac-smoke.log"
+          : > "$LOG"
+          FAILS=0
+
+          # res PASS|FAIL|INFO|SKIP <name> <detail>
+          res() {
+            local detail
+            detail="$(printf '%s' "$3" | tr '\r\n' '  ' | cut -c1-600)"
+            printf '%s %s %s\n' "$1" "$2" "$detail" | tee -a "$LOG"
+            if [ "$1" = FAIL ]; then FAILS=$((FAILS + 1)); fi
+          }
+          # ck <name> <rc> <detail>: PASS when rc is 0
+          ck() {
+            if [ "$2" -eq 0 ]; then res PASS "$1" "$3"; else res FAIL "$1" "$3"; fi
+          }
+
+          finish() {
+            echo "---- $FAILS FAIL" | tee -a "$LOG"
+            {
+              echo "### Mac smoke $TAG, $RUNNER_NAME_SHORT ($(uname -m))"
+              echo
+              echo '```'
+              cat "$LOG"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            [ "$FAILS" -eq 0 ]
+            exit $?
+          }
+
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) res FAIL tag "not a release tag: $TAG"; finish ;;
+          esac
+          VER="${TAG#v}"
+          PKG="openncalayer-$VER-osx.pkg"
+
+          res INFO host "$(sw_vers -productName) $(sw_vers -productVersion) $(uname -m), runner image ${ImageVersion:-unknown}"
+          [ "$(uname -m)" = "$EXPECT_ARCH" ]
+          ck runner-arch $? "uname -m $(uname -m), expected $EXPECT_ARCH"
+
+          # ---- the .pkg -------------------------------------------------------------------
+          src=none
+          n=0
+          while [ $n -lt 3 ]; do
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$DL" --clobber \
+              -p "$PKG" -p SHA256SUMS > "$OUT/download.log" 2>&1 && break
+            n=$((n + 1))
+            sleep 10
+          done
+          if [ -f "$DL/$PKG" ] && [ -f "$DL/SHA256SUMS" ]; then
+            src=release
+          elif [ -n "$RUN_ID" ]; then
+            rm -f "$DL/$PKG" "$DL/SHA256SUMS"
+            if gh run download "$RUN_ID" --repo "$GITHUB_REPOSITORY" -n release-packages-osx --dir "$DL" > "$OUT/download.log" 2>&1 \
+              && [ -f "$DL/$PKG" ]; then
+              src=run-artifact
+            fi
+          fi
+          if [ "$src" = none ]; then
+            res FAIL download "no $PKG for $TAG: $(cat "$OUT/download.log")"
+            finish
+          fi
+          res PASS download "$PKG from $src, $(wc -c < "$DL/$PKG" | tr -d ' ') bytes"
+          if [ "$src" = release ]; then
+            want="$(grep -F "$PKG" "$DL/SHA256SUMS" | tr -d '\r' | sed 's/[[:space:]].*//' | head -n 1)"
+            got="$(shasum -a 256 "$DL/$PKG" | cut -d' ' -f1)"
+            [ -n "$want" ] && [ "$want" = "$got" ]
+            ck sha256-vs-SHA256SUMS $? "SHA256SUMS $want, file $got"
+          else
+            res INFO sha256-vs-SHA256SUMS "SKIP: $TAG is a draft, SHA256SUMS is not readable; the provenance check below covers the file"
+          fi
+          gh attestation verify "$DL/$PKG" --repo "$GITHUB_REPOSITORY" > "$OUT/attestation.log" 2>&1
+          ck provenance-attestation $? "gh attestation verify: $(tail -n 3 "$OUT/attestation.log")"
+          res INFO pkg-signature "$(pkgutil --check-signature "$DL/$PKG" 2>&1)"
+          pkgutil --payload-files "$DL/$PKG" > "$OUT/payload.txt" 2>&1
+          grep -q 'OpenNCALayer.app/Contents/MacOS/openncalayer$' "$OUT/payload.txt"
+          ck pkg-payload $? "OpenNCALayer.app/Contents/MacOS/openncalayer in the payload"
+
+          # ---- install for the current user ----------------------------------------------
+          DATA="$HOME/Library/Application Support/OpenNCALayer"
+          AGENT="$HOME/Library/LaunchAgents/io.github.arynyklas.openncalayer.plist"
+          [ ! -e "$DATA" ] && [ ! -e /Applications/OpenNCALayer.app ] && [ ! -e "$HOME/Applications/OpenNCALayer.app" ]
+          ck clean-start $? "no data directory and no app before the installation"
+          installer -pkg "$DL/$PKG" -target CurrentUserHomeDirectory -verboseR > "$OUT/installer.log" 2>&1
+          rc=$?
+          ck installer $rc "installer -target CurrentUserHomeDirectory rc=$rc: $(tail -n 3 "$OUT/installer.log")"
+          APP=""
+          for d in "$HOME/Applications" /Applications; do
+            if [ -x "$d/OpenNCALayer.app/Contents/MacOS/openncalayer" ]; then APP="$d/OpenNCALayer.app"; break; fi
+          done
+          if [ -z "$APP" ]; then
+            res FAIL app-installed "OpenNCALayer.app is in neither ~/Applications nor /Applications"
+            grep -i openncalayer /var/log/install.log 2>/dev/null | tail -n 60 > "$OUT/install-log-excerpt.txt"
+            finish
+          fi
+          res PASS app-installed "$APP"
+          EXE="$APP/Contents/MacOS/openncalayer"
+          NMH="$APP/Contents/MacOS/nmhost"
+          # `.pkg` ends with `open <app>`: give the app a moment, then stop it; it runs
+          # without a certificate, and the checks below start the daemon themselves.
+          sleep 8
+          started="$(pgrep -f "$APP/Contents/MacOS/openncalayer" | tr '\n' ' ')"
+          res INFO app-started-by-pkg "pids: ${started:-none}"
+          pkill -f "$APP/Contents/MacOS/" 2>/dev/null
+          sleep 3
+          pkill -9 -f "$APP/Contents/MacOS/" 2>/dev/null
+
+          # ---- the program ----------------------------------------------------------------
+          v="$("$EXE" --version 2>&1)"
+          case "$v" in *"$VER"*) rc=0 ;; *) rc=1 ;; esac
+          ck version $rc "--version -> '$v', expected $VER"
+          for p in "$EXE" "$NMH"; do
+            archs="$(lipo -archs "$p" 2>&1)"
+            case " $archs " in *" x86_64 "*" arm64 "* | *" arm64 "*" x86_64 "*) rc=0 ;; *) rc=1 ;; esac
+            ck "universal-$(basename "$p")" $rc "lipo -archs: $archs"
+          done
+          if [ "$(uname -m)" = arm64 ]; then
+            if arch -x86_64 /usr/bin/true > /dev/null 2>&1; then
+              xv="$(arch -x86_64 "$EXE" --version 2>&1)"
+              case "$xv" in *"$VER"*) rc=0 ;; *) rc=1 ;; esac
+              ck x86_64-slice-runs-under-rosetta $rc "arch -x86_64 --version -> '$xv'"
+            else
+              res SKIP x86_64-slice-runs-under-rosetta "Rosetta is not installed on this runner; the Intel runner runs that slice natively"
+            fi
+          else
+            res SKIP arm64-slice-runs "an Intel Mac cannot run the arm64 slice; the Apple silicon runner runs it natively"
+          fi
+          bl="$("$EXE" builtins 2>&1)"
+          rc=$?
+          ck builtins-command $rc "rc=$rc, $(printf '%s\n' "$bl" | grep -c .) modules: $(printf '%s' "$bl" | cut -d' ' -f1,2 | tr '\n' ',')"
+
+          # ---- what the .pkg integrated ---------------------------------------------------
+          [ -f "$DATA/installation.json" ]
+          ck installation-json $? "$(tr -s ' \n' ' ' < "$DATA/installation.json" 2>&1 | cut -c1-300)"
+          [ -f "$AGENT" ]
+          ck launchagent-plist $? "$AGENT"
+          grep -q '"autostart": *true' "$DATA/settings.json" 2>/dev/null
+          ck settings-autostart-true $? "$(tr -s ' \n' ' ' < "$DATA/settings.json" 2>&1 | cut -c1-200)"
+          [ -x "$DATA/nmhost" ] && [ -f "$DATA/nmhost.json" ]
+          ck nm-relay $? "$(ls "$DATA" | tr '\n' ' ')"
+          res INFO nm-manifests "$(find "$HOME/Library/Application Support" -path '*NativeMessagingHosts/io.github.arynyklas.openncalayer.json' 2>/dev/null | tr '\n' ' ')"
+          "$EXE" integration status > "$OUT/integration-status.txt" 2>&1
+          ck integration-status $? "rc=$?: $(cat "$OUT/integration-status.txt")"
+
+          # ---- TLS and the daemon ---------------------------------------------------------
+          "$EXE" tls init > "$OUT/tls-init.txt" 2>&1
+          ck tls-init $? "$(head -c 300 "$OUT/tls-init.txt")"
+          CA="$DATA/tls/OpenNCALayer-CA.crt"
+          [ -f "$CA" ] && [ -f "$DATA/tls/server.crt" ] && [ -f "$DATA/tls/server.key" ]
+          ck tls-files $? "$(ls "$DATA/tls" | tr '\n' ' ')"
+
+          nohup "$EXE" run --no-tray > "$OUT/daemon-stdout.log" 2>&1 &
+          DPID=$!
+          up=1
+          for _ in $(seq 1 30); do
+            sleep 2
+            if lsof -nP -iTCP:13579 -sTCP:LISTEN > /dev/null 2>&1; then up=0; break; fi
+            kill -0 "$DPID" 2> /dev/null || break
+          done
+          kill -0 "$DPID" 2> /dev/null
+          ck daemon-running $? "pid $DPID: $(head -c 300 "$OUT/daemon-stdout.log")"
+          ck port-13579-listening $up "$(lsof -nP -iTCP:13579 -sTCP:LISTEN 2>&1 | tail -n +2)"
+          lsof -nP -iTCP:13579 -sTCP:LISTEN -Fn 2> /dev/null | grep '^n' > "$OUT/listen-13579.txt"
+          [ -s "$OUT/listen-13579.txt" ] && ! grep -v -E '^n(127\.0\.0\.1|\[::1\]):13579$' "$OUT/listen-13579.txt" > /dev/null
+          ck port-13579-loopback-only $? "$(tr '\n' ' ' < "$OUT/listen-13579.txt")"
+          lsof -nP -a -p "$DPID" -iTCP -sTCP:LISTEN -Fn 2> /dev/null | grep '^n' > "$OUT/listen-daemon.txt"
+          [ -s "$OUT/listen-daemon.txt" ] && ! grep -v -E '^n(127\.0\.0\.1|\[::1\]):[0-9]+$' "$OUT/listen-daemon.txt" > /dev/null
+          ck daemon-listeners-loopback-only $? "$(tr '\n' ' ' < "$OUT/listen-daemon.txt")"
+          res INFO daemon-udp "$(lsof -nP -a -p "$DPID" -iUDP 2>&1 | tail -n +2)"
+
+          [ -d "$DATA" ]
+          ck data-dir $? "$DATA: $(ls "$DATA" | tr '\n' ' ')"
+          LOGFILE="$(ls -t "$DATA"/logs/openncalayer.*.log 2> /dev/null | head -n 1)"
+          [ -n "$LOGFILE" ] && [ -s "$LOGFILE" ]
+          ck log-written $? "${LOGFILE:-no log file}: $( [ -n "$LOGFILE" ] && wc -c < "$LOGFILE" | tr -d ' ') bytes"
+          # The built-in modules are checked before the server is prepared: this line is
+          # written after they loaded.
+          grep -q 'daemon prepared' "$LOGFILE" 2> /dev/null && ! grep -q 'the built-in modules do not load' "$LOGFILE" 2> /dev/null
+          ck builtin-modules-loaded $? "log has 'daemon prepared' and no 'the built-in modules do not load'"
+          grep -q 'listening on 127.0.0.1:13579' "$LOGFILE" 2> /dev/null
+          ck log-listening $? "log line 'listening on 127.0.0.1:13579'"
+          ! grep -q -i 'panicked' "$LOGFILE" "$OUT/daemon-stdout.log" 2> /dev/null
+          ck no-panic $? "no 'panicked' in the log"
+          res INFO log-warnings "$(grep -E ' (WARN|ERROR) ' "$LOGFILE" 2> /dev/null | cut -c1-200 | head -n 8)"
+
+          # TLS: the page over the CA the wizard issued, and the protocol over wss.
+          code="$(curl -sS --max-time 20 --cacert "$CA" -o "$OUT/selftest.html" -w '%{http_code}' https://127.0.0.1:13579/openncalayer/selftest 2>&1)"
+          [ "$code" = 200 ] && grep -q '/openncalayer/selftest/report' "$OUT/selftest.html"
+          ck selftest-over-tls $? "GET /openncalayer/selftest with the issued CA -> $code, $(wc -c < "$OUT/selftest.html" 2> /dev/null | tr -d ' ') bytes"
+          curl -sS --max-time 20 -o /dev/null https://127.0.0.1:13579/openncalayer/selftest > "$OUT/curl-system-trust.txt" 2>&1
+          rc=$?
+          case "$rc" in 35 | 51 | 58 | 60) rc=0 ;; *) rc=1 ;; esac
+          ck tls-init-installs-no-trust $rc "without the CA the system refuses the certificate: $(cat "$OUT/curl-system-trust.txt")"
+          python3 - "$CA" "$VER" <<'PY' 2>&1 | tee -a "$LOG"
+          import base64, json, os, socket, ssl, struct, sys
+
+          ca, ver = sys.argv[1], sys.argv[2]
+          failed = False
+
+
+          def report(ok, name, detail):
+              global failed
+              failed = failed or not ok
+              print(("PASS" if ok else "FAIL"), name, str(detail)[:600].replace("\n", " "), flush=True)
+
+
+          def read_exact(s, n):
+              buf = b""
+              while len(buf) < n:
+                  chunk = s.recv(n - len(buf))
+                  if not chunk:
+                      raise EOFError("connection closed")
+                  buf += chunk
+              return buf
+
+
+          def send_text(s, text):
+              data = text.encode()
+              mask = os.urandom(4)
+              head = bytes([0x81])
+              if len(data) < 126:
+                  head += bytes([0x80 | len(data)])
+              elif len(data) < 65536:
+                  head += bytes([0x80 | 126]) + struct.pack(">H", len(data))
+              else:
+                  head += bytes([0x80 | 127]) + struct.pack(">Q", len(data))
+              s.sendall(head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
+
+
+          def recv_text(s):
+              while True:
+                  b0, b1 = read_exact(s, 2)
+                  n = b1 & 0x7F
+                  if n == 126:
+                      n = struct.unpack(">H", read_exact(s, 2))[0]
+                  elif n == 127:
+                      n = struct.unpack(">Q", read_exact(s, 8))[0]
+                  payload = read_exact(s, n)
+                  op = b0 & 0x0F
+                  if op == 1:
+                      return payload.decode()
+                  if op == 8:
+                      raise EOFError("close frame")
+
+
+          try:
+              ctx = ssl.create_default_context(cafile=ca)
+              s = ctx.wrap_socket(socket.create_connection(("127.0.0.1", 13579), timeout=20), server_hostname="127.0.0.1")
+              key = base64.b64encode(os.urandom(16)).decode()
+              s.sendall(
+                  (
+                      "GET / HTTP/1.1\r\nHost: 127.0.0.1:13579\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                      f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                  ).encode()
+              )
+              head = b""
+              while b"\r\n\r\n" not in head:
+                  head += s.recv(1)
+              report(head.startswith(b"HTTP/1.1 101"), "wss-handshake", head.split(b"\r\n")[0].decode())
+              greeting = recv_text(s)
+              report(json.loads(greeting) == {"result": {"version": "1.4"}}, "wss-greeting", greeting)
+              send_text(s, "--heartbeat--")
+              beat = recv_text(s)
+              report(beat == "--heartbeat--", "wss-heartbeat", beat)
+              acc = "kz.gov.pki.ncalayerservices.accessory"
+              send_text(s, json.dumps({"module": acc, "method": "getServices"}))
+              services = json.loads(recv_text(s)).get("services", [])
+              need = {
+                  "kz.gov.pki.knca.basics",
+                  "kz.gov.pki.knca.applet.Applet",
+                  "kz.gov.pki.knca.commonUtils",
+                  acc,
+              }
+              report(need <= set(services), "wss-builtin-modules", services)
+              send_text(s, json.dumps({"module": acc, "method": "getBundles", "uuid": "smoke"}))
+              bundles = json.loads(recv_text(s))
+              report(
+                  bundles.get("io.github.arynyklas.openncalayer") == ver and bundles.get("uuid") == "smoke",
+                  "wss-bundle-version",
+                  f"io.github.arynyklas.openncalayer={bundles.get('io.github.arynyklas.openncalayer')} expected {ver}",
+              )
+          except Exception as e:  # noqa: BLE001
+              report(False, "wss-session", f"{type(e).__name__}: {e}")
+          sys.exit(1 if failed else 0)
+          PY
+          pyrc=${PIPESTATUS[0]}
+          if [ "$pyrc" -ne 0 ]; then FAILS=$((FAILS + 1)); fi
+
+          # ---- stop the daemon, uninstall ---------------------------------------------------
+          cp "$DATA"/logs/* "$OUT/app-logs/" 2> /dev/null
+          kill "$DPID" 2> /dev/null
+          for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$DPID" 2> /dev/null || break; sleep 1; done
+          if kill -0 "$DPID" 2> /dev/null; then
+            kill -9 "$DPID" 2> /dev/null
+            res INFO daemon-stop "needed SIGKILL"
+          else
+            res PASS daemon-stop "SIGTERM stopped pid $DPID"
+          fi
+          lsof -nP -iTCP:13579 -sTCP:LISTEN > /dev/null 2>&1
+          [ $? -ne 0 ]
+          ck port-13579-released $? "nothing listens after the stop"
+
+          "$EXE" integration uninstall > "$OUT/integration-uninstall.txt" 2>&1
+          ck integration-uninstall $? "rc=$?: $(cat "$OUT/integration-uninstall.txt")"
+          [ ! -e "$AGENT" ]
+          ck uninstall-launchagent-removed $? "$AGENT"
+          [ ! -e "$DATA/nmhost" ]
+          ck uninstall-relay-removed $? "$DATA/nmhost"
+          rm -rf "$APP"
+          [ ! -e "$APP" ]
+          ck uninstall-app-removed $? "$APP"
+          pkgutil --forget io.github.arynyklas.openncalayer > "$OUT/pkgutil-forget.txt" 2>&1
+          res INFO pkgutil-forget "$(cat "$OUT/pkgutil-forget.txt")"
+          [ -d "$DATA" ] && { [ -f "$DATA/settings.json" ] || [ -d "$DATA/tls" ]; }
+          ck uninstall-data-kept $? "$DATA: $(ls "$DATA" | tr '\n' ' ')"
+          ! pgrep -f 'OpenNCALayer.app/Contents/MacOS' > /dev/null
+          ck uninstall-no-process $? "no OpenNCALayer process left"
+          grep -i openncalayer /var/log/install.log 2> /dev/null | tail -n 80 > "$OUT/install-log-excerpt.txt"
+          finish
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mac-smoke-${{ matrix.name }}-${{ env.TAG }}
+          path: ${{ runner.temp }}/mac-smoke
+          if-no-files-found: warn
