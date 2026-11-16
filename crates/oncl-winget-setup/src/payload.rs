@@ -379,7 +379,7 @@ mod tests {
     }
 
     fn version() -> Version {
-        Version::parse("0.1.0-rc.2").unwrap()
+        Version::parse("0.1.0-rc.3").unwrap()
     }
 
     fn entry(arch: Arch) -> (Vec<u8>, Vec<u8>) {
