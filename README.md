@@ -19,7 +19,7 @@ OpenNCALayer — независимый проект и не связан с Н�
 ## С чего начать
 
 **Я пользователь сайта (egov, госзакупки…).** Поставьте программу и настройте доступ браузера:
-1. Скачайте установщик со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases): Windows — `openncalayer-<версия>-win-x64-setup.exe` (32-битная — `win-x86`; Windows 7 SP1 — `win7-*`), macOS — `openncalayer-<версия>-osx.pkg`, Linux — `openncalayer-<версия>-linux-x64.AppImage`, Arch Linux — пакет `openncalayer-bin-<версия>-1-x86_64.pkg.tar.zst` оттуда же (или AppImage).
+1. Скачайте установщик со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases): Windows — `openncalayer-<версия>-win-x64-setup.exe` (32-битная — `win-x86`; Windows 7 SP1 — `win7-*`), macOS — `openncalayer-<версия>-osx.pkg`, Linux — `openncalayer-<версия>-linux-x64.AppImage`, Arch Linux — файл `openncalayer-bin-*-x86_64.pkg.tar.zst` оттуда же (или AppImage).
 2. Либо установите расширение браузера ([`docs/user/browser-extension.md`](docs/user/browser-extension.md)) — сертификат тогда не нужен, либо выпустите сертификат мастером «Сертификат для браузера…» в меню значка ([`docs/user/tls.md`](docs/user/tls.md)).
 3. Если вы выбрали сертификат, откройте `https://127.0.0.1:13579/openncalayer/selftest`: страница должна открыться без предупреждения о сертификате. С расширением эта проверка не нужна.
 

@@ -705,6 +705,8 @@ jobs:
       ARCH_IMAGE: archlinux:base-devel@sha256:624bdc7fc6615155d67bc34cf7146c0c9fd0e3c92943977da63a630e4ca49c30
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v5
         with:
           name: release-binaries-linux-x64
@@ -726,7 +728,9 @@ jobs:
         run: |
           mkdir -p release-arch
           chmod 777 release-arch
-          docker run --rm -v "$PWD/arch:/arch:ro" -v "$PWD/release-arch:/out" "$ARCH_IMAGE" bash -euo pipefail -c '
+          # pacman's pkgver of the version: the hyphen is dropped (cargo xtask package arch).
+          PKGVER="${VERSION//-/}"
+          docker run --rm -e VERSION -e PKGVER -v "$PWD/arch:/arch:ro" -v "$PWD/release-arch:/out" "$ARCH_IMAGE" bash -euo pipefail -c '
             useradd -m builder
             cp -r /arch /home/builder/pkg
             chown -R builder: /home/builder/pkg
@@ -738,7 +742,8 @@ jobs:
             cp openncalayer-bin-*.pkg.tar.zst /out/
             pacman -Syu --noconfirm
             pacman -U --noconfirm openncalayer-bin-*.pkg.tar.zst
-            openncalayer --version
+            test "$(openncalayer --version)" = "openncalayer $VERSION"
+            test "$(pacman -Q openncalayer-bin)" = "openncalayer-bin $PKGVER-1"
             test "$(cat /usr/lib/openncalayer/package-manager)" = pacman
             pacman -R --noconfirm openncalayer-bin
             test ! -e /usr/bin/openncalayer
