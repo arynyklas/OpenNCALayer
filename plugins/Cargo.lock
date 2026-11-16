@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pdk"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "ciborium",
  "oncl-protocol",
@@ -894,7 +894,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-protocol"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "base64",
  "hashbrown",
