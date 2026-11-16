@@ -603,8 +603,8 @@
       "sha256": "693a0059fe6c396adb9ffacacbde0c9c495f1b81cf8722fe4724bbcf5de0a947",
       "published_sha1": "93d31ea5c4a751e1edbeb75109b8268a177111c7",
       "manifest_hash": null,
-      "failures": 0,
-      "status": "ok"
+      "failures": 1,
+      "status": "failing"
     },
     "page:linux": {
       "url": "https://ncl.pki.gov.kz/download.php",
@@ -614,8 +614,8 @@
       "sha256": "31f47c126fe56107d76f11c446110dfa09fc397f032a54ef8ee4d7bcaf6461cb",
       "published_sha1": "ee0219f72b26b23e25d9f26afc246ca14e16c394",
       "manifest_hash": null,
-      "failures": 0,
-      "status": "ok"
+      "failures": 1,
+      "status": "failing"
     },
     "page:macosx": {
       "url": "https://ncl.pki.gov.kz/download.php",
@@ -625,8 +625,8 @@
       "sha256": "5479f2fd91561f0d2be6c205dcd4b4c5f9cd51884f740b7f7bc05e9da49787cc",
       "published_sha1": "c95f3b7efef12129d9c658103b0530f809f72d91",
       "manifest_hash": null,
-      "failures": 0,
-      "status": "ok"
+      "failures": 1,
+      "status": "failing"
     },
     "page:windows-32-bit": {
       "url": "https://ncl.pki.gov.kz/download.php",
@@ -636,8 +636,8 @@
       "sha256": "39856f111507b048a9d10e917dea8249392a21f477ac8a811871f94e58f5bba6",
       "published_sha1": "1c881619e9fb5621188d110808d27d9fe45e6655",
       "manifest_hash": null,
-      "failures": 0,
-      "status": "ok"
+      "failures": 1,
+      "status": "failing"
     },
     "page:windows-64-bit": {
       "url": "https://ncl.pki.gov.kz/download.php",
@@ -647,8 +647,8 @@
       "sha256": "b83b624c20c3e473d8412ca233ae8444fd2d48bfc0bdc3ada94eb3f706aabac9",
       "published_sha1": "fdd90db42251c35f321aef62061085ca55419634",
       "manifest_hash": null,
-      "failures": 0,
-      "status": "ok"
+      "failures": 1,
+      "status": "failing"
     }
   }
 }
