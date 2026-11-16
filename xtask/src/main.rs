@@ -211,11 +211,11 @@ enum Command {
         #[command(subcommand)]
         command: xtask::upstream::cli::UpstreamCommand,
     },
-    /// WinGet manifests of the stable desktop release: candidate, final, check
-    /// (`docs/dev/winget.md`). Nothing here submits anything.
+    /// The WinGet manifest of a published desktop release (`docs/dev/winget.md`). Nothing
+    /// here submits anything.
     Winget {
         #[command(subcommand)]
-        command: xtask::winget::cli::WingetCommand,
+        command: xtask::winget::WingetCommand,
     },
     /// Build the Windows 7 programs with their app-local DLLs into `<out>/<arch>/`, run the
     /// import gate on them and, on Windows, start them there. The built-in modules are those
@@ -1208,7 +1208,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Upstream { command } => xtask::upstream::cli::run(command),
         Command::Tuf { command } => xtask::tuf::cli::run(command),
-        Command::Winget { command } => xtask::winget::cli::run(command),
+        Command::Winget { command } => xtask::winget::run(command),
         Command::Win7 {
             arch,
             out,
