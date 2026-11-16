@@ -769,9 +769,6 @@ jobs:
             echo "::notice::$GITHUB_REF_NAME lacks crates/oncl-update/keys/root.json or crates/oncl-update/keys/current.pub: its build cannot update itself; it is not added to the update indexes"
             echo "keyed=false" >> "$GITHUB_OUTPUT"
           fi
-      # The `osx` flavor stays out of the indexes until the universal build has run on an
-      # Intel Mac (the lab, P9): an installation would otherwise be moved onto it untried.
-      # Its packages and installers are still in the release.
       - name: Download the release
         if: steps.key.outputs.keyed == 'true'
         env:
@@ -780,8 +777,6 @@ jobs:
           gh release download "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/assets" \
             --pattern '*.nupkg' --pattern 'releases.*.json' \
             --pattern 'openncalayer-chromium-*.zip' --pattern 'openncalayer-firefox-*.xpi'
-          rm -f "$RUNNER_TEMP/assets/"OpenNCALayer-*-osx-*.nupkg "$RUNNER_TEMP/assets/releases.osx.json"
-          echo "::notice::the osx flavor is not added to the update indexes until it runs on an Intel Mac"
       - name: Add the version to the indexes
         if: steps.key.outputs.keyed == 'true'
         id: add
