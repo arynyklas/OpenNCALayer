@@ -252,4 +252,21 @@ mod tests {
         let other_version = Version::parse("1.2.4").unwrap();
         assert!(render(&other_version, &sums()).is_err());
     }
+
+    #[test]
+    fn sums_text_forms_are_read_the_way_sha256sum_writes_them() {
+        let version = Version::parse("1.2.3").unwrap();
+        let duplicate = format!(
+            "{}{X64}  openncalayer-1.2.3-win-x64-winget-setup.exe\n",
+            sums()
+        );
+        assert!(render(&version, &duplicate).is_err(), "a name listed twice");
+        let binary_and_crlf = format!(
+            "{X64} *openncalayer-1.2.3-win-x64-winget-setup.exe\r\n\
+             {X86}  openncalayer-1.2.3-win-x86-winget-setup.exe\r\n"
+        );
+        let files = render(&version, &binary_and_crlf).unwrap();
+        assert!(files[2].1.contains(&X64.to_ascii_uppercase()));
+        assert!(files[2].1.contains(&X86.to_ascii_uppercase()));
+    }
 }

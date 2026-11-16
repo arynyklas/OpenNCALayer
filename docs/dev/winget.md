@@ -1,6 +1,6 @@
 # WinGet: манифест и подача
 
-**OpenNCALayer в WinGet недоступен.** Команда `winget install --id arynyklas.OpenNCALayer --exact` — цель, а не существующая функция: ничего не подано и не принято. Здесь — как получить манифест опубликованного релиза и подать его в `microsoft/winget-pkgs`. Подача — отдельное решение владельца проекта; ни скрипт, ни workflow, ни агент её не выполняют.
+Как получить манифест опубликованного релиза и подать его в `microsoft/winget-pkgs`. Команда `winget install --id arynyklas.OpenNCALayer --exact` работает только после слияния пакета (шаг 6 подачи).
 
 ## Установщик в манифесте
 
@@ -16,9 +16,9 @@ cargo xtask winget manifest --version 0.2.0
 
 Проверка: `winget validate target/winget` (проверяет схему, не установку).
 
-## Что нужно до подачи (ничего из этого не выполнено)
+## Что нужно до подачи
 
-- Опубликованный релиз **без суффикса** (`0.x.y`, не `-alpha.N`): в WinGet попадают только stable. Последние версии — alpha.
+- Опубликованный релиз **без суффикса** (`0.x.y`, не `-alpha.N`): в WinGet подаются только stable-версии.
 - Оба `winget-setup.exe` подписаны Authenticode: настроен SignPath, в артефакте разрешён `*-winget-setup.exe` ([`winget-installer.md`](winget-installer.md), «Шаг оператора»). Без подписи манифест не подавать.
 - Установка проверена в чистой Windows 10/11 ВМ или Sandbox (`winget settings --enable LocalManifestFiles`, затем `winget install --manifest target/winget --silent`, upgrade со старой версии, `winget uninstall`). Список сценариев — в [`winget-installer.md`](winget-installer.md). Имя и издатель записи Apps & Features известны только по настоящей установке: если WinGet не сопоставляет установленную версию, добавьте в `installer.yaml` `AppsAndFeaturesEntries` по этой записи.
 - `PackageIdentifier` `arynyklas.OpenNCALayer` свободен: в `microsoft/winget-pkgs` нет каталога `manifests/a/arynyklas/OpenNCALayer/` и открытых PR с ним.
@@ -31,4 +31,4 @@ cargo xtask winget manifest --version 0.2.0
 3. `winget validate --manifest manifests/a/arynyklas/OpenNCALayer/<версия>`; флаги `--force` и `--ignore-security-hash` не использовать.
 4. PR с заголовком `New package: arynyklas.OpenNCALayer version <версия>`; чек-лист шаблона отмечайте честно.
 5. Ответьте на замечания проверок Microsoft. Если ассет релиза заменён после подачи, SHA-256 манифеста перестанет совпадать: выпускайте новую версию.
-6. После слияния и индексации (часы) проверьте в чистой ВМ `winget install --id arynyklas.OpenNCALayer --exact --source winget --silent`, upgrade и uninstall. Только после этого README и [`docs/user/install.md`](../user/install.md) можно переписать с «недоступен» на «доступен».
+6. После слияния и индексации (часы) проверьте в чистой ВМ `winget install --id arynyklas.OpenNCALayer --exact --source winget --silent`, upgrade и uninstall; затем обновите упоминания WinGet в README и [`docs/user/install.md`](../user/install.md).
