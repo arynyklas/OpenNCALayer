@@ -470,14 +470,14 @@ CI запускает `cargo xtask check-release-features`. Он читает `c
   поломка требует повышения версии и заметки о миграции ниже; внутренние модули не становятся
   стабильными контрактами только потому, что они `pub` для workspace.
 - Версия SDK — **следующая невыпущенная** на момент изменения, читается из тегов и манифестов, а
-  не угадывается. Версия `[workspace.package]` в этом дереве — `0.1.0-rc.2`; предыдущий
-  выпущенный тег — `v0.1.0-rc.1` (2026-11-15, пре-релиз); следующее повышение — до `0.1.0`.
+  не угадывается. Версия `[workspace.package]` в этом дереве — `0.1.0-rc.3`; предыдущий
+  выпущенный тег — `v0.1.0-rc.2` (2026-11-16, пре-релиз); следующее повышение — до `0.1.0`.
   Повышение меняет вместе: `[workspace.package] version`, пины `=0.1.0-alpha.N` цепочки SDK в
   `[workspace.dependencies]` (нужны для `cargo package`), четыре встроенных `plugin.toml`
   (`version`, `min_core`), lock-файлы (`Cargo.lock`, `plugins/Cargo.lock`,
   `crates/oncl-pdk/example/Cargo.lock`) и строку статуса в README, если она называет выпуск.
   Пин, расходящийся с версией workspace, делает весь workspace неразрешимым (`failed to select
-  a version for the requirement oncl-gost = "=0.1.0-rc.2"`), так что забытый пин не уедет в
+  a version for the requirement oncl-gost = "=0.1.0-rc.3"`), так что забытый пин не уедет в
   выпуск.
 
 Заметки о миграции:
@@ -488,6 +488,7 @@ CI запускает `cargo xtask check-release-features`. Он читает `c
 | 0.1.0-alpha.7 → 0.1.0-alpha.8 | Публичный API крейтов SDK не меняется. Меняются внутренний порядок освобождения ресурсов исполнителя в `oncl-server` (исправление редкого отказа `CapacityExceeded` при немедленной повторной заявке после `idle()`), тесты и документация. |
 | 0.1.0-alpha.8 → 0.1.0-rc.1 | `oncl-core`: у `KeyUseOutcome` новое поле `error: Option<ErrorCode>` — реализации `KeyUseGuard`, которые строят структуру литералом, должны его задать (`None`, если типизированной причины нет). `oncl-pki`: новый публичный модуль `cms::envelope` (`encrypt`, `decrypt`, `EnvelopeProfile`, `EnvelopeReport`, `StagingSink`): шифрование и расшифрование CMS только для RSA-получателей, на уровне библиотеки; ГОСТ-профилей шифрования нет. Журнал аудита `oncl-server`: байт 127 записи `FINAL` несёт код ошибки (прежние журналы читаются как есть, журнал новой версии старая версия читает как повреждённый). |
 | 0.1.0-rc.1 → 0.1.0-rc.2 | Крейты `oncl-update` и `oncl-plugin` (feature `distribution`): индекс проверяется через TUF, а не minisign. `oncl-update` **удаляет** `verify`, `trusted_comment`, `MAX_AGE`, `fetch`, `Fetched`, `index_url`, `embedded_keys`, реэкспорт `PublicKey` (и зависимость `minisign-verify`) и варианты `UpdateError`: `MalformedSignature`, `BadSignature`, `BadTrustedComment`, `CommentMismatch`, `Expired`, `BadKey`, `Fetch`; `MAX_INDEX_LEN` теперь определён в `index`. **Добавляет** `Index::accept` (индекс из байтов, проверенных TUF-клиентом: канал и `seq`), `Channel::target_path`, `UpdateError::{Tuf, from_tuf, retry_soon}`, `tuf::TufClient::verify_cached_target` (проверка сохранённой цели без сети по сохранённому файлу `targets`), поле `tuf::TrustState::targets_file` (структуру `TrustState` нельзя строить литералом без него) и feature `testing` (`tuf::testing::Repo`: репозиторий TUF из синтетических ключей для тестов потребителей). `oncl-plugin`: `Store::save_catalog(channel, index)` без подписи, `Store::load_catalog(channel, check)` принимает проверку байтов вместо ключей и возвращает `KeptCatalog` (индекс и срок, до которого он действует); файл `catalog/<канал>.json.minisig` больше не создаётся и при сохранении каталога удаляется. Миграция: ключи индекса заменяются корнем доверия `crates/oncl-update/keys/root.json`, клиент TUF создаётся через `TufClient::new`/`with_embedded_root`. |
+| 0.1.0-rc.2 → 0.1.0-rc.3 | Публичный API крейтов SDK не меняется. Изменённые `hmac` и `streebog` (и `multer` у сервера) берутся не из `vendor/`, а из форков на GitHub, закреплённых по коммиту: потребителю SDK вне workspace нужен тот же `[patch.crates-io]` с `git` и `rev`, что в корневом `Cargo.toml` (раздел 7). |
 
 ## 7. Готовность к публикации (и что не заявляется)
 
