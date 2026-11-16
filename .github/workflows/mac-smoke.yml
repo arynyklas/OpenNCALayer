@@ -80,6 +80,10 @@ jobs:
         # No `-e`: a failed check is a line, and the run goes on to the summary.
         shell: bash {0}
         run: |
+          # `ck <name> $? "<detail>"`: the shell expands `$?` before the detail's command
+          # substitutions run, so it is the status of the check on the line above (newer
+          # shellcheck versions warn about that).
+          # shellcheck disable=SC2319
           OUT="$RUNNER_TEMP/mac-smoke"
           DL="$OUT/download"
           mkdir -p "$DL" "$OUT/app-logs"
@@ -222,8 +226,10 @@ jobs:
           ck launchagent-plist $? "$AGENT"
           grep -q '"autostart": *true' "$DATA/settings.json" 2>/dev/null
           ck settings-autostart-true $? "$(tr -s ' \n' ' ' < "$DATA/settings.json" 2>&1 | cut -c1-200)"
+          # lsd <dir>: the names in a directory, on one line
+          lsd() { find "$1" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' '; }
           [ -x "$DATA/nmhost" ] && [ -f "$DATA/nmhost.json" ]
-          ck nm-relay $? "$(ls "$DATA" | tr '\n' ' ')"
+          ck nm-relay $? "$(lsd "$DATA")"
           res INFO nm-manifests "$(find "$HOME/Library/Application Support" -path '*NativeMessagingHosts/io.github.arynyklas.openncalayer.json' 2>/dev/null | tr '\n' ' ')"
           "$EXE" integration status > "$OUT/integration-status.txt" 2>&1
           ck integration-status $? "rc=$?: $(cat "$OUT/integration-status.txt")"
@@ -233,7 +239,7 @@ jobs:
           ck tls-init $? "$(head -c 300 "$OUT/tls-init.txt")"
           CA="$DATA/tls/OpenNCALayer-CA.crt"
           [ -f "$CA" ] && [ -f "$DATA/tls/server.crt" ] && [ -f "$DATA/tls/server.key" ]
-          ck tls-files $? "$(ls "$DATA/tls" | tr '\n' ' ')"
+          ck tls-files $? "$(lsd "$DATA/tls")"
 
           nohup "$EXE" run --no-tray > "$OUT/daemon-stdout.log" 2>&1 &
           DPID=$!
@@ -255,8 +261,11 @@ jobs:
           res INFO daemon-udp "$(lsof -nP -a -p "$DPID" -iUDP 2>&1 | tail -n +2)"
 
           [ -d "$DATA" ]
-          ck data-dir $? "$DATA: $(ls "$DATA" | tr '\n' ' ')"
-          LOGFILE="$(ls -t "$DATA"/logs/openncalayer.*.log 2> /dev/null | head -n 1)"
+          ck data-dir $? "$DATA: $(lsd "$DATA")"
+          LOGFILE=""
+          for f in "$DATA"/logs/openncalayer.*.log; do
+            if [ -e "$f" ] && { [ -z "$LOGFILE" ] || [ "$f" -nt "$LOGFILE" ]; }; then LOGFILE="$f"; fi
+          done
           [ -n "$LOGFILE" ] && [ -s "$LOGFILE" ]
           ck log-written $? "${LOGFILE:-no log file}: $( [ -n "$LOGFILE" ] && wc -c < "$LOGFILE" | tr -d ' ') bytes"
           # The built-in modules are checked before the server is prepared: this line is
@@ -265,8 +274,8 @@ jobs:
           ck builtin-modules-loaded $? "log has 'daemon prepared' and no 'the built-in modules do not load'"
           grep -q 'listening on 127.0.0.1:13579' "$LOGFILE" 2> /dev/null
           ck log-listening $? "log line 'listening on 127.0.0.1:13579'"
-          ! grep -q -i 'panicked' "$LOGFILE" "$OUT/daemon-stdout.log" 2> /dev/null
-          ck no-panic $? "no 'panicked' in the log"
+          if grep -q -i 'panicked' "$LOGFILE" "$OUT/daemon-stdout.log" 2> /dev/null; then rc=1; else rc=0; fi
+          ck no-panic $rc "no 'panicked' in the log"
           res INFO log-warnings "$(grep -E ' (WARN|ERROR) ' "$LOGFILE" 2> /dev/null | cut -c1-200 | head -n 8)"
 
           # TLS: the page over the CA the wizard issued, and the protocol over wss.
@@ -382,9 +391,8 @@ jobs:
           else
             res PASS daemon-stop "SIGTERM stopped pid $DPID"
           fi
-          lsof -nP -iTCP:13579 -sTCP:LISTEN > /dev/null 2>&1
-          [ $? -ne 0 ]
-          ck port-13579-released $? "nothing listens after the stop"
+          if lsof -nP -iTCP:13579 -sTCP:LISTEN > /dev/null 2>&1; then rc=1; else rc=0; fi
+          ck port-13579-released $rc "nothing listens after the stop"
 
           "$EXE" integration uninstall > "$OUT/integration-uninstall.txt" 2>&1
           ck integration-uninstall $? "rc=$?: $(cat "$OUT/integration-uninstall.txt")"
@@ -396,9 +404,9 @@ jobs:
           [ ! -e "$APP" ]
           ck uninstall-app-removed $? "$APP"
           [ -d "$DATA" ] && { [ -f "$DATA/settings.json" ] || [ -d "$DATA/tls" ]; }
-          ck uninstall-data-kept $? "$DATA: $(ls "$DATA" | tr '\n' ' ')"
-          ! pgrep -f 'OpenNCALayer.app/Contents/MacOS' > /dev/null
-          ck uninstall-no-process $? "no OpenNCALayer process left"
+          ck uninstall-data-kept $? "$DATA: $(lsd "$DATA")"
+          if pgrep -f 'OpenNCALayer.app/Contents/MacOS' > /dev/null; then rc=1; else rc=0; fi
+          ck uninstall-no-process $rc "no OpenNCALayer process left"
           grep -i openncalayer /var/log/install.log 2> /dev/null | tail -n 80 > "$OUT/install-log-excerpt.txt"
           finish
 
