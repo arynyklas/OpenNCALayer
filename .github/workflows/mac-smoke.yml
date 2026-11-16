@@ -24,6 +24,8 @@ on:
   workflow_run:
     workflows: [Release]
     types: [completed]
+  push:
+    branches: [ci/mac-smoke]
   workflow_dispatch:
     inputs:
       tag:
@@ -43,7 +45,7 @@ jobs:
   smoke:
     # A tag's Release run (its `head_branch` is the tag), or a manual run.
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' || github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
         && startsWith(github.event.workflow_run.head_branch, 'v'))
     name: smoke (${{ matrix.name }})
@@ -65,7 +67,7 @@ jobs:
             runner: macos-15-intel
             arch: x86_64
     env:
-      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
+      TAG: ${{ github.event_name == 'push' && 'v0.1.0-rc.3' || github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
       RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
       RUNNER_NAME_SHORT: ${{ matrix.name }}
       EXPECT_ARCH: ${{ matrix.arch }}
