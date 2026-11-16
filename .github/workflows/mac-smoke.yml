@@ -193,7 +193,8 @@ jobs:
           ck version $rc "--version -> '$v', expected $VER"
           for p in "$EXE" "$NMH"; do
             archs="$(lipo -archs "$p" 2>&1)"
-            case " $archs " in *" x86_64 "*" arm64 "* | *" arm64 "*" x86_64 "*) rc=0 ;; *) rc=1 ;; esac
+            printf '%s\n' "$archs" | grep -qw x86_64 && printf '%s\n' "$archs" | grep -qw arm64
+            rc=$?
             ck "universal-$(basename "$p")" $rc "lipo -archs: $archs"
           done
           if [ "$(uname -m)" = arm64 ]; then
@@ -391,8 +392,6 @@ jobs:
           rm -rf "$APP"
           [ ! -e "$APP" ]
           ck uninstall-app-removed $? "$APP"
-          pkgutil --forget io.github.arynyklas.openncalayer > "$OUT/pkgutil-forget.txt" 2>&1
-          res INFO pkgutil-forget "$(cat "$OUT/pkgutil-forget.txt")"
           [ -d "$DATA" ] && { [ -f "$DATA/settings.json" ] || [ -d "$DATA/tls" ]; }
           ck uninstall-data-kept $? "$DATA: $(ls "$DATA" | tr '\n' ' ')"
           ! pgrep -f 'OpenNCALayer.app/Contents/MacOS' > /dev/null
