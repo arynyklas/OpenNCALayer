@@ -8,18 +8,18 @@ OpenNCALayer — независимый проект и не связан с Н�
 
 ## Статус
 
-Ранняя разработка. Выпускаются предварительные версии `0.1.0-alpha.N` ([Releases](https://github.com/arynyklas/OpenNCALayer/releases)); stable-релиза пока нет. Что надёжно и что нет:
+Ранняя разработка. Выпускаются предварительные версии ([Releases](https://github.com/arynyklas/OpenNCALayer/releases)); stable-релиза пока нет. Что надёжно и что нет:
 
 - **Работает:** протокол оригинала для файловых хранилищ (вход на eGov проверен на Windows 11 в Chrome — и через `wss` с установленным CA, и через расширение), проверка сертификатов НУЦ, расширение браузера, программа в области уведомлений.
 - **Экспериментально:** токены и удостоверение личности (выключены по умолчанию, проверены только на программных эмуляторах), плагины-порты модулей оригинала и подпись из окна «Инструменты» (настоящим ключом и службами НУЦ не проверена), установщики на macOS (не проверялись), самообновление по подписанному индексу (канал `beta`: реализовано и проверено тестами и проверкой индекса в CI; на выпущенной сборке «Проверить обновления» не прогонялось, более новой версии ещё нет).
 - **Нет:** шифрования и расшифрования, WinGet-пакета (подробности в [`docs/dev/winget.md`](docs/dev/winget.md)), stable-канала обновлений.
 
-Подробно о границах — в [`docs/user/compatibility.md`](docs/user/compatibility.md), [`docs/user/tokens.md`](docs/user/tokens.md) и [`docs/user/plugins.md`](docs/user/plugins.md).
+Подробно о границах — в [`docs/user/compatibility.md`](docs/user/compatibility.md), [`docs/user/tokens.md`](docs/user/tokens.md) и [`docs/user/plugins.md`](docs/user/plugins.md). Сравнение с оригиналом для этого релиза не повторялось.
 
 ## С чего начать
 
 **Я пользователь сайта (egov, госзакупки…).** Поставьте программу и настройте доступ браузера:
-1. Скачайте установщик со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases): Windows — `openncalayer-<версия>-win-x64-setup.exe` (32-битная — `win-x86`; Windows 7 SP1 — `win7-*`), macOS — `openncalayer-<версия>-osx.pkg`, Linux — `openncalayer-<версия>-linux-x64.AppImage`, Arch Linux — пакет AUR `openncalayer-bin` появится только для релизов без суффикса; пока все выпуски предварительные, в AUR пакета нет.
+1. Скачайте установщик со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases): Windows — `openncalayer-<версия>-win-x64-setup.exe` (32-битная — `win-x86`; Windows 7 SP1 — `win7-*`), macOS — `openncalayer-<версия>-osx.pkg`, Linux — `openncalayer-<версия>-linux-x64.AppImage`, Arch Linux — пакет `openncalayer-bin-<версия>-1-x86_64.pkg.tar.zst` оттуда же (или AppImage).
 2. Либо установите расширение браузера ([`docs/user/browser-extension.md`](docs/user/browser-extension.md)) — сертификат тогда не нужен, либо выпустите сертификат мастером «Сертификат для браузера…» в меню значка ([`docs/user/tls.md`](docs/user/tls.md)).
 3. Если вы выбрали сертификат, откройте `https://127.0.0.1:13579/openncalayer/selftest`: страница должна открыться без предупреждения о сертификате. С расширением эта проверка не нужна.
 
@@ -30,7 +30,7 @@ OpenNCALayer — независимый проект и не связан с Н�
 - CLI `oncl` — подпись, проверка, хеширование, метки времени: [`docs/user/cli.md`](docs/user/cli.md);
 - HTTP-сервис `oncl-server` — API выключен, пока оператор не включит его: [`docs/user/server.md`](docs/user/server.md), [`docs/user/http-api.md`](docs/user/http-api.md).
 
-Архивы `oncl` и `oncl-server` workflow релиза собирает только как артефакты запуска (`platform-*`), к релизу они не прикладываются, и в списке файлов `0.1.0-alpha.7` их нет: собирайте из исходников ([`docs/dev/development.md`](docs/dev/development.md)).
+Архивы `oncl` и `oncl-server` workflow релиза собирает только как артефакты запуска (`platform-*`), к релизу они не прикладываются: собирайте из исходников ([`docs/dev/development.md`](docs/dev/development.md)).
 
 ## Что умеет сейчас
 

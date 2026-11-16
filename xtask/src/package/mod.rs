@@ -9,7 +9,7 @@
 //!   arm64, a postinstall that integrates the app for the console user, as that user);
 //! - [`linux`]: the AppDir built in a glibc 2.28 container, checked against that glibc and
 //!   started there, then the AppImage;
-//! - [`aur`]: `PKGBUILD` and `.SRCINFO` of `openncalayer-bin`;
+//! - [`arch`]: `PKGBUILD` and `.SRCINFO` of the pacman package `openncalayer-bin`;
 //! - [`platform`]: the standalone `oncl` (command line) and `oncl-server` (HTTP service) as
 //!   archives of their own, unpacked and started by [`platform_smoke`]; no Velopack, none of
 //!   the desktop's files.
@@ -18,7 +18,7 @@
 //! update packages keep Velopack's names, which the update index refers to); the standalone
 //! packages are `oncl-<version>-<flavor>…` and `oncl-server-<version>-<flavor>…`.
 
-pub mod aur;
+pub mod arch;
 pub mod linux;
 pub mod macos;
 pub mod platform;

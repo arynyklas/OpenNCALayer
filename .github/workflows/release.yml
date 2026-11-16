@@ -4,15 +4,16 @@ name: Release
 # Windows 7 x64/x86 with their app-local DLLs), Linux and macOS as archives, as installers
 # (`Setup.exe` per Windows flavor, the macOS `.pkg` and `.zip`, the Linux AppImage) and as
 # Velopack update packages (the update index points at those), the browser extension, a
-# CycloneDX SBOM and SHA256SUMS, every file with a build provenance attestation. A tag with
-# a pre-release suffix (`v0.1.0-alpha.1`) makes a pre-release. The installers and packages
+# CycloneDX SBOM, the pacman package for Arch Linux and SHA256SUMS, every file with a build
+# provenance attestation. A tag with a pre-release suffix (`v0.1.0-alpha.1`) makes a
+# pre-release; every release is created as a draft. The installers and packages
 # are made by `cargo xtask package` (roadmap P8), the same commands CI runs.
 # The standalone `oncl` and `oncl-server` packages (`cargo xtask package platform`) are built
 # by the `platform` jobs as workflow artifacts (`platform-*`), outside this release: no job
 # of this file publishes them, signs them or uploads them to a registry or a browser store.
 # Then a pull request adds the version to the update indexes (`updates/v1/<channel>.json`:
 # a pre-release to beta, a release to stable and beta), unsigned: the maintainer signs them
-# locally (`cargo xtask sign`), never CI. The AUR package follows a release (aur.yml).
+# locally (`cargo xtask sign`), never CI.
 #
 # Code signing runs only with its secrets, otherwise it is skipped with a notice:
 # Authenticode through SignPath (secret SIGNPATH_API_TOKEN, variables
@@ -689,8 +690,69 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
+  # The pacman package `openncalayer-bin` (`cargo xtask package arch`) of the Linux archive
+  # of this run: its PKGBUILD names the archive at the release's final URL, with the sha256 of
+  # the archive built here, and in a pinned Arch Linux container makepkg builds the package
+  # from that very file. The package is installed and removed there as a check, and goes into
+  # the release with the other `release-*` files (SHA256SUMS, provenance).
+  arch:
+    needs: [version, binaries]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      # makepkg's container: Arch Linux with base-devel, pinned by digest.
+      ARCH_IMAGE: archlinux:base-devel@sha256:624bdc7fc6615155d67bc34cf7146c0c9fd0e3c92943977da63a630e4ca49c30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-binaries-linux-x64
+          path: archive
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: PKGBUILD and .SRCINFO
+        run: |
+          archive="openncalayer-$VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          sha256="$(sha256sum < "archive/$archive" | cut -d ' ' -f 1)"
+          cargo xtask package arch --version "$VERSION" --sha256 "$sha256" --out arch
+          # makepkg finds the archive by its name in the build directory and does not
+          # download it: the release does not exist yet.
+          cp "archive/$archive" arch/
+      # makepkg as an unprivileged user: .SRCINFO as makepkg prints it, the archive checked
+      # by sha256, the package built (without installing its dependencies: packaging needs
+      # none) and listed; then installed with its dependencies, started and removed.
+      - name: makepkg, install and remove in Arch Linux
+        run: |
+          mkdir -p release-arch
+          chmod 777 release-arch
+          docker run --rm -v "$PWD/arch:/arch:ro" -v "$PWD/release-arch:/out" "$ARCH_IMAGE" bash -euo pipefail -c '
+            useradd -m builder
+            cp -r /arch /home/builder/pkg
+            chown -R builder: /home/builder/pkg
+            cd /home/builder/pkg
+            runuser -u builder -- makepkg --printsrcinfo > /tmp/srcinfo
+            diff -u .SRCINFO /tmp/srcinfo
+            runuser -u builder -- makepkg --nodeps --noconfirm
+            pacman -Qlp openncalayer-bin-*.pkg.tar.*
+            cp openncalayer-bin-*.pkg.tar.zst /out/
+            pacman -Syu --noconfirm
+            pacman -U --noconfirm openncalayer-bin-*.pkg.tar.zst
+            openncalayer --version
+            test "$(cat /usr/lib/openncalayer/package-manager)" = pacman
+            pacman -R --noconfirm openncalayer-bin
+            test ! -e /usr/bin/openncalayer
+          '
+          ls -l release-arch
+          test "$(ls release-arch | wc -l)" = 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-arch
+          path: release-arch/*
+          if-no-files-found: error
+
   publish:
-    needs: [version, binaries, extension, sbom]
+    needs: [version, binaries, extension, sbom, arch]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -712,16 +774,17 @@ jobs:
         uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
-      # A pre-release is created as a draft: the lab tests this run's installers and sets the
-      # commit status `vm-smoke`, and the maintainer publishes the draft once it is green
-      # (docs/dev/release.md). A release without a suffix is published at once, as before.
+      # Every release is created as a draft: the lab tests this run's installers and sets the
+      # commit status `vm-smoke`, the macOS smoke runs, and the maintainer publishes the
+      # draft once both are green (docs/dev/release.md). Only a version with a suffix is
+      # marked a pre-release.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          flags=()
+          flags=(--draft)
           if [ "$PRERELEASE" = true ]; then
-            flags+=(--prerelease --draft)
+            flags+=(--prerelease)
           fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \

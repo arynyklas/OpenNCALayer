@@ -11,7 +11,7 @@
 //! container.
 //!
 //! The release archive `openncalayer-<version>-x86_64-unknown-linux-gnu.tar.gz` (and so the
-//! AUR package) carries the same container-built programs.
+//! pacman package) carries the same container-built programs.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
