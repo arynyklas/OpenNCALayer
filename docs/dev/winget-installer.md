@@ -13,39 +13,21 @@ WinGet запускает установщик и верит его коду в�
 
 Коды: 0 успех; 1 прочий сбой; 2 аргументы; 3 payload повреждён/отсутствует; **4 занято**; 5 программу нельзя спросить; 6 Setup завершился ошибкой; 7 Setup вышел, но нужная версия не установлена; 8 повышенный токен; 9 не Windows. Успех — только 0 (WinGet: `InstallerSuccessCodes` не расширять).
 
-## Манифест приложения (находка F1 матрицы ВМ)
+## Манифест приложения
 
-В PE entry должен быть ресурс `RT_MANIFEST` с `requestedExecutionLevel level="asInvoker"` и GUID `supportedOS` для Windows Vista–11. Без него (так было в alpha.7: в образе нет секции `.rsrc`) Windows по имени файла (`…-winget-setup.exe`, «setup») считает программу старым установщиком и до её запуска показывает запрос UAC «Разрешить этому приложению от неизвестного издателя…»; без интерактивного сеанса запуск падает с `ERROR_ELEVATION_REQUIRED` (740). Принять запрос бесполезно: токен повышен, и entry по замыслу отказывает кодом 8. Строка `asInvoker`, которую находил `grep` в готовом файле, лежала внутри **payload** (манифест Velopack `Setup.exe`), а не у самого entry.
+В PE entry должен быть ресурс `RT_MANIFEST` с `requestedExecutionLevel level="asInvoker"` и GUID `supportedOS` для Windows Vista–11. Без него Windows по имени файла (`…-winget-setup.exe`, «setup») считает программу старым установщиком и до её запуска показывает запрос UAC «Разрешить этому приложению от неизвестного издателя…»; без интерактивного сеанса запуск падает с `ERROR_ELEVATION_REQUIRED` (740). Принять запрос бесполезно: токен повышен, и entry по замыслу отказывает кодом 8. Манифест Velopack `Setup.exe` лежит внутри **payload** и к самому entry не относится.
 
 Манифест лежит в `crates/oncl-winget-setup/windows/oncl-winget-setup.manifest`; `build.rs` передаёт его компоновщику MSVC (`/MANIFEST:EMBED /MANIFESTINPUT /MANIFESTUAC:NO`): ни нового зависимого пакета, ни `rc.exe` не нужно, одинаково для x64 и x86. Ресурс — отдельная секция `.rsrc` до `.reloc`; payload по-прежнему дописывается после **последней** секции и до сертификатной таблицы, поэтому `payload::append/read` и порядок подписи (сначала `package winget-setup`, потом Authenticode целого файла) не меняются. Страж: `cargo xtask package winget-setup` отказывается собирать entry без манифеста `asInvoker` (`oncl_winget_setup::manifest`), тесты `crates/oncl-winget-setup/tests/manifest.rs` читают ресурс из собранного entry и проверяют, что payload находится.
 
-Проверено на ВМ (запуск без `__COMPAT_LAYER`, неповышенный токен): entry alpha.7 без манифеста (SHA-256 `230DF6F7…` x64, `9C28ACC3…` x86) на Windows 11 (x64 и x86 под WOW64) и Windows 10 x86 даёт «The requested operation requires elevation» (интерактивно — окно UAC «unknown publisher»); на Windows 10 x64 запрос не появляется. Entry с манифестом стартует без запроса, чистая установка — код 0, повышенный запуск — код 8 без записи. Изменился SHA-256 entry: хэши кандидата в манифестах WinGet и в `candidate-SHA256SUMS` нужно получить заново из пересобранного файла (`cargo xtask winget candidate|generate`), а измерения матрицы ВМ по entry перепроверить на нём без `__COMPAT_LAYER`.
-
 ## Порядок выпуска (release.yml)
 
-Сборка entry (`--no-default-features`, без тестового harness) → `vpk pack` → Authenticode `Setup.exe` (если SignPath настроен) → `cargo xtask package winget-setup` вкладывает **итоговый** `Setup.exe` в entry → Authenticode самого entry (отдельный запрос SignPath, артефакт `signpath-unsigned-winget-setup-<флейвор>`; в конфигурации артефакта SignPath должен быть разрешён `*-winget-setup.exe`) → публикуются именно эти байты → один раз скачать, сверить SHA-256 → манифест WinGet (Task 38). Без SignPath entry публикуется неподписанным, в журнале notice; подпись не выдумывается.
+Сборка entry (`--no-default-features`, без тестового harness) → `vpk pack` → Authenticode `Setup.exe` (если SignPath настроен) → `cargo xtask package winget-setup` вкладывает **итоговый** `Setup.exe` в entry → Authenticode самого entry (отдельный запрос SignPath, артефакт `signpath-unsigned-winget-setup-<флейвор>`; в конфигурации артефакта SignPath должен быть разрешён `*-winget-setup.exe`) → публикуются именно эти байты, их SHA-256 попадают в `SHA256SUMS` релиза → манифест WinGet (`cargo xtask winget manifest`, [`winget.md`](winget.md)). Без SignPath entry публикуется неподписанным, в журнале notice; подпись не выдумывается.
 
-## Что проверено на этом хосте и что нет
+## Как проверяется
 
 Проверено реальными процессами и реальным per-user IPC (`cargo test -p oncl-winget-setup --test maintenance`): активная операция не прерывается и Setup не стартует; новые операции блокируются на время lease; убитый установщик освобождает программу; открытое окно и незавершённый QUIET дают «занято»; Setup с кодом 0 без установки и неверная версия (манифест, ARP, программа, расположение, архитектура) — отказ. Вместо Velopack Setup используется **harness** (`oncl-winget-harness`: поддельный рабочий стол за настоящим `ActivityGate` и поддельный Setup, пишущий в одноразовый каталог и одноразовый ключ HKCU `OpenNCALayer-test-*`); реальный Setup пишет настоящий ARP и на одноразовый корень не перенаправляется.
 
-**Не выполнено (предусловие выпуска, VM отсутствует: Hyper-V включён, но без прав список ВМ недоступен, Windows Sandbox не установлен; WinGet на хосте не запускался):** на чистых Windows 10/11 x64 и x86 ВМ (обычный пользователь и администратор с неповышенным токеном):
-
-1. Старая версия установлена обычным установщиком; в программе запущена долгая подпись (или пакет). `winget upgrade --manifest <каталог> --silent` → код 4, подпись завершается корректно, установка не изменена (`Get-ItemProperty HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenNCALayer` — прежняя `DisplayVersion`).
-2. То же с открытым окном подтверждения, ручными инструментами и вызовом плагина.
-3. Простой upgrade: код 0, новая `DisplayVersion`, программа запущена снова; параллельно штатный updater (hold exclusive: один из них получает «занято»); перезапуск ВМ; сохранность `%APPDATA%\OpenNCALayer`.
-4. Чистая установка: окон нет; `winget uninstall`; reinstall.
-5. Повышенный запуск → код 8 до записи.
-6. ProbeReport (Task 38): на чистой ВМ без VC++ Redistributable установщик запускается и ставит версию.
-
-Минимальный скрипт проверки шага 1 (PowerShell в ВМ, неповышенный):
-
-```powershell
-$arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenNCALayer'
-(Get-ItemProperty $arp).DisplayVersion          # до
-.\openncalayer-<версия>-win-x64-winget-setup.exe --silent --wait 30; "exit=$LASTEXITCODE"   # при активной подписи ожидается 4
-(Get-ItemProperty $arp).DisplayVersion          # не изменилась
-```
+Три теста с настоящим демоном `#[ignore]` и требуют harness: `real_idle_daemon_is_held_for_setup_and_released`, `real_signing_in_flight_gets_busy_and_completes_correctly`, `a_killed_installer_releases_the_real_daemon` (`crates/openncalayer/tests/maintenance_e2e.rs`; сборка: `cargo build -p oncl-winget-setup --bin oncl-winget-harness`, запуск: `cargo test -p openncalayer --features e2e-prompter --test maintenance_e2e -- --ignored`). Окно Slint (`any_window_open`) в настоящем демоне headless не проверяется. CI (`ci.yml`, `windows-package`) собирает entry без harness, гоняет `cargo xtask package winget-setup` (PE-гейт) и `cargo test -p oncl-winget-setup --test maintenance`.
 
 ## Шаг оператора: конфигурация артефакта SignPath
 
@@ -53,18 +35,13 @@ $arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenNCALayer'
 
 ## Гонка «программа запустилась, пока готовился Setup»
 
-Последний взгляд (одна попытка, без повторов) стоит **после** повторной проверки SHA-256 копии Setup и непосредственно перед его запуском: если при первом взгляде программы не было, а теперь есть, она получает обычный hold; любой процесс установки, которого не спрашивали (другой `openncalayer.exe`, `Update.exe`, второй демон), отменяет запуск (код 4), потому что Setup завершает **все** процессы под корнем установки (`nmhost.exe` не считается). Остаётся окно **в секунды**: от этого взгляда до того, как сам Setup (чтение своего образа, prerequisites, проверки места и ОС) дойдёт до принудительной остановки процессов. Демон, стартовавший именно тогда (автозапуск при входе, relay расширения), не удержан и может быть остановлен. Закрыть это можно только изменением Setup (закреплённый Velopack не меняется) либо маркером «идёт обновление» (именованный mutex/файл в каталоге данных), который установщик ставит до первого взгляда, а демон и relay соблюдают при старте: помогает лишь для версий, которые его знают (W02/V03; пункт «демон стартовал во время upgrade» добавлен в список ВМ).
+Последний взгляд (одна попытка, без повторов) стоит **после** повторной проверки SHA-256 копии Setup и непосредственно перед его запуском: если при первом взгляде программы не было, а теперь есть, она получает обычный hold; любой процесс установки, которого не спрашивали (другой `openncalayer.exe`, `Update.exe`, второй демон), отменяет запуск (код 4), потому что Setup завершает **все** процессы под корнем установки (`nmhost.exe` не считается). Остаётся окно **в секунды**: от этого взгляда до того, как сам Setup (чтение своего образа, prerequisites, проверки места и ОС) дойдёт до принудительной остановки процессов. Демон, стартовавший именно тогда (автозапуск при входе, relay расширения), не удержан и может быть остановлен. Закрыть это можно только изменением Setup (закреплённый Velopack не меняется) либо маркером «идёт обновление» (именованный mutex/файл в каталоге данных), который установщик ставит до первого взгляда, а демон и relay соблюдают при старте: помогает лишь для версий, которые его знают.
 
-## Для гейта V03
+## Поведение в особых случаях
 
-Три теста с настоящим демоном `#[ignore]` и требуют harness: `real_idle_daemon_is_held_for_setup_and_released`, `real_signing_in_flight_gets_busy_and_completes_correctly`, `a_killed_installer_releases_the_real_daemon` (`crates/openncalayer/tests/maintenance_e2e.rs`; сборка: `cargo build -p oncl-winget-setup --bin oncl-winget-harness`, запуск: `cargo test -p openncalayer --features e2e-prompter --test maintenance_e2e -- --ignored`). Окно Slint (`any_window_open`) в настоящем демоне headless не проверяется. CI (`ci.yml`, `windows-package`) собирает entry без harness, гоняет `cargo xtask package winget-setup` (PE-гейт) и `cargo test -p oncl-winget-setup --test maintenance`.
-
-## Дополнения к списку ВМ и учёту
-
-- Upgrade с версии без endpoint (демон alpha.6 запущен): ожидается код 5; админ при выключенном UAC: код 8 по замыслу; два установщика одновременно без демона (между ними нет mutex, решает собственная блокировка Setup); страница, опрашивающая NCALayer (`getActiveTokens`), продлевает QUIET, поэтому код 4 в занятом браузере — нормальный исход [не измерено]; `winget install --interactive` запускает entry без `--silent` (код 2); понижение версии entry не отклоняет.
+- Запущенная программа без endpoint (старая версия): код 5; администратор при выключенном UAC: код 8 по замыслу; два установщика одновременно без демона (между ними нет mutex, решает собственная блокировка Setup); страница, опрашивающая NCALayer (`getActiveTokens`), продлевает QUIET, поэтому код 4 в занятом браузере — нормальный исход; `winget install --interactive` запускает entry без `--silent` (код 2); понижение версии entry не отклоняет.
 - Не учитываются по замыслу: headless `oncl-server`, `oncl` и встраиватели SDK (не часть десктопного пакета); сканирование токенов в окне «Инструменты» не идёт через Engine (его покрывает признак открытого окна); новые окна во время hold не блокируются, их операции ждут в `begin`.
 - Exit 4 в манифесте WinGet — не успех (`InstallerSuccessCodes` не расширять); `Setup`, не завершившийся за 15 минут, не останавливается, hold при этом снимается, временная копия остаётся.
-- `OperationLease::attach_guard` — новый публичный метод `oncl-pki`: отметить в changelog при следующей версии. Путь файла релиза `openncalayer-<версия>-win-<x64|x86>-winget-setup.exe` внести в список файлов `release.md`.
 
 ## Что считается операцией (учёт в одном `ActivityGate`)
 
@@ -78,4 +55,4 @@ $arp = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\OpenNCALayer'
 ## Границы `last_look` и запуск тестов
 
 - Процессы, которые нельзя открыть (другой сеанс, защищённые), `last_look` пропускает (fail open, тот же охват, что у принудительной остановки самого Setup); отказ даёт только сбой снимка списка процессов.
-- Для гейта V03: тесты не-Windows (`tests/maintenance/main.rs`) запускаются только вручную (WSL: `cargo +1.99.1 test -p oncl-winget-setup --test maintenance`); три `#[ignore]` e2e с настоящим демоном требуют предварительно собранный harness (`cargo build -p oncl-winget-setup --bin oncl-winget-harness`).
+- Тесты не-Windows (`tests/maintenance/main.rs`) запускаются только вручную (WSL: `cargo +1.99.1 test -p oncl-winget-setup --test maintenance`); три `#[ignore]` e2e с настоящим демоном требуют предварительно собранный harness (`cargo build -p oncl-winget-setup --bin oncl-winget-harness`).

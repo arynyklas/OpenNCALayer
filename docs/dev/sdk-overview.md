@@ -60,8 +60,7 @@ Rust SDK добавляет отдельные CAdES B/T/LT/LTA: `SignRequest::c
 [`docs/dev/platform-acceptance.md`](platform-acceptance.md) (приёмка V01,
 статус). Шифрование и расшифрование CMS (G01/G02) есть только библиотекой `oncl-pki`
 (`oncl_pki::cms::envelope`, профили RSA-OAEP); в фасаде SDK, CLI и HTTP их нет. Казахстанский
-ГОСТ-профиль не доказан (Kalkan его не умеет) и не заявляется. WinGet-пакета нет
-(в `winget/hash-ledger.json` нет ни одной версии); установка — из Releases.
+ГОСТ-профиль не доказан (Kalkan его не умеет) и не заявляется. WinGet-пакета нет; установка — из Releases.
 Журнал durable-аудита хозяина-библиотеки описан в [`audit.md`](audit.md).
 
 ## Плагины в SDK
