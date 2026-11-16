@@ -1,7 +1,5 @@
 [workspace]
 members = ["crates/*", "xtask"]
-# Third-party crates patched below: built as dependencies, not linted or tested as ours.
-exclude = ["vendor"]
 resolver = "3"
 
 [workspace.package]
@@ -31,7 +29,7 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 # pins the exact workspace version: `cargo package` needs a `version` next to each `path`, and
 # it must be bumped together with `[workspace.package]`. These crates (and only these) set
 # `publish = true` in their manifests so that `cargo package` can verify the chain offline;
-# nothing uploads them: the modified `hmac`/`streebog` of `vendor/` are not on crates.io under
+# nothing uploads them: the forked `hmac`/`streebog` (git dependencies) are not on crates.io under
 # these names (crates.io's lack the `secret-input` feature), so a registry release is blocked
 # until that is decided. A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
@@ -84,9 +82,9 @@ gost94 = { version = "0.11.0", default-features = false }
 # point to, so no key is stored twice; already in the lock file, no features (std's hasher).
 hashbrown = { version = "0.17.1", default-features = false }
 hex-literal = "1.1.0"
-# Direct paths also work for independent SDK consumers, which do not inherit
-# this workspace's root [patch.crates-io] entries.
-hmac = { version = "0.13.0", path = "vendor/hmac" }
+# Fork with additive secret-input variants (see `[patch.crates-io]`); the git source is also
+# named here so that independent SDK consumers, who do not inherit that section, get it too.
+hmac = { version = "0.13.0", git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 httparse = "1.10.1"
 # The tray on Linux (StatusNotifierItem over D-Bus, no GTK): zbus on async-io, like the AT-SPI
 # of Slint's winit backend; `blocking` runs the service in a thread of its own.
@@ -104,9 +102,10 @@ lopdf = { version = "0.45.0", default-features = false }
 minisign = "0.10.0"
 # Verification of the update index signatures (`oncl-update`): no dependencies of its own.
 minisign-verify = "0.3.0"
-# Pinned proven multipart parser with an additive raw-framing observer; path is
-# explicit so independent API/server consumers receive the same required seam.
-multer = { version = "=3.1.0", path = "vendor/multer", default-features = false }
+# Fork of the proven multipart parser with an additive raw-framing observer (branch
+# `openncalayer/multer-3.1.0` of arynyklas/multer); the source is named here so that
+# independent API/server consumers receive the same required seam.
+multer = { version = "=3.1.0", git = "https://github.com/arynyklas/multer", rev = "70ed48587dd730bbeb5b55ec2617cae11760f9d0", default-features = false }
 # PE and ELF reading only: in xtask (`check-imports`, the glibc floor of the Linux packages)
 # and oncl-testkit (export tables of the Windows 7 app-local DLLs).
 object = { version = "0.40.0", default-features = false, features = ["read_core", "pe", "elf", "std"] }
@@ -148,7 +147,9 @@ sha2 = "0.11.1"
 slint = { version = "~1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "accessibility"] }
 slint-build = "~1.18.1"
 spki = { version = "0.8.1", features = ["alloc"] }
-streebog = { version = "0.11.0", path = "vendor/streebog", default-features = false }
+# Fork with additive secret-input variants (see `[patch.crates-io]`); the git source is also
+# named here so that independent SDK consumers, who do not inherit that section, get it too.
+streebog = { version = "0.11.0", git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = "0.3.55"
@@ -205,20 +206,25 @@ zeroize = "1.9.1"
 zip = { version = "9.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [patch.crates-io]
-# The crates.io package with one change, described in the README and NOTICE:
+# Forks of the crates.io packages with one change each, pinned by commit (`rev`); the change
+# and its upstream commit are in the fork branch named in each comment. A Slint, Velopack,
+# RustCrypto or multer upgrade means rebasing that branch and moving the `rev`.
+#
 # `SystemParametersInfoForDpi` (Windows 10 1607+) is looked up at run time instead of
 # imported, so the Windows 7 builds start. The version must stay the one `slint` locks.
-i-slint-backend-winit = { path = "vendor/i-slint-backend-winit" }
+# Branch `openncalayer/i-slint-backend-winit-1.18.1` of arynyklas/slint.
+i-slint-backend-winit = { git = "https://github.com/arynyklas/slint", rev = "586d17da44c6e997d37a5865b20c3e8d344e87bf" }
 
-# The crates.io package with one change, described in the README and NOTICE: a full
-# package already on disk or rebuilt from deltas is checked by the update source before it
-# is used and before Update.exe is taken from it. The version must stay the one above.
-velopack = { path = "vendor/velopack" }
+# A full package already on disk or rebuilt from deltas is checked by the update source before
+# it is used and before Update.exe is taken from it. The version must stay the one above.
+# Branch `openncalayer/velopack-1.3.39-g8d2844f` of arynyklas/velopack.
+velopack = { git = "https://github.com/arynyklas/velopack", rev = "e2c8d73c368ce0383a547ed5f3dfece42f98ac72" }
 
-# Pinned upstream cores with additive secret-input variants for agreement/wrap.
-# Ordinary public-document hash/HMAC APIs retain their original fast path.
-streebog = { path = "vendor/streebog" }
-hmac = { path = "vendor/hmac" }
+# Additive secret-input variants of the cores for agreement/wrap; the ordinary public-document
+# hash/HMAC APIs keep their original fast path. Branches `openncalayer/streebog-0.11.0` of
+# arynyklas/hashes and `openncalayer/hmac-0.13.0` of arynyklas/MACs.
+streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
+hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 
 # RSA key generation (`oncl-pki::keygen` and its tests, `cargo xtask gen-fixtures` and the
 # xtask tests) is very slow unoptimized.

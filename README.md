@@ -74,4 +74,4 @@ OpenNCALayer — независимый проект и не связан с Н�
 
 © 2026 Aryn Yklas.
 
-[Apache-2.0](LICENSE), см. также [NOTICE](NOTICE). `web/demo/vendor/ncalayer-client.js` — MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). `vendor/velopack` — изменённая копия Velopack, MIT, см. [`vendor/velopack/LICENSE`](vendor/velopack/LICENSE). `vendor/i-slint-backend-winit` — изменённая копия бэкенда winit из Slint, используется по LicenseRef-Slint-Royalty-free-2.0, см. [`vendor/i-slint-backend-winit/LICENSES`](vendor/i-slint-backend-winit/LICENSES).
+[Apache-2.0](LICENSE), см. также [NOTICE](NOTICE). `web/demo/vendor/ncalayer-client.js` — MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). Velopack (MIT), бэкенд winit из Slint (LicenseRef-Slint-Royalty-free-2.0), `multer` (MIT), `streebog` и `hmac` (MIT или Apache-2.0) собираются из наших форков с небольшими изменениями; форки, их ветки и коммиты перечислены в [NOTICE](NOTICE) и в [docs/dev/development.md](docs/dev/development.md#форки-сторонних-крейтов).

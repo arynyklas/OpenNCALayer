@@ -3,7 +3,7 @@
 //! index: its packages are downloaded through the daemon's transport, over HTTPS only, and
 //! checked against the size and sha256 of the index before Velopack takes them. A full
 //! package Velopack rebuilds from a delta, or finds already on disk, is checked too
-//! ([`IndexSource`]'s `verify_full_package`, a hook of the patched Velopack under `vendor/`)
+//! ([`IndexSource`]'s `verify_full_package`, a hook of the forked Velopack, see `[patch.crates-io]`)
 //! before it is used and before Velopack takes its Update.exe from it.
 
 use std::ffi::OsString;

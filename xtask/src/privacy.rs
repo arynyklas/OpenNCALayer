@@ -183,12 +183,6 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
         'C',
         &[r"\Program Files\NCALayer\"],
     ),
-    ("vendor/velopack/src/misc.rs", 'C', &[r"\\Windows\\"]),
-    (
-        "vendor/velopack/src/process_win.rs",
-        'C',
-        &[r"\\Program Files\\app.exe"],
-    ),
     (
         "xtask/src/upstream/tools.rs",
         'C',

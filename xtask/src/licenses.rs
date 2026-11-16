@@ -5,7 +5,7 @@
 //! and `oncl-nmhost` on every platform we ship ([`TARGETS`]); build dependencies and
 //! procedural macros are not part of the programs. Their licence texts come from the
 //! packages in the local cargo registry (`cargo metadata --offline`), without network
-//! access, or from the patched copy of a crates.io package under [`VENDOR`]; `cargo fetch
+//! access, or from the git checkout of a fork named in `[patch.crates-io]`; `cargo fetch
 //! --locked` unpacks the packages of every platform ([`PackagesMissing`] otherwise):
 //!
 //! - the package's `license-file` and its files named `LICENSE*`, `LICENCE*`, `COPYING*`,
@@ -44,9 +44,6 @@ const PLUGINS_TARGET: &str = "wasm32-unknown-unknown";
 
 /// Standard licence texts (`<SPDX id>.txt`), relative to the workspace root.
 pub const STANDARD_TEXTS: &str = "xtask/licenses";
-
-/// Patched copies of crates.io packages (`[patch.crates-io]`), relative to the workspace root.
-pub const VENDOR: &str = "vendor";
 
 /// The packages of the programs we ship.
 const PROGRAMS: [&str; 2] = ["openncalayer", "oncl-nmhost"];
@@ -409,19 +406,19 @@ fn workspace_members(root: &Path) -> anyhow::Result<BTreeSet<String>> {
         .collect())
 }
 
-/// The crates.io packages of the lock file, from the local cargo registry or, if patched, from
-/// [`VENDOR`].
+/// The third-party packages of the lock file, from the local cargo registry or, for a fork of
+/// `[patch.crates-io]`, from its git checkout.
 pub fn registry_packages(root: &Path) -> anyhow::Result<HashMap<(String, String), Package>> {
     let metadata = metadata(root, &[])?;
-    let vendor = root.join(VENDOR);
     let text = |p: &Value, key: &str| p[key].as_str().map(str::to_owned);
     let mut packages = HashMap::new();
     for p in packages_of(&metadata) {
-        let registry = p["source"]
+        // The forks of `[patch.crates-io]` are git packages; `deny.toml` names the only
+        // git sources that may be used.
+        let from_source = p["source"]
             .as_str()
-            .is_some_and(|s| s.starts_with("registry+"));
-        let vendored = text(p, "manifest_path").is_some_and(|m| Path::new(&m).starts_with(&vendor));
-        if !registry && !vendored {
+            .is_some_and(|s| s.starts_with("registry+") || s.starts_with("git+"));
+        if !from_source {
             continue;
         }
         let (Some(name), Some(version), Some(manifest)) = (

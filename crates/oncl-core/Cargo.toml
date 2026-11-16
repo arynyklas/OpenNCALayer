@@ -8,8 +8,9 @@ license.workspace = true
 repository.workspace = true
 # The SDK chain (docs/dev/sdk.md, "Publication readiness") is eligible for the registry so that
 # `cargo package` can verify it as a chain, but nothing in the workspace uploads it. Today
-# `cargo publish` fails closed on the first crate: the patched `hmac`/`streebog` of `vendor/`
-# are not on crates.io under these names, so resolution against the registry is refused.
+# `cargo publish` fails closed on the first crate: the forked `hmac`/`streebog` (git
+# dependencies) are not on crates.io under these names, so resolution against the registry is
+# refused.
 publish = true
 readme = "README.md"
 keywords = ["cades", "pades", "xmldsig", "gost", "kazakhstan"]

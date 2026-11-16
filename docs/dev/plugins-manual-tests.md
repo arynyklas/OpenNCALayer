@@ -8,7 +8,7 @@
 cargo xtask plugin-ports-manual [--wasm-dir <каталог>] [--no-build] [фильтр…]
 ```
 
-Шаги: (1) `cargo build --release --locked --target wasm32-unknown-unknown --workspace` в `plugins/` (в `target/plugin-build`, сеть не нужна: `vendor/`, `Cargo.lock`; ≈ 35 с); (2) `plugin-ops-check --require-wasm` (импорты каждой операции против импортов модуля); (3) `cargo test -p oncl-core --features plugins --test plugin_ports_manual -- --ignored [фильтр…]` с `ONCL_PLUGIN_WASM_DIR`. Фильтр — часть имени теста (`rating1c`, `network`).
+Шаги: (1) `cargo build --release --locked --target wasm32-unknown-unknown --workspace` в `plugins/` (в `target/plugin-build`, сеть не нужна: `Cargo.lock`, зависимости уже в кэше cargo; ≈ 35 с); (2) `plugin-ops-check --require-wasm` (импорты каждой операции против импортов модуля); (3) `cargo test -p oncl-core --features plugins --test plugin_ports_manual -- --ignored [фильтр…]` с `ONCL_PLUGIN_WASM_DIR`. Фильтр — часть имени теста (`rating1c`, `network`).
 
 Тесты помечены `#[ignore = "needs the built port wasm…"]`: без модулей они не имеют смысла, а обычный `cargo test` не должен собирать 34 модуля. **В CI они не пропускаются**: задача `test` запускает `cargo test --workspace --all-features -- --include-ignored`, и тесты сами собирают `plugins/` в `target/plugin-ports` (как `oncl-port-tests`), если `ONCL_PLUGIN_WASM_DIR` не задан; затем шаг «Plugin operations lint» проверяет импорты по этим модулям с `--require-wasm`. Модули нет — тест падает с сообщением, а не пропускается.
 

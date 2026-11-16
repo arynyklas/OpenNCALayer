@@ -84,7 +84,7 @@ pub const FEATURE_SETS: [(&str, &str); 7] = [
 /// the `oncl-core` package.
 pub const LICENSES_OUTPUT: &str = "crates/oncl-core/THIRD-PARTY.txt";
 
-/// Source packages of the patched crates (`[patch.crates-io]` of the workspace) the SDK needs.
+/// Packages of the forks named in `[patch.crates-io]` of the workspace that the SDK needs.
 const PATCHED: [&str; 2] = ["hmac", "streebog"];
 
 #[derive(Subcommand, Debug)]
@@ -270,23 +270,27 @@ fn target_directory(root: &Path) -> anyhow::Result<PathBuf> {
         .context("`cargo metadata`: no target_directory")
 }
 
-fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<()> {
-    fs::create_dir_all(to)?;
-    for entry in fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
-        let entry = entry?;
-        let name = entry.file_name();
-        if name == "target" || name == ".git" {
-            continue;
-        }
-        let (src, dst) = (entry.path(), to.join(&name));
-        if entry.file_type()?.is_dir() {
-            copy_tree(&src, &dst)?;
-        } else {
-            fs::copy(&src, &dst)
-                .with_context(|| format!("copying {} to {}", src.display(), dst.display()))?;
-        }
-    }
-    Ok(())
+/// The git URL and the pinned commit of the fork `name` in `[patch.crates-io]` of the
+/// workspace.
+fn patched_source(root: &Path, name: &str) -> anyhow::Result<(String, String)> {
+    let path = root.join("Cargo.toml");
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let table: toml::Table = text
+        .parse()
+        .with_context(|| format!("parsing {}", path.display()))?;
+    let entry = table
+        .get("patch")
+        .and_then(|patch| patch.get("crates-io"))
+        .and_then(|patch| patch.get(name))
+        .with_context(|| format!("Cargo.toml: no [patch.crates-io] entry for {name}"))?;
+    let field = |key: &str| {
+        entry
+            .get(key)
+            .and_then(toml::Value::as_str)
+            .map(str::to_owned)
+            .with_context(|| format!("Cargo.toml: [patch.crates-io] {name} has no `{key}`"))
+    };
+    Ok((field("git")?, field("rev")?))
 }
 
 fn toml_path(path: &Path) -> String {
@@ -321,8 +325,11 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         .map(str::to_owned)
         .to_vec();
     for name in PATCHED {
-        args.push("--config".into());
-        args.push(format!("patch.crates-io.{name}.path=\"vendor/{name}\""));
+        let (git, rev) = patched_source(root, name)?;
+        for (key, value) in [("git", git), ("rev", rev)] {
+            args.push("--config".into());
+            args.push(format!("patch.crates-io.{name}.{key}=\"{value}\""));
+        }
     }
     for name in CHAIN {
         args.push("--package".into());
@@ -366,15 +373,7 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         }
     }
 
-    // 3. The patched crates ship as source, as for any git/path consumer.
-    for name in PATCHED {
-        copy_tree(
-            &root.join("vendor").join(name),
-            &work.join("vendor").join(name),
-        )?;
-    }
-
-    // 4. The consumer: its own workspace, only the unpacked packages as SDK source.
+    // 3. The consumer: its own workspace, only the unpacked packages as SDK source.
     let core = sources.join(format!("oncl-core-{version}"));
     let pki = sources.join(format!("oncl-pki-{version}"));
     let mut manifest = String::new();
@@ -401,11 +400,8 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         )?;
     }
     for name in PATCHED {
-        writeln!(
-            manifest,
-            "{name} = {{ path = \"{}\" }}",
-            toml_path(&work.join("vendor").join(name))
-        )?;
+        let (git, rev) = patched_source(root, name)?;
+        writeln!(manifest, "{name} = {{ git = \"{git}\", rev = \"{rev}\" }}")?;
     }
     // RSA key generation and the GOST maths are very slow unoptimized.
     for name in [
@@ -450,7 +446,7 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         Ok(String::from_utf8_lossy(&out.stdout).into_owned())
     };
 
-    // 5. Closure and provenance of the consumer.
+    // 4. Closure and provenance of the consumer.
     let metadata: Value = serde_json::from_str(&run_in_consumer(&[
         "metadata",
         "--format-version",
@@ -495,7 +491,7 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         tree.lines().filter(|l| !l.trim().is_empty()).count()
     );
 
-    // 6. Build and run it: a real sign and verify.
+    // 5. Build and run it: a real sign and verify.
     run_in_consumer(&["build", "--offline"])?;
     let output = run_in_consumer(&["run", "--offline", "--quiet"])?;
     if !output.contains("SDK-CONSUMER-OK") {
@@ -520,8 +516,8 @@ fn workspace_version(root: &Path) -> anyhow::Result<String> {
         .context("Cargo.toml: no [workspace.package] version")
 }
 
-/// The licence inventory of the SDK closure: the third-party crates (crates.io or patched
-/// under `vendor/`) in the closure of `oncl-core` with every feature and of the
+/// The licence inventory of the SDK closure: the third-party crates (crates.io or the git
+/// forks of `[patch.crates-io]`) in the closure of `oncl-core` with every feature and of the
 /// `oncl-plugin`/`oncl-update` source packages, on every target the project ships for, with
 /// the licence texts of the programs' inventory ([`crate::licenses::render`]).
 ///
@@ -562,7 +558,7 @@ pub fn licenses(root: &Path) -> anyhow::Result<String> {
          normal (non-build, non-proc-macro) dependencies on every platform the project ships\n\
          for. Each line names a crate, its version, its licence as an SPDX expression (\"A OR B\"\n\
          is a choice between licences), its repository and the numbers of its licence texts, which\n\
-         follow the list. `hmac` and `streebog` are locally modified copies (see NOTICE).\n\
+         follow the list. `hmac` and `streebog` are forks with changes of our own (see NOTICE).\n\
          \n\
          Generated by `cargo xtask sdk licenses`; do not edit.\n\
          \n{}",
@@ -572,7 +568,7 @@ pub fn licenses(root: &Path) -> anyhow::Result<String> {
 }
 
 /// The inventory's packages: every third-party crate of `wanted` must be in `packages` (the
-/// crates.io and `vendor/` packages of the lock file); `oncl-*` crates are ours and skipped.
+/// registry and git packages of the lock file); `oncl-*` crates are ours and skipped.
 ///
 /// # Errors
 ///
@@ -593,7 +589,7 @@ pub fn pick_packages(
     }
     if !missing.is_empty() {
         bail!(
-            "closure crates missing from the registry/vendor packages: {}",
+            "closure crates missing from the registry/git packages: {}",
             missing.join(", ")
         );
     }

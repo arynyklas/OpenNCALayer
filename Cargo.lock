@@ -2320,6 +2320,7 @@ dependencies = [
 [[package]]
 name = "hmac"
 version = "0.13.0"
+source = "git+https://github.com/arynyklas/MACs?rev=062e38d40e71236dcf49275ab7f9bd491b033c1c#062e38d40e71236dcf49275ab7f9bd491b033c1c"
 dependencies = [
  "digest 0.11.3",
 ]
@@ -2471,6 +2472,7 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-winit"
 version = "1.18.1"
+source = "git+https://github.com/arynyklas/slint?rev=586d17da44c6e997d37a5865b20c3e8d344e87bf#586d17da44c6e997d37a5865b20c3e8d344e87bf"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -3524,6 +3526,7 @@ dependencies = [
 [[package]]
 name = "multer"
 version = "3.1.0"
+source = "git+https://github.com/arynyklas/multer?rev=70ed48587dd730bbeb5b55ec2617cae11760f9d0#70ed48587dd730bbeb5b55ec2617cae11760f9d0"
 dependencies = [
  "bytes",
  "encoding_rs",
@@ -6409,6 +6412,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "streebog"
 version = "0.11.0"
+source = "git+https://github.com/arynyklas/hashes?rev=7f67647379b26e89068874cfe8cf3bf0c8e72b69#7f67647379b26e89068874cfe8cf3bf0c8e72b69"
 dependencies = [
  "digest 0.11.3",
  "subtle",
@@ -7310,6 +7314,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "velopack"
 version = "1.3.39-g8d2844f"
+source = "git+https://github.com/arynyklas/velopack?rev=e2c8d73c368ce0383a547ed5f3dfece42f98ac72#e2c8d73c368ce0383a547ed5f3dfece42f98ac72"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
