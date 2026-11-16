@@ -82,7 +82,7 @@ jobs:
         run: |
           # `ck <name> $? "<detail>"`: the shell expands `$?` before the detail's command
           # substitutions run, so it is the status of the check on the line above (newer
-          # shellcheck versions warn about that).
+          # versions of the linter warn about that).
           # shellcheck disable=SC2319
           OUT="$RUNNER_TEMP/mac-smoke"
           DL="$OUT/download"
