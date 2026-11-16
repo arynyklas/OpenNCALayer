@@ -89,10 +89,15 @@ fn direct_git_dependencies_name_the_same_fork_and_rev_as_the_patches() {
         );
     }
     let source = pinned_source(&dependencies["multer"]);
-    assert!(
-        locked(&lock, "multer")
-            .iter()
-            .any(|(_, s)| s.as_deref() == Some(&source)),
+    let multer = locked(&lock, "multer");
+    assert_eq!(
+        multer.len(),
+        1,
+        "exactly one multer must be locked, from {source}: {multer:?}"
+    );
+    assert_eq!(
+        multer[0].1.as_deref(),
+        Some(source.as_str()),
         "multer is not locked from {source}"
     );
 }
