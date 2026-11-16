@@ -51,3 +51,13 @@ deny = [
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# Git sources: only the forks of crates.io packages that Cargo.toml pins by commit
+# (`[patch.crates-io]`, `[workspace.dependencies]`; docs/dev/development.md, "Форки
+# сторонних крейтов").
+allow-git = [
+    "https://github.com/arynyklas/slint",
+    "https://github.com/arynyklas/velopack",
+    "https://github.com/arynyklas/hashes",
+    "https://github.com/arynyklas/MACs",
+    "https://github.com/arynyklas/multer",
+]

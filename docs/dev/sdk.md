@@ -15,16 +15,17 @@ HTTP-сервис `oncl-server` — потребители того же дви�
 В crates.io ничего не опубликовано, и документация нигде не предлагает `cargo add` версии из
 реестра. Свободны ли имена крейтов `oncl-*` на crates.io или заняты, **не проверено**.
 Зависеть нужно от проверенного тега или коммита по path или git. SDK собирается с двумя
-локально изменёнными крейтами RustCrypto (`vendor/streebog`, `vendor/hmac`: дополнительные
-варианты для секретного ввода), поэтому у потребителя должен быть тот же `[patch.crates-io]`:
+изменёнными крейтами RustCrypto из форков (`streebog` и `hmac` в `arynyklas/hashes` и
+`arynyklas/MACs`: дополнительные варианты для секретного ввода), поэтому у потребителя должен
+быть тот же `[patch.crates-io]`, с теми же `rev`, что в корневом `Cargo.toml`:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 
 [patch.crates-io]
-streebog = { path = "OpenNCALayer/vendor/streebog" }
-hmac = { path = "OpenNCALayer/vendor/hmac" }
+streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
+hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
 Для git у каждой записи должны быть одинаковые `git` URL и `rev`. `cargo xtask sdk smoke`
@@ -509,7 +510,8 @@ CI запускает `cargo xtask check-release-features`. Он читает `c
 
 1. `cargo package --offline` всей цепочки **с** верификацией: каждый крейт собирается из
    собственного упакованного tarball, а соседи разрешаются из локального оверлея tarball'ов
-   cargo. Нужны `--config patch.crates-io.hmac.path=…` и `…streebog.path=…` (ниже).
+   cargo. Нужны `--config patch.crates-io.hmac.git=…`/`.rev=…` и то же для `streebog` (ниже);
+   форки должны быть в кэше cargo (`cargo fetch --locked`), загрузки при проверке нет.
 2. Файлы `.crate` распаковываются; smoke проверяет, что внутри нет `tests/`, `fixtures/` и
    `target/`, а `LICENSE`/`NOTICE` есть.
 3. Отдельный крейт (свой `[workspace]`, свой lock-файл) зависит от `oncl-core` (`full`) и
@@ -558,7 +560,7 @@ CI запускает `cargo xtask check-release-features`. Он читает `c
 производственные сертификаты УЦ НУЦ (публичные документы; права на сертификаты принадлежат их
 эмитенту и не лицензируются под Apache-2.0; `fixtures/README.md`); `testing-data/` — синтетический
 ключ. `crates/oncl-core/THIRD-PARTY.txt` перечисляет сторонние крейты замыкания SDK (crates.io и
-пропатченные копии в `vendor/`, каждая поставляемая платформа, включая `distribution` плагинов) с
+git-форки `[patch.crates-io]`, каждая поставляемая платформа, включая `distribution` плагинов) с
 текстами их лицензий; файл генерируется `cargo xtask sdk licenses` и сверяется `--check`.
 Отдельная опись программ — `cargo xtask licenses`.
 

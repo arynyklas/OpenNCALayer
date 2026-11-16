@@ -7,9 +7,10 @@
 //!   https://www.rfc-editor.org/rfc/rfc7836#appendix-B
 //!
 //! The secret types (`HmacSecret`, `Streebog256Secret`, `Streebog512Secret`) come from
-//! the workspace's modified `hmac`/`streebog` copies under `vendor/` (feature
-//! `secret-input`); crates.io's releases do not have them. The imports must stay the real
-//! types: never replace them with ordinary ones to make this target compile.
+//! the workspace's forks of `hmac` and `streebog` (feature `secret-input`, see
+//! `[patch.crates-io]` in the root `Cargo.toml`); crates.io's releases do not have them. The
+//! imports must stay the real types: never replace them with ordinary ones to make this
+//! target compile.
 
 use hmac::{HmacSecret, KeyInit, Mac};
 use streebog::{Digest, Streebog256, Streebog256Secret, Streebog512, Streebog512Secret};

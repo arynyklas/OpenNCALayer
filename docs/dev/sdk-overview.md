@@ -8,15 +8,16 @@
 времени; доверие, ключи, часы, сеть, аудит и лимиты ресурсов задаёт хозяин приложения. Ему не
 нужны ни графическая сессия, ни демон, ни слушающий порт, ни самообновление. **Ничего не
 опубликовано в crates.io** (свободны ли имена `oncl-*`, не проверялось): подключайте проверенный
-коммит по path или git и тот же `[patch.crates-io]` для изменённых `streebog` и `hmac`:
+коммит по path или git и тот же `[patch.crates-io]` (с теми же `rev`, что в корневом
+`Cargo.toml`) для изменённых `streebog` и `hmac`, которые берутся из форков:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 
 [patch.crates-io]
-streebog = { path = "OpenNCALayer/vendor/streebog" }
-hmac = { path = "OpenNCALayer/vendor/hmac" }
+streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
+hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
 Features: без них (минимальный SDK: CMS/CAdES, хеширование, PKI-валидация, файлы ключей,
