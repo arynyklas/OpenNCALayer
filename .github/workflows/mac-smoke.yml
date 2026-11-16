@@ -29,6 +29,11 @@ on:
       tag:
         description: The release tag, v<version>
         required: true
+      run_id:
+        description: >-
+          The Release run of the tag, for a draft pre-release (a draft is not readable with this
+          token: the installer is taken from that run's artifact). Not needed for a published release.
+        required: false
 
 permissions:
   contents: read
@@ -66,7 +71,7 @@ jobs:
             arch: x86_64
     env:
       TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
-      RUN_ID: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.id || '' }}
+      RUN_ID: ${{ github.event_name == 'workflow_dispatch' && inputs.run_id || github.event.workflow_run.id }}
       RUNNER_NAME_SHORT: ${{ matrix.name }}
       EXPECT_ARCH: ${{ matrix.arch }}
       GH_TOKEN: ${{ github.token }}
