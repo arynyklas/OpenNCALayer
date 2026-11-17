@@ -1364,6 +1364,40 @@ fn a_typed_key_use_needs_plugin_bytes_and_is_audited_without_the_document() {
 }
 
 #[test]
+fn help_lists_the_plugin_surface() {
+    for (args, expected) in [
+        (
+            vec!["--help"],
+            vec!["plugin", "Run a WASM plugin operation"],
+        ),
+        (
+            vec!["plugin", "--help"],
+            vec!["call", "operations", "--plugin-bytes"],
+        ),
+        (
+            vec!["plugin", "call", "--help"],
+            vec![
+                "--param <PARAM>",
+                "--param-file <PARAM_FILE>",
+                "--param-flag <PARAM_FLAG>",
+                "--plugin-bytes",
+                "--args-file <ARGS_FILE>",
+            ],
+        ),
+        (
+            vec!["plugin", "operations", "--help"],
+            vec!["--manifest <MANIFEST>", "--wasm <WASM>"],
+        ),
+    ] {
+        let result = run(&args, b"");
+        assert_eq!(result.status.code(), Some(0), "{args:?}: {result:?}");
+        for needle in expected {
+            assert!(text(&result).contains(needle), "{args:?}: {needle:?}");
+        }
+    }
+}
+
+#[test]
 fn a_typed_key_use_signs_exactly_the_passed_bytes() {
     let w = world();
     let (t, get, post) = signed_typed(&w);
