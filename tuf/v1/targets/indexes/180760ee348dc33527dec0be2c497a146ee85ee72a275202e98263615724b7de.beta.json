@@ -1,0 +1,1993 @@
+{
+  "schema": 1,
+  "channel": "beta",
+  "seq": 10,
+  "generated": "2026-11-17T02:39:44Z",
+  "expires": "2026-12-17T02:39:44Z",
+  "core": [
+    {
+      "version": "0.1.0-alpha.7",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-linux-x64-full.nupkg",
+          "sha256": "d370268936c3f0a260643b3206836a37e13209c3ea0c0682e7c40dd6b8d55de8",
+          "size": 32835613,
+          "contents_sha256": "a357eeede9282ba91b2fd20e591f3ee333c26ed53b3a128fb030ee48cd61ebad",
+          "delta_from": {
+            "0.1.0-alpha.6": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-linux-x64-delta.nupkg",
+              "sha256": "be4f75819030681ccff14bc0c6b1334fe2de935219a050d2a28ebae4059099f8",
+              "size": 26994731
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win-x64-full.nupkg",
+          "sha256": "596c0cd962a6d1f9a2311de12232e1df8e069d8903ebb37c4fdb607e3c6cfd80",
+          "size": 23092701,
+          "contents_sha256": "44cdf2ab4d04d366586eca8016197e162c82534d040dea7dbf69ff7efbc15ce5",
+          "delta_from": {
+            "0.1.0-alpha.6": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win-x64-delta.nupkg",
+              "sha256": "da40011ce231c93229aea4aeba24d8788cd0d63f0544a4a369b597d07afeea76",
+              "size": 9219928
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win-x86-full.nupkg",
+          "sha256": "6fdc12844dbdeb821464667bf3573feb861a1d9d93670e7d8fd1559d2a75c887",
+          "size": 21087229,
+          "contents_sha256": "23535707ba6c84abd129eb002fee9c7f60fc635eee91f8f5930a068b401bdf36",
+          "delta_from": {
+            "0.1.0-alpha.6": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win-x86-delta.nupkg",
+              "sha256": "cc725963873f2a761a624ab3be42f2a6bfab7208836b221caa8e2ec3153236d7",
+              "size": 7927568
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win7-x64-full.nupkg",
+          "sha256": "d3893e403050ef2616860d799ac3eacc55a1e8309bafc0f704550fea8af502bf",
+          "size": 23195609,
+          "contents_sha256": "34a44cc0663f798c3ba2c6838befadeebabe74721ea1f8a94948891ba353ed1e",
+          "delta_from": {
+            "0.1.0-alpha.6": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win7-x64-delta.nupkg",
+              "sha256": "0321b9efe050934499f5607fe020a0199cebc20622eda8848719a706d6e7a18b",
+              "size": 9262970
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win7-x86-full.nupkg",
+          "sha256": "c039265d15565a02914c716b64149b1b317514399479e3ded4019973bc8ff452",
+          "size": 21192088,
+          "contents_sha256": "1af9c42ce6fd38378b3a67ea4dff461dd26570807c8c0f69291ff3ae6fa04275",
+          "delta_from": {
+            "0.1.0-alpha.6": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.7/OpenNCALayer-0.1.0-alpha.7-win7-x86-delta.nupkg",
+              "sha256": "a861f85b57ddf13d9aa7e7ac5da5c42e23f623931b70e10fcf4cfb7cf144b003",
+              "size": 7954054
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-alpha.7"
+    },
+    {
+      "version": "0.1.0-alpha.8",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-linux-x64-full.nupkg",
+          "sha256": "0cab5f2e2974a917a687684c382cd81f3b03c8bd8ddb0dc018b485b4270d798d",
+          "size": 32730286,
+          "contents_sha256": "3cfb3ea76c2a6503fec7a48bf2fa7fc94247c2d532b2c4234533c2a15e524a22",
+          "delta_from": {
+            "0.1.0-alpha.7": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-linux-x64-delta.nupkg",
+              "sha256": "419775cacfc0cd23722612bee2e54e3565311e3b9f2136353f74e065fe83f460",
+              "size": 26736671
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win-x64-full.nupkg",
+          "sha256": "81acb9b767a6d858b8984aa5b0a7d3f1c1769856a30375a209a236ccae481ae0",
+          "size": 22998939,
+          "contents_sha256": "9ad8a6c90894a4a82fd19e668f79480b625c5b116a4f410e4a5e2df17466f124",
+          "delta_from": {
+            "0.1.0-alpha.7": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win-x64-delta.nupkg",
+              "sha256": "3af424efba6ceee1ae54d8c21664f3f597659faa438278e0a407a92c35c43c65",
+              "size": 4201931
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win-x86-full.nupkg",
+          "sha256": "6274f83dc727bfcf2385d86d740051d81d149aace7b01acaa071a994708ec326",
+          "size": 20990954,
+          "contents_sha256": "c2ea824639537e49e34e906324420842f85dd9172f786acf7d1f0b0f50986c0b",
+          "delta_from": {
+            "0.1.0-alpha.7": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win-x86-delta.nupkg",
+              "sha256": "2e5a46dd42e31ccba73aa5efeb097f0310d372883eb10092b4f089864fcd3c0f",
+              "size": 4062606
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win7-x64-full.nupkg",
+          "sha256": "b75a6d5a2207157cd37811f7d06851cd83a2aa3095b717a52f3aecfe9d461c6f",
+          "size": 23100218,
+          "contents_sha256": "9b65a9f7d74367fcc5e2b70d7aa23699cceab8bf67bfb28d9228ec87e281081c",
+          "delta_from": {
+            "0.1.0-alpha.7": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win7-x64-delta.nupkg",
+              "sha256": "80a202c31469eb4cf6aa7b4a8174e27001131d72485f68970658256ebe98dc92",
+              "size": 4608631
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win7-x86-full.nupkg",
+          "sha256": "099f9ad99d9bc6064c56c7133a16f8cc7403031bcc1362ed295e761c641d65d1",
+          "size": 21097812,
+          "contents_sha256": "6f3acfb4c23c7a8c5d54aef3fb6389e7c3662cd556c7baccf6d08c9013797cb9",
+          "delta_from": {
+            "0.1.0-alpha.7": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-alpha.8/OpenNCALayer-0.1.0-alpha.8-win7-x86-delta.nupkg",
+              "sha256": "a0d22115a61db024f6b47449852c8df78637b4db7e98c75ccb12ea29422ae8a6",
+              "size": 4402297
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-alpha.8"
+    },
+    {
+      "version": "0.1.0-rc.1",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-linux-x64-full.nupkg",
+          "sha256": "5dd70f85c62387b65ad9f3a5386c09e2b0ff3c4ae23c07129b5672a3cb1dc5a0",
+          "size": 32725100,
+          "contents_sha256": "8228952535d9236bd7deac77a42caaf902226ecd974378b44c18ec13fd736ce7",
+          "delta_from": {
+            "0.1.0-alpha.8": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-linux-x64-delta.nupkg",
+              "sha256": "66484665737f36dfbcf61c73a3032ad9ae2ea4e89e608d52a4be774c50b2028e",
+              "size": 26655312
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win-x64-full.nupkg",
+          "sha256": "3ec01c61078697adae7fd8c488932fd91d46de4c5b21f8b2e85bfcf55a1bd7b3",
+          "size": 23016974,
+          "contents_sha256": "5dbb87c0fbca8a7a6d1b94e8e33870482c2aca3ed21af4aa488633462f0afc80",
+          "delta_from": {
+            "0.1.0-alpha.8": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win-x64-delta.nupkg",
+              "sha256": "be3c30dd548c0121e2ee7c15ca25b06fb12e6ee08f4e807b9d9feeb7c1a8ef81",
+              "size": 5568173
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win-x86-full.nupkg",
+          "sha256": "22ca3a175e5d6aa219dac1eb0df117a1485ec1c6f869eddbe3acfecfe19b26f3",
+          "size": 20995404,
+          "contents_sha256": "10463dc58b75e9c9a0ebfd179f6a3086c94c15e5a6e34be95e2c03a6f718840c",
+          "delta_from": {
+            "0.1.0-alpha.8": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win-x86-delta.nupkg",
+              "sha256": "fddf0391d341f1a18ff7252e4c9ead85a2ccce7d87ac9d79627184d6685e0b06",
+              "size": 4790759
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win7-x64-full.nupkg",
+          "sha256": "19473076b97a14540f878be6a093ddae42087dc8082961738d6c6784f8356bb6",
+          "size": 23103123,
+          "contents_sha256": "bfe8761981592ca55b5717b217513364442a69356b1744b39c7ed82ee1ecc608",
+          "delta_from": {
+            "0.1.0-alpha.8": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win7-x64-delta.nupkg",
+              "sha256": "3d828a8112afbf76e8aee38f034eae4d9b2f663198701a964b86dd86190d68a6",
+              "size": 5767907
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win7-x86-full.nupkg",
+          "sha256": "f964f54a79c4483cc29ae96ec2f3f9896b6f9333c90631c6419b928d04987c26",
+          "size": 21098682,
+          "contents_sha256": "6baeaad086ec73a6ba245e6888bffa5deb29b2c88cded6f028c001abf91b9ca5",
+          "delta_from": {
+            "0.1.0-alpha.8": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.1/OpenNCALayer-0.1.0-rc.1-win7-x86-delta.nupkg",
+              "sha256": "e77ca0c5ba9c1651200ca99531a979704ced786a5c832ec4dfddf6f1d7a5ba44",
+              "size": 4952375
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-rc.1"
+    },
+    {
+      "version": "0.1.0-rc.2",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-linux-x64-full.nupkg",
+          "sha256": "6720d63bbd41601e952cea943e25a60a1be08ad36585d5a93170b79fb530782a",
+          "size": 32856636,
+          "contents_sha256": "db2f6cc57686d0ea4836b95dab2385bf1f1a992eba4653f3b4dab873d948353c",
+          "delta_from": {
+            "0.1.0-rc.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-linux-x64-delta.nupkg",
+              "sha256": "de72681df27944ac90baca898496ae0e343369fb18ac35ddd66f1898f27b7e27",
+              "size": 26933203
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win-x64-full.nupkg",
+          "sha256": "4c2767e7ff6ac0fa318e047cc8e85e19e5390666977fc3fa9ec5d706c5154737",
+          "size": 23138763,
+          "contents_sha256": "32c44a800f1b28b11cad64b02550cdf07cd499f052bd69a510608290bb01d9c9",
+          "delta_from": {
+            "0.1.0-rc.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win-x64-delta.nupkg",
+              "sha256": "7d389d3795d9ec18becdbdcc9102931bf1c5770680aad3eacde148e4c410d0d1",
+              "size": 6157559
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win-x86-full.nupkg",
+          "sha256": "b2c7b72de4d453940476fdeaac827feeb4b6e9ddbbbb60ccc634edb899464fba",
+          "size": 21072733,
+          "contents_sha256": "658072ea3301413dbb8bd47fb39bf7d41d45fa4c6745befc6adf8437c1594149",
+          "delta_from": {
+            "0.1.0-rc.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win-x86-delta.nupkg",
+              "sha256": "361edede7e384dbe152a1d42acff544c725716067daf0f3caceefe62956a588e",
+              "size": 5261240
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win7-x64-full.nupkg",
+          "sha256": "f36f9f0a1f2b0d6125f8b6aed3ccecfde77ccafc2199f666b80c2c72fc721274",
+          "size": 23228770,
+          "contents_sha256": "f198501c4bb5865b02b74ab396c10658693c4583da5f02e85f8d59ca748e447a",
+          "delta_from": {
+            "0.1.0-rc.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win7-x64-delta.nupkg",
+              "sha256": "27278ba8673a6d5cca7fc693d8c0e2bafce49566b7b5458d8d67574539add339",
+              "size": 5965803
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win7-x86-full.nupkg",
+          "sha256": "d5dbbea562548013ee9f9782d9224a8519bbf90ab3eb830a7df726115f59b6a6",
+          "size": 21192927,
+          "contents_sha256": "22847a85484a94e1e675cea69d0f70825753408fc236bc0f3e5bc15c1f6d6848",
+          "delta_from": {
+            "0.1.0-rc.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.2/OpenNCALayer-0.1.0-rc.2-win7-x86-delta.nupkg",
+              "sha256": "4a59a35e924b6ea58c06508de987c93aa7569cb81ce080dd0184310d940e3a7d",
+              "size": 5391020
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-rc.2"
+    },
+    {
+      "version": "0.1.0-rc.3",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-linux-x64-full.nupkg",
+          "sha256": "64208b2f7aa4a3cb31a461f27a6773f8d0e0c9f3c22860a908f88eeb58a36388",
+          "size": 32861919,
+          "contents_sha256": "a5617bb340cfe75e0370c169151bc07467968aa40eb9ac8be2d8854247f54020",
+          "delta_from": {
+            "0.1.0-rc.2": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-linux-x64-delta.nupkg",
+              "sha256": "5c5478c6d184df15c83a0b7ad36b2fcf1cffaf846150c52aca7eb02a2519d0cc",
+              "size": 26929868
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win-x64-full.nupkg",
+          "sha256": "5d20283948d99e8c6771d7eb75826cef4970a7aa302c333ad5be1247e4120144",
+          "size": 23140264,
+          "contents_sha256": "fbce1e0966a6cdcd66d7d641814c1f420c62d3bc5e19be90a4feae9501292a6f",
+          "delta_from": {
+            "0.1.0-rc.2": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win-x64-delta.nupkg",
+              "sha256": "e1cb41c400bdd3e533522d8450b59b3599183ae7d53b99e6bb0ef6d70a54c6c6",
+              "size": 4543992
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win-x86-full.nupkg",
+          "sha256": "e03c661c9048ddb91bc90540b9e073586143de9d37e2d0f8a2c6ab13b1ae8f2f",
+          "size": 21071143,
+          "contents_sha256": "bf3a894fa0973e27d6868ee21eee39e0cf59e4b59cc19a764eeb9321f832155c",
+          "delta_from": {
+            "0.1.0-rc.2": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win-x86-delta.nupkg",
+              "sha256": "1d5ff808ed8027bf03daae980686f2f968fd6953f98b04c4f0c00a64714963af",
+              "size": 4218488
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win7-x64-full.nupkg",
+          "sha256": "5beba8a790f6dedd54bd3236d49bd8239057a212563281455835a2e158859dec",
+          "size": 23228638,
+          "contents_sha256": "ef90961ab177afdbe8afd6db99f838f508dce388c47acedd01a22bb1ca5942b4",
+          "delta_from": {
+            "0.1.0-rc.2": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win7-x64-delta.nupkg",
+              "sha256": "a96e026939f35382472ccf094067d79c8758ebf4552bb12456838ec7914c11ff",
+              "size": 4940523
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win7-x86-full.nupkg",
+          "sha256": "8169a2a5d880a755b3abf4f9fb7ceac1f5376d28565a60578e0179096c1cf757",
+          "size": 21192019,
+          "contents_sha256": "cccd057d8059a18d999abc23232ca0751e0ccc9d0aafc459bf9ade97058a8fdf",
+          "delta_from": {
+            "0.1.0-rc.2": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.3/OpenNCALayer-0.1.0-rc.3-win7-x86-delta.nupkg",
+              "sha256": "ab2dbbecb93b6c1ca4fa35990dbb9349ff710f3974aa8cbfe3046a993bf1d2b6",
+              "size": 4403517
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-rc.3"
+    },
+    {
+      "version": "0.1.0-rc.4",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-linux-x64-full.nupkg",
+          "sha256": "ea04081a95496b81ef215829680572d221ab84bf1aafbf6a4065956f6085620b",
+          "size": 32867486,
+          "contents_sha256": "4178dcd70dac212218bf232fca93fb41807b9d83200b2c2f5666886386263a9f",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-linux-x64-delta.nupkg",
+              "sha256": "f8c8ad23a0387f3712444bfb34d30e9dd37282976e473e64dd8bb4919e399bda",
+              "size": 26697556
+            }
+          }
+        },
+        "osx": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-osx-full.nupkg",
+          "sha256": "f9cc97639bfec26990679ccb9f3f511d2b6531ba64f5ffe4dd56f81853e95a81",
+          "size": 47639861,
+          "contents_sha256": "d3536f4127aa9504ca6b9acd6db4cabff9a264e3fbaaa17e2ff581e50ac7cfb8",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-osx-delta.nupkg",
+              "sha256": "8115abc879286e020c6c07551742b6018f4bea987160f4a7da33e1be7bb2a551",
+              "size": 9640116
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win-x64-full.nupkg",
+          "sha256": "5135433bf8fbfaa9ee9e4197075ef4821f04e2b3f335857f19096b7e100624a4",
+          "size": 23139555,
+          "contents_sha256": "7020d99fa843bc0dea3f02fdf9da345dc636da4eeeb39415fc0cd3a80057ae6a",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win-x64-delta.nupkg",
+              "sha256": "9fd9e19afa3bc5e1b416970d0e58fc38ca09747938fa90bed0f6380de7cdd5e4",
+              "size": 4469901
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win-x86-full.nupkg",
+          "sha256": "d1a4044cb7b61f0cd421956dacb81271c72bf4b4be591d3271a29738777d3651",
+          "size": 21071266,
+          "contents_sha256": "dc355e8bad8e2329f629f13c0dc4f1feff0e24ee4b4757c6fdcfee0b303e626f",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win-x86-delta.nupkg",
+              "sha256": "feb6c8f2c0b12e18ee59cae523ae21d155fd7cb836724a164823e63f3876ae27",
+              "size": 4213680
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win7-x64-full.nupkg",
+          "sha256": "9bcc78e6ffd90d453c48c396711a8aca6c8603ae1b1d442cd79d037f1442c64c",
+          "size": 23227664,
+          "contents_sha256": "d0a20fb9fb80906b4276f97a45bb56e969f0872ba6cf361cb31f063302a62aea",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win7-x64-delta.nupkg",
+              "sha256": "10e95018e4c8ae9d1589e45f2b879ec2084094fd90d9fc5c31ab74fe40fde4fa",
+              "size": 4242137
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win7-x86-full.nupkg",
+          "sha256": "6211a13566a01e042317fc71530a48847f15eb829f99f989e1e3f67c148cd7e3",
+          "size": 21193222,
+          "contents_sha256": "70d5f385f403c6e54ad89f4da6c402a55e9dfcda2610caaed55e8f9400b5af5e",
+          "delta_from": {
+            "0.1.0-rc.3": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/OpenNCALayer-0.1.0-rc.4-win7-x86-delta.nupkg",
+              "sha256": "2293d432c3729712ba4b7158b1958b9c9b033a9e2178ba2e18e2582f395194b2",
+              "size": 3587285
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.0-rc.4"
+    }
+  ],
+  "extension": {
+    "version": "0.1.0-rc.4",
+    "chromium_zip": {
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/openncalayer-chromium-0.1.0-rc.4.zip",
+      "sha256": "69e749f57d0a4bf230328932544dce5603c5b938e537b4461736941c1f51bd63"
+    },
+    "firefox_xpi": {
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.0-rc.4/openncalayer-firefox-0.1.0-rc.4.xpi",
+      "sha256": "a5acec60f7d00ab99b52a5cf57e487ed8894a257b219188b257684889a43f9b7"
+    }
+  },
+  "plugins": [
+    {
+      "id": "io.github.arynyklas.openncalayer.port.acbank",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.acbank-1.0.0-beta.1.onclp",
+      "sha256": "8eed16c690d499f68dde2e0c65d14d8e1a4eb2f64eec85966dd5a974378289fb",
+      "size": 136865,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.acbank.business.api.ncalayer.module"
+      ],
+      "replaces": {
+        "symname": "kz.acbank.business.api.ncalayer.module",
+        "version": "1.0.445"
+      },
+      "name": {
+        "ru": "Alatau City Bank (порт OpenNCALayer)",
+        "kk": "Alatau City Bank (OpenNCALayer порты)",
+        "en": "Alatau City Bank (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.arta",
+      "version": "1.0.0-beta.4",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.arta-1.0.0-beta.4.onclp",
+      "sha256": "e23b5e4e86cda79acae8f0acac74f564f899ba94f12d1f9d7503663dcf4f2674",
+      "size": 217301,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.arta.synergy.signmodule"
+      ],
+      "replaces": {
+        "symname": "kz.arta.synergy.signmodule",
+        "version": "6.0"
+      },
+      "name": {
+        "ru": "Arta Synergy (порт OpenNCALayer)",
+        "kk": "Arta Synergy (OpenNCALayer порты)",
+        "en": "Arta Synergy (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.bas",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.bas-1.0.0-beta.1.onclp",
+      "sha256": "120b5a6513ebe2a94a6e8fcdad3b12b7a275700491bcf89037a495e1b3a3f2bf",
+      "size": 165754,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.bas.nca.multiSignService"
+      ],
+      "replaces": {
+        "symname": "kz.bas.nca.signer",
+        "version": "1.0.35"
+      },
+      "name": {
+        "ru": "BAS Signer (порт OpenNCALayer)",
+        "kk": "BAS Signer (OpenNCALayer порты)",
+        "en": "BAS Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.buhta",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.buhta-1.0.0-beta.2.onclp",
+      "sha256": "8daa9dc76b8b17de4e81e5c4f8c2a956fd69652ebd17edf488364b9d72c85fd2",
+      "size": 144625,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "com.buhta.cert.ncamodule"
+      ],
+      "replaces": {
+        "symname": "com.buhta.cert.ncamodule",
+        "version": "0.1.3"
+      },
+      "name": {
+        "ru": "Buhta NcaModule (порт OpenNCALayer)",
+        "kk": "Buhta NcaModule (OpenNCALayer порты)",
+        "en": "Buhta NcaModule (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.devart",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.devart-1.0.0-beta.2.onclp",
+      "sha256": "7e5d976cefc856330cc56ef7057ceaa1378b95ec92084b1b646c01a8580e9186",
+      "size": 264925,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.devart.bundle.Devart"
+      ],
+      "replaces": {
+        "symname": "kz.devart.bundle.Devart",
+        "version": "1.1.4"
+      },
+      "name": {
+        "ru": "Devart (порт OpenNCALayer)",
+        "kk": "Devart (OpenNCALayer порты)",
+        "en": "Devart (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.documentolog",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.documentolog-1.0.0-beta.2.onclp",
+      "sha256": "57e57d1dfc11e0f10b87c0c8a6d934ea74f338499faba72a6af8cc9abcacb3ff",
+      "size": 194007,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.documentolog.agent.SignService",
+        "kz.documentolog.agent.KalkanService"
+      ],
+      "replaces": {
+        "symname": "kz.documentolog.Agent",
+        "version": "0.2"
+      },
+      "name": {
+        "ru": "СЭД «Documentolog» (порт OpenNCALayer)",
+        "kk": "«Documentolog» ЭҚЖ (OpenNCALayer порты)",
+        "en": "Documentolog EDMS (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.dogovor24",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.dogovor24-1.0.0-beta.2.onclp",
+      "sha256": "ae5f5f375d615ae4905f95c38ecd6b4fb37edc32905d93ab1197a3a97891ed76",
+      "size": 194696,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.dogovor24.module"
+      ],
+      "replaces": {
+        "symname": "kz.dogovor24.module",
+        "version": "1.0.5"
+      },
+      "name": {
+        "ru": "Договор24 (порт OpenNCALayer)",
+        "kk": "Договор24 (OpenNCALayer порты)",
+        "en": "Dogovor24 (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.doodocs",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.doodocs-1.0.0-beta.1.onclp",
+      "sha256": "ea4eaab60e53c4759d24aa5ebd866f5bd6ab7e951c258f8664542e7cc0acccd1",
+      "size": 158364,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.doodocs.moduleservice.SampleBundle"
+      ],
+      "replaces": {
+        "symname": "kz.doodocs.moduleservice",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Облачное подписание Doodocs.kz (порт OpenNCALayer)",
+        "kk": "Doodocs.kz бұлттық қол қоюы (OpenNCALayer порты)",
+        "en": "Doodocs.kz cloud signing (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.efactoring",
+      "version": "1.0.0-beta.4",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.efactoring-1.0.0-beta.4.onclp",
+      "sha256": "3ba2f62bf3e7cb68d74d69aa0413d2b686f5a9eebce6502062e9075a1af6b81d",
+      "size": 92038,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "EFactoringSign"
+      ],
+      "replaces": {
+        "symname": "kz.efactoring.EfactoringSignBundle",
+        "version": "1.2"
+      },
+      "name": {
+        "ru": "EFactoringSign (порт OpenNCALayer)",
+        "kk": "EFactoringSign (OpenNCALayer порты)",
+        "en": "EFactoringSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.energy",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.energy-1.0.0-beta.2.onclp",
+      "sha256": "b6835e8a5433ac8d5d2011b4c179a9ee65b78fca30c4c1750b39008a90a27e6e",
+      "size": 139359,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.energy.sign.SignEnergy"
+      ],
+      "replaces": {
+        "symname": "kz.energy.sign",
+        "version": "2.0.0"
+      },
+      "name": {
+        "ru": "Sign Energy (порт OpenNCALayer)",
+        "kk": "Sign Energy (OpenNCALayer порты)",
+        "en": "Sign Energy (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eot",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.eot-1.0.0-beta.1.onclp",
+      "sha256": "b8f1e307fa6fb73e2f66c12cd956f20388403c5dba6e26548c0061efab7982b4",
+      "size": 156898,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.gov.pki.eot.SignModule"
+      ],
+      "replaces": {
+        "symname": "kz.gov.pki.eot.SignModule",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "E-Otinish Signer (порт OpenNCALayer)",
+        "kk": "E-Otinish Signer (OpenNCALayer порты)",
+        "en": "E-Otinish Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eproc",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.eproc-1.0.0-beta.2.onclp",
+      "sha256": "021fc508ab89b9ab0853d252458266ca501ea75481dca5dceccca8cd47b43b94",
+      "size": 113079,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.sapa.eproc.osgi.EprocModule"
+      ],
+      "replaces": {
+        "symname": "kz.sapa.eproc.osgi.EprocModule",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Закупки Самрук-Казына (порт OpenNCALayer)",
+        "kk": "Самұрық-Қазына сатып алулары (OpenNCALayer порты)",
+        "en": "Samruk-Kazyna e-procurement (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.esf-osdkz",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.esf-osdkz-1.0.0-beta.3.onclp",
+      "sha256": "ca2ebf15f22b356b612b9f3952af1ba97105783d0468167364f06dc52a1473e1",
+      "size": 120939,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "com.osdkz.esf.signer.esfSigner"
+      ],
+      "replaces": {
+        "symname": "com.osdkz.esf.signer",
+        "version": "1.2"
+      },
+      "name": {
+        "ru": "Подпись ЭСФ (порт OpenNCALayer)",
+        "kk": "ЭШФ қолтаңбасы (OpenNCALayer порты)",
+        "en": "ESF signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eup",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.eup-1.0.0-beta.1.onclp",
+      "sha256": "b6d9c594cf4a712fd30a744d69845ee15ff47d88c590769a7c57abc8a152e0f0",
+      "size": 154131,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.nitec.eup.eupsigner"
+      ],
+      "replaces": {
+        "symname": "kz.nitec.eup.eupsigner",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Заң көмегі (порт OpenNCALayer)",
+        "kk": "Заң көмегі (OpenNCALayer порты)",
+        "en": "Zan Komegi (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.ezsigner",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.ezsigner-1.0.0-beta.2.onclp",
+      "sha256": "b609853cce63b2d4d447eca41f750720916f1d790021ebeabd0c7696fa5f37d8",
+      "size": 164831,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.gov.pki.cms.CMSSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.gov.pki.cms.NLDocSignerModule",
+        "version": "1.2.1"
+      },
+      "name": {
+        "ru": "ezSigner (порт OpenNCALayer)",
+        "kk": "ezSigner (OpenNCALayer порты)",
+        "en": "ezSigner (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.fhs",
+      "version": "1.0.0-beta.5",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.fhs-1.0.0-beta.5.onclp",
+      "sha256": "be25c9deca77ad6089c10dbc8fe7a3defe345b9e0ed05c55b75fc8715a4d4948",
+      "size": 187040,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.fhs.cabinet.FHSCabinetSigner"
+      ],
+      "replaces": {
+        "symname": "kz.fhs.cabinet.FHSCabinet",
+        "version": "2.0.0"
+      },
+      "name": {
+        "ru": "First Heartland Securities Cabinet (порт OpenNCALayer)",
+        "kk": "First Heartland Securities Cabinet (OpenNCALayer порты)",
+        "en": "First Heartland Securities Cabinet (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.idocs",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.idocs-1.0.0-beta.2.onclp",
+      "sha256": "9519c8a7b3fe64902e8402ab0aa473375963ea26de59483f4ce2523a14a4c724",
+      "size": 179376,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.idocs"
+      ],
+      "replaces": {
+        "symname": "kz.idocs",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "idocs (порт OpenNCALayer)",
+        "kk": "idocs (OpenNCALayer порты)",
+        "en": "idocs (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.k2sign",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.k2sign-1.0.0-beta.2.onclp",
+      "sha256": "6826e8bddf384cd10834962b506a1d3ca7b08997bd7a442aa2402a34ba2fce14",
+      "size": 179945,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "K2Sign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.K2SignBundle",
+        "version": "1.1.5"
+      },
+      "name": {
+        "ru": "K2Sign (порт OpenNCALayer)",
+        "kk": "K2Sign (OpenNCALayer порты)",
+        "en": "K2Sign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.knp",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.knp-1.0.0-beta.2.onclp",
+      "sha256": "42c0103bd5ae39038c2bf19572f2ccda6c81ce8541f56a101465f7565df40f39",
+      "size": 193253,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.inessoft.kgd.knp.ncalayer.KNPModuleService"
+      ],
+      "replaces": {
+        "symname": "kz.inessoft.kgd.knp.sono_knp_ncalayer_module",
+        "version": "1.2.0"
+      },
+      "name": {
+        "ru": "Кабинет налогоплательщика, ИС СОНО (порт OpenNCALayer)",
+        "kk": "Салық төлеушінің кабинеті, СОНО АЖ (OpenNCALayer порты)",
+        "en": "Taxpayer's cabinet, SONO (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.market",
+      "version": "1.0.0-beta.4",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.market-1.0.0-beta.4.onclp",
+      "sha256": "011d74a42edd14fef64a4faade19745f410237b6d018d11535fccde993040f8f",
+      "size": 89636,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "MarketSign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.MarketSignBundle",
+        "version": "1.0.7"
+      },
+      "name": {
+        "ru": "MarketSign (порт OpenNCALayer)",
+        "kk": "MarketSign (OpenNCALayer порты)",
+        "en": "MarketSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.metadoc",
+      "version": "1.0.0-beta.4",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.metadoc-1.0.0-beta.4.onclp",
+      "sha256": "42e1d0bc9548e798ad4ab8fb65772bf006d6ae15fb70d43f564a0645c988ead2",
+      "size": 268320,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.metadoc.NCAModule"
+      ],
+      "replaces": {
+        "symname": "kz.metadoc.NCAModule",
+        "version": "1.7"
+      },
+      "name": {
+        "ru": "Metadoc (порт OpenNCALayer)",
+        "kk": "Metadoc (OpenNCALayer порты)",
+        "en": "Metadoc (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.motiw",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.motiw-1.0.0-beta.2.onclp",
+      "sha256": "4917cee3c04a8ba86758a856628347b3b269c636fa49b398a107f40046e96bf7",
+      "size": 240306,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "ru.motiw.ModuleService"
+      ],
+      "replaces": {
+        "symname": "ru.motiw.ModuleService",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Motiware Service (порт OpenNCALayer)",
+        "kk": "Motiware Service (OpenNCALayer порты)",
+        "en": "Motiware Service (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.nursign",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.nursign-1.0.0-beta.3.onclp",
+      "sha256": "cf967752c844830d46bf03ac9d129cef70ffe94b87d08a82f6fd534a25ae4171",
+      "size": 193113,
+      "min_core": "0.1.0-alpha.6",
+      "modules": [
+        "NURSign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.NurSignBundle",
+        "version": "5.1.2"
+      },
+      "name": {
+        "ru": "NURSign (порт OpenNCALayer)",
+        "kk": "NURSign (OpenNCALayer порты)",
+        "en": "NURSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.qiwi",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.qiwi-1.0.0-beta.2.onclp",
+      "sha256": "f900b95f87cfbbb7b18c504ee072ac49da72609983a1e48492ef34d3ed6560f8",
+      "size": 115777,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.qiwi.osgi.SecurityUtils"
+      ],
+      "replaces": {
+        "symname": "kz.qiwi.osgi.SecurityUtils",
+        "version": "1.3"
+      },
+      "name": {
+        "ru": "QIWI SecurityUtils (порт OpenNCALayer)",
+        "kk": "QIWI SecurityUtils (OpenNCALayer порты)",
+        "en": "QIWI SecurityUtils (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.qoltanba",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.qoltanba-1.0.0-beta.3.onclp",
+      "sha256": "d80fff2f573bc66383079fe8730bfe6e03a42ef752f3f30afebc17fde4bf4fad",
+      "size": 452242,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.btsdigital.qoltanba.CMSSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.btsdigital.qoltanba",
+        "version": "1.1"
+      },
+      "name": {
+        "ru": "Qoltanba (порт OpenNCALayer)",
+        "kk": "Qoltanba (OpenNCALayer порты)",
+        "en": "Qoltanba (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.rating1c",
+      "version": "1.0.0-beta.4",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.rating1c-1.0.0-beta.4.onclp",
+      "sha256": "b4b29a697848a0758cedce5a50be791988e341ea8332fc723096f10bbacfa778",
+      "size": 183731,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.rating1c.edo.signUtils"
+      ],
+      "replaces": {
+        "symname": "kz.rating1c.edo",
+        "version": "1.9.5"
+      },
+      "name": {
+        "ru": "1С-Рейтинг ЭДО (порт OpenNCALayer)",
+        "kk": "1С-Рейтинг ЭДО (OpenNCALayer порты)",
+        "en": "1C-Rating EDO (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.simourg",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.simourg-1.0.0-beta.2.onclp",
+      "sha256": "89634fe01bd01662e01ab12833a9e3e2d7be8ed47a37b2813b2e2ee21b8d3ef1",
+      "size": 204939,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.Simourg.SimBASEModule"
+      ],
+      "replaces": {
+        "symname": "kz.Simourg.SimBASE",
+        "version": "2.2"
+      },
+      "name": {
+        "ru": "Simourg SimBASE (порт OpenNCALayer)",
+        "kk": "Simourg SimBASE (OpenNCALayer порты)",
+        "en": "Simourg SimBASE (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.skf",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.skf-1.0.0-beta.2.onclp",
+      "sha256": "d9d2ac0f77308494a98a6ab22bf41951b8faee641b7ff2b82df478fe119f7ce5",
+      "size": 288022,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "org.skf.osgi.SKFModule"
+      ],
+      "replaces": {
+        "symname": "org.skf.osgi.SKFModule",
+        "version": "1.6.2"
+      },
+      "name": {
+        "ru": "СК-Фармация, portal.efis.kz (порт OpenNCALayer)",
+        "kk": "СК-Фармация, portal.efis.kz (OpenNCALayer порты)",
+        "en": "SK-Pharmacy, portal.efis.kz (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.taxtech",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.taxtech-1.0.0-beta.2.onclp",
+      "sha256": "3a49d253a871715c5fd5658cc60291bf71a9e2f174a355b3b0a39d96af5bbba2",
+      "size": 142870,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.digital.taxtech.documents.multisign.NCAModule"
+      ],
+      "replaces": {
+        "symname": "digital.taxtech.documents.multisign",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "ЭДО ЦНТ (порт OpenNCALayer)",
+        "kk": "ЦСТ ЭҚА (OpenNCALayer порты)",
+        "en": "Digital TaxTech e-documents (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.thundercrypt",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.thundercrypt-1.0.0-beta.1.onclp",
+      "sha256": "15dbb7d2f429fb189e4d3e13b7ee7cbc1bfe65b86f8aba65fef9a5ebe3da3c81",
+      "size": 271835,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "asia.dbt.thundercrypt.osgi.ThunderCryptModule"
+      ],
+      "replaces": {
+        "symname": "asia.dbt.thundercrypt.osgi.ThunderCryptModule",
+        "version": "1.16.5"
+      },
+      "name": {
+        "ru": "ThunderCrypt (порт OpenNCALayer)",
+        "kk": "ThunderCrypt (OpenNCALayer порты)",
+        "en": "ThunderCrypt (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.uchet",
+      "version": "1.0.0-beta.6",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.uchet-1.0.0-beta.6.onclp",
+      "sha256": "7a61185d9b46f2e5835f3a978dfe71d8e460933bbd19aace9f02dba7512650d8",
+      "size": 239688,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.uchet.signUtil.commonUtils"
+      ],
+      "replaces": {
+        "symname": "kz.uchet.signUtil",
+        "version": "1.5"
+      },
+      "name": {
+        "ru": "uchet.kz signUtil (порт OpenNCALayer)",
+        "kk": "uchet.kz signUtil (OpenNCALayer порты)",
+        "en": "uchet.kz signUtil (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.uchet-esf",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.uchet-esf-1.0.0-beta.2.onclp",
+      "sha256": "2bda6ef44b77a18ee98d7aac3cace3607791b34d9937f83050188c359479673b",
+      "size": 123303,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.uchet.esfSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.uchet.esfSignUtil",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Учёт.kz: подпись ЭСФ (порт OpenNCALayer)",
+        "kk": "Учёт.kz: ЭШФ қолтаңбасы (OpenNCALayer порты)",
+        "en": "Uchet.kz ESF signing (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.workspace",
+      "version": "1.0.0-beta.2",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.workspace-1.0.0-beta.2.onclp",
+      "sha256": "3195ecc0e2364ba1eb70a69b28581045e3f1785ba1c4ed323a84df8ecee1e748",
+      "size": 219254,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.workspace.Signer"
+      ],
+      "replaces": {
+        "symname": "kz.workspace.Signer",
+        "version": "1.3"
+      },
+      "name": {
+        "ru": "Workspace Signer (порт OpenNCALayer)",
+        "kk": "Workspace Signer (OpenNCALayer порты)",
+        "en": "Workspace Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.xdox",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113/io.github.arynyklas.openncalayer.port.xdox-1.0.0-beta.3.onclp",
+      "sha256": "fbadc49bc87890713c8e91ac5d26fc6ce4248f3aded0c8326cedae37c268c077",
+      "size": 126672,
+      "min_core": "0.1.0-alpha.5",
+      "modules": [
+        "kz.xdox.signerbundle"
+      ],
+      "replaces": {
+        "symname": "kz.xdox.osgi.SignerBundle",
+        "version": "1.1"
+      },
+      "name": {
+        "ru": "xdox.kz Signer (порт OpenNCALayer)",
+        "kk": "xdox.kz Signer (OpenNCALayer порты)",
+        "en": "xdox.kz Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.ezsigner",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113.1/io.github.arynyklas.openncalayer.port.ezsigner-1.0.0-beta.3.onclp",
+      "sha256": "0ecc7de060b22278aecdcc679eed5d86028e0a54be2c1b49481e2645edbf5de6",
+      "size": 164832,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.gov.pki.cms.CMSSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.gov.pki.cms.NLDocSignerModule",
+        "version": "1.2.2"
+      },
+      "name": {
+        "ru": "ezSigner (порт OpenNCALayer)",
+        "kk": "ezSigner (OpenNCALayer порты)",
+        "en": "ezSigner (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.simourg",
+      "version": "1.0.0-beta.3",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261113.1/io.github.arynyklas.openncalayer.port.simourg-1.0.0-beta.3.onclp",
+      "sha256": "8aec6ccd724da5917923807c4e1e584c5c40ba670b39ca85317ddfa9b325e61e",
+      "size": 204937,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.Simourg.SimBASEModule"
+      ],
+      "replaces": {
+        "symname": "kz.Simourg.SimBASE",
+        "version": "2.4"
+      },
+      "name": {
+        "ru": "Simourg SimBASE (порт OpenNCALayer)",
+        "kk": "Simourg SimBASE (OpenNCALayer порты)",
+        "en": "Simourg SimBASE (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.onaidocs",
+      "version": "1.0.0-beta.1",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261114/io.github.arynyklas.openncalayer.port.onaidocs-1.0.0-beta.1.onclp",
+      "sha256": "705a7e356466d9a5b3bd99ae0805329e6895fed950635f5c16d6a81a4a51730d",
+      "size": 194378,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.onaidocs.SignBundle"
+      ],
+      "replaces": {
+        "symname": "onaidocs-sign-bundle",
+        "version": "1.1.0"
+      },
+      "name": {
+        "ru": "OnaiDocs (порт OpenNCALayer)",
+        "kk": "OnaiDocs (OpenNCALayer порты)",
+        "en": "OnaiDocs (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.acbank",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.acbank-1.0.0.onclp",
+      "sha256": "b44e3204e4b8e63161904fa571c4f02c050e9db7167f8f3cbcc7d03f1d0d27d0",
+      "size": 136862,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.acbank.business.api.ncalayer.module"
+      ],
+      "replaces": {
+        "symname": "kz.acbank.business.api.ncalayer.module",
+        "version": "1.0.445"
+      },
+      "name": {
+        "ru": "Alatau City Bank (порт OpenNCALayer)",
+        "kk": "Alatau City Bank (OpenNCALayer порты)",
+        "en": "Alatau City Bank (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.arta",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.arta-1.0.0.onclp",
+      "sha256": "b3cdda005f8603a9820918f916dab197ff6847139bb29c11519495aa080a9e9e",
+      "size": 217261,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.arta.synergy.signmodule"
+      ],
+      "replaces": {
+        "symname": "kz.arta.synergy.signmodule",
+        "version": "6.0"
+      },
+      "name": {
+        "ru": "Arta Synergy (порт OpenNCALayer)",
+        "kk": "Arta Synergy (OpenNCALayer порты)",
+        "en": "Arta Synergy (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.bas",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.bas-1.0.0.onclp",
+      "sha256": "cb14baee51baa5c50ef6510e17270ff7229342fea287b1b334dc5d59ab9d3f0f",
+      "size": 165748,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.bas.nca.multiSignService"
+      ],
+      "replaces": {
+        "symname": "kz.bas.nca.signer",
+        "version": "1.0.35"
+      },
+      "name": {
+        "ru": "BAS Signer (порт OpenNCALayer)",
+        "kk": "BAS Signer (OpenNCALayer порты)",
+        "en": "BAS Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.buhta",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.buhta-1.0.0.onclp",
+      "sha256": "0d8f214d2e4642408d2b805014231ed0f548f223e445984220035058d9ae273b",
+      "size": 144653,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "com.buhta.cert.ncamodule"
+      ],
+      "replaces": {
+        "symname": "com.buhta.cert.ncamodule",
+        "version": "0.1.3"
+      },
+      "name": {
+        "ru": "Buhta NcaModule (порт OpenNCALayer)",
+        "kk": "Buhta NcaModule (OpenNCALayer порты)",
+        "en": "Buhta NcaModule (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.devart",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.devart-1.0.0.onclp",
+      "sha256": "fdcce57020b5d103d25745dfe9da9c9e96a31242abc97e59c9ca48989cc4e935",
+      "size": 264909,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.devart.bundle.Devart"
+      ],
+      "replaces": {
+        "symname": "kz.devart.bundle.Devart",
+        "version": "1.1.4"
+      },
+      "name": {
+        "ru": "Devart (порт OpenNCALayer)",
+        "kk": "Devart (OpenNCALayer порты)",
+        "en": "Devart (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.documentolog",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.documentolog-1.0.0.onclp",
+      "sha256": "85576c6a203a502dc8a1ad485a17ad1f8b045f1c35d6b8daeee1e67e0e6f04fa",
+      "size": 194011,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.documentolog.agent.SignService",
+        "kz.documentolog.agent.KalkanService"
+      ],
+      "replaces": {
+        "symname": "kz.documentolog.Agent",
+        "version": "0.2"
+      },
+      "name": {
+        "ru": "СЭД «Documentolog» (порт OpenNCALayer)",
+        "kk": "«Documentolog» ЭҚЖ (OpenNCALayer порты)",
+        "en": "Documentolog EDMS (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.dogovor24",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.dogovor24-1.0.0.onclp",
+      "sha256": "5f7675d257c8b8a820dc9a6678c2b8df865d4028445267304d908b2484a3e7c8",
+      "size": 194788,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.dogovor24.module"
+      ],
+      "replaces": {
+        "symname": "kz.dogovor24.module",
+        "version": "1.0.5"
+      },
+      "name": {
+        "ru": "Договор24 (порт OpenNCALayer)",
+        "kk": "Договор24 (OpenNCALayer порты)",
+        "en": "Dogovor24 (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.doodocs",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.doodocs-1.0.0.onclp",
+      "sha256": "aa95084cf27c515490144175517e3bdba55d1ee627239263fd3e7e408ce06957",
+      "size": 158349,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.doodocs.moduleservice.SampleBundle"
+      ],
+      "replaces": {
+        "symname": "kz.doodocs.moduleservice",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Облачное подписание Doodocs.kz (порт OpenNCALayer)",
+        "kk": "Doodocs.kz бұлттық қол қоюы (OpenNCALayer порты)",
+        "en": "Doodocs.kz cloud signing (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.efactoring",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.efactoring-1.0.0.onclp",
+      "sha256": "a3b3beb7fd3ec098b1d4a286ef197b85c4add560f2808159e7c32b02ced49904",
+      "size": 92031,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "EFactoringSign"
+      ],
+      "replaces": {
+        "symname": "kz.efactoring.EfactoringSignBundle",
+        "version": "1.2"
+      },
+      "name": {
+        "ru": "EFactoringSign (порт OpenNCALayer)",
+        "kk": "EFactoringSign (OpenNCALayer порты)",
+        "en": "EFactoringSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.energy",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.energy-1.0.0.onclp",
+      "sha256": "36b8f2cc47f597327f9259f4824aa145c4244b342a729a6874e45b9aad6f6df5",
+      "size": 139413,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.energy.sign.SignEnergy"
+      ],
+      "replaces": {
+        "symname": "kz.energy.sign",
+        "version": "2.0.0"
+      },
+      "name": {
+        "ru": "Sign Energy (порт OpenNCALayer)",
+        "kk": "Sign Energy (OpenNCALayer порты)",
+        "en": "Sign Energy (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eot",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.eot-1.0.0.onclp",
+      "sha256": "139cb9d37d534dbe774f9690b88c8b854c5d16f7f8a268250c83d926f575eec6",
+      "size": 156876,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.gov.pki.eot.SignModule"
+      ],
+      "replaces": {
+        "symname": "kz.gov.pki.eot.SignModule",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "E-Otinish Signer (порт OpenNCALayer)",
+        "kk": "E-Otinish Signer (OpenNCALayer порты)",
+        "en": "E-Otinish Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eproc",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.eproc-1.0.0.onclp",
+      "sha256": "6b3a61f4a53039e325bb0eda033aac13a7f833750fb9ebd100454337454c921d",
+      "size": 113067,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.sapa.eproc.osgi.EprocModule"
+      ],
+      "replaces": {
+        "symname": "kz.sapa.eproc.osgi.EprocModule",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Закупки Самрук-Казына (порт OpenNCALayer)",
+        "kk": "Самұрық-Қазына сатып алулары (OpenNCALayer порты)",
+        "en": "Samruk-Kazyna e-procurement (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.esf-osdkz",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.esf-osdkz-1.0.0.onclp",
+      "sha256": "cd7514bbf86937a0fc58642ae22ba9545d52c28e9da34842dcbe34818f621c2a",
+      "size": 120955,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "com.osdkz.esf.signer.esfSigner"
+      ],
+      "replaces": {
+        "symname": "com.osdkz.esf.signer",
+        "version": "1.2"
+      },
+      "name": {
+        "ru": "Подпись ЭСФ (порт OpenNCALayer)",
+        "kk": "ЭШФ қолтаңбасы (OpenNCALayer порты)",
+        "en": "ESF signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.eup",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.eup-1.0.0.onclp",
+      "sha256": "5d876c1ccaf12d4bd413d4f416b83e0761825654dbb49dff76b8ea9765f3d197",
+      "size": 154038,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.nitec.eup.eupsigner"
+      ],
+      "replaces": {
+        "symname": "kz.nitec.eup.eupsigner",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Заң көмегі (порт OpenNCALayer)",
+        "kk": "Заң көмегі (OpenNCALayer порты)",
+        "en": "Zan Komegi (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.fhs",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.fhs-1.0.0.onclp",
+      "sha256": "8aae8367418242070d98baa60152a8b6ca5717a22416c0c7c8d0220a38da26fa",
+      "size": 186999,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.fhs.cabinet.FHSCabinetSigner"
+      ],
+      "replaces": {
+        "symname": "kz.fhs.cabinet.FHSCabinet",
+        "version": "2.0.0"
+      },
+      "name": {
+        "ru": "First Heartland Securities Cabinet (порт OpenNCALayer)",
+        "kk": "First Heartland Securities Cabinet (OpenNCALayer порты)",
+        "en": "First Heartland Securities Cabinet (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.idocs",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.idocs-1.0.0.onclp",
+      "sha256": "4556713459629b45f5d3dbdbd281c73a2bfe79fe172323f006701e20d9e4cdd6",
+      "size": 179454,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.idocs"
+      ],
+      "replaces": {
+        "symname": "kz.idocs",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "idocs (порт OpenNCALayer)",
+        "kk": "idocs (OpenNCALayer порты)",
+        "en": "idocs (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.k2sign",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.k2sign-1.0.0.onclp",
+      "sha256": "a2dd0cb61697421817b19f37611bd90f346cda11a4d1fbeca380ec93eb1314bf",
+      "size": 179955,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "K2Sign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.K2SignBundle",
+        "version": "1.1.5"
+      },
+      "name": {
+        "ru": "K2Sign (порт OpenNCALayer)",
+        "kk": "K2Sign (OpenNCALayer порты)",
+        "en": "K2Sign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.knp",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.knp-1.0.0.onclp",
+      "sha256": "3e96d85d82dd5fc1e669f2447e3f109be982d47786b2119f0e8e444e10432783",
+      "size": 193252,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.inessoft.kgd.knp.ncalayer.KNPModuleService"
+      ],
+      "replaces": {
+        "symname": "kz.inessoft.kgd.knp.sono_knp_ncalayer_module",
+        "version": "1.2.0"
+      },
+      "name": {
+        "ru": "Кабинет налогоплательщика, ИС СОНО (порт OpenNCALayer)",
+        "kk": "Салық төлеушінің кабинеті, СОНО АЖ (OpenNCALayer порты)",
+        "en": "Taxpayer's cabinet, SONO (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.market",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.market-1.0.0.onclp",
+      "sha256": "16ed9830889fb65275bf9aac226996fcb6d4b755f326392f6731bd45951a2eca",
+      "size": 89685,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "MarketSign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.MarketSignBundle",
+        "version": "1.0.7"
+      },
+      "name": {
+        "ru": "MarketSign (порт OpenNCALayer)",
+        "kk": "MarketSign (OpenNCALayer порты)",
+        "en": "MarketSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.metadoc",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.metadoc-1.0.0.onclp",
+      "sha256": "821e8253131bbbe69ea8257507e118f9ec84552173133eba824d2c2938e36efc",
+      "size": 268311,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.metadoc.NCAModule"
+      ],
+      "replaces": {
+        "symname": "kz.metadoc.NCAModule",
+        "version": "1.7"
+      },
+      "name": {
+        "ru": "Metadoc (порт OpenNCALayer)",
+        "kk": "Metadoc (OpenNCALayer порты)",
+        "en": "Metadoc (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.motiw",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.motiw-1.0.0.onclp",
+      "sha256": "9d1afbe4429efbf74b240562963ce43857beb4f0ff43a160b22bca1c0a20a082",
+      "size": 240312,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "ru.motiw.ModuleService"
+      ],
+      "replaces": {
+        "symname": "ru.motiw.ModuleService",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Motiware Service (порт OpenNCALayer)",
+        "kk": "Motiware Service (OpenNCALayer порты)",
+        "en": "Motiware Service (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.nursign",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.nursign-1.0.0.onclp",
+      "sha256": "f844d56423bc9d4d08cfad226e6718afdc8b0804eb97218933f0457982e35618",
+      "size": 193110,
+      "min_core": "0.1.0-alpha.6",
+      "modules": [
+        "NURSign"
+      ],
+      "replaces": {
+        "symname": "kz.ecc.NurSignBundle",
+        "version": "5.1.2"
+      },
+      "name": {
+        "ru": "NURSign (порт OpenNCALayer)",
+        "kk": "NURSign (OpenNCALayer порты)",
+        "en": "NURSign (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.qiwi",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.qiwi-1.0.0.onclp",
+      "sha256": "0ea345199e9567c0d3cec2bb2b19cd56e220b62044b10dea714f30986edacc1d",
+      "size": 115782,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.qiwi.osgi.SecurityUtils"
+      ],
+      "replaces": {
+        "symname": "kz.qiwi.osgi.SecurityUtils",
+        "version": "1.3"
+      },
+      "name": {
+        "ru": "QIWI SecurityUtils (порт OpenNCALayer)",
+        "kk": "QIWI SecurityUtils (OpenNCALayer порты)",
+        "en": "QIWI SecurityUtils (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.qoltanba",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.qoltanba-1.0.0.onclp",
+      "sha256": "3f2321f8c0ea7699b907b66c055cad76ee4f171a0d36928024091c1ef8c881ec",
+      "size": 452230,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.btsdigital.qoltanba.CMSSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.btsdigital.qoltanba",
+        "version": "1.1"
+      },
+      "name": {
+        "ru": "Qoltanba (порт OpenNCALayer)",
+        "kk": "Qoltanba (OpenNCALayer порты)",
+        "en": "Qoltanba (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.rating1c",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.rating1c-1.0.0.onclp",
+      "sha256": "4df7b2dba6dbc1c6f71ea8ffd506b9a7fa896c5cebb0352adee88c92d9db2738",
+      "size": 183693,
+      "min_core": "0.1.0-alpha.7",
+      "modules": [
+        "kz.rating1c.edo.signUtils"
+      ],
+      "replaces": {
+        "symname": "kz.rating1c.edo",
+        "version": "1.9.5"
+      },
+      "name": {
+        "ru": "1С-Рейтинг ЭДО (порт OpenNCALayer)",
+        "kk": "1С-Рейтинг ЭДО (OpenNCALayer порты)",
+        "en": "1C-Rating EDO (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.skf",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.skf-1.0.0.onclp",
+      "sha256": "4d990ac31098c579c4b016fd6d325f83c1c29434f5bd2ca886f2e4064e5d52f8",
+      "size": 288132,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "org.skf.osgi.SKFModule"
+      ],
+      "replaces": {
+        "symname": "org.skf.osgi.SKFModule",
+        "version": "1.6.2"
+      },
+      "name": {
+        "ru": "СК-Фармация, portal.efis.kz (порт OpenNCALayer)",
+        "kk": "СК-Фармация, portal.efis.kz (OpenNCALayer порты)",
+        "en": "SK-Pharmacy, portal.efis.kz (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.taxtech",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.taxtech-1.0.0.onclp",
+      "sha256": "0292a581f68249e9d9e69ff36380e07444f2acf4099ffd4cd2e5379b434eb7bd",
+      "size": 142892,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.digital.taxtech.documents.multisign.NCAModule"
+      ],
+      "replaces": {
+        "symname": "digital.taxtech.documents.multisign",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "ЭДО ЦНТ (порт OpenNCALayer)",
+        "kk": "ЦСТ ЭҚА (OpenNCALayer порты)",
+        "en": "Digital TaxTech e-documents (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.thundercrypt",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.thundercrypt-1.0.0.onclp",
+      "sha256": "eeea630cefc1301c442a7f09c72c12171555ae340ea8642c464d2b222884d753",
+      "size": 271798,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "asia.dbt.thundercrypt.osgi.ThunderCryptModule"
+      ],
+      "replaces": {
+        "symname": "asia.dbt.thundercrypt.osgi.ThunderCryptModule",
+        "version": "1.16.5"
+      },
+      "name": {
+        "ru": "ThunderCrypt (порт OpenNCALayer)",
+        "kk": "ThunderCrypt (OpenNCALayer порты)",
+        "en": "ThunderCrypt (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.uchet",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.uchet-1.0.0.onclp",
+      "sha256": "5cc4700e71a815761ced00d40708b96a07b2057bc2f390536011ca7c7530055a",
+      "size": 239681,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.uchet.signUtil.commonUtils"
+      ],
+      "replaces": {
+        "symname": "kz.uchet.signUtil",
+        "version": "1.5"
+      },
+      "name": {
+        "ru": "uchet.kz signUtil (порт OpenNCALayer)",
+        "kk": "uchet.kz signUtil (OpenNCALayer порты)",
+        "en": "uchet.kz signUtil (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.uchet-esf",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.uchet-esf-1.0.0.onclp",
+      "sha256": "381b0ea430618aa256e84df0c9d8ccc38954b2241d476fe168c2df2e0175f0e2",
+      "size": 123299,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.uchet.esfSignUtil"
+      ],
+      "replaces": {
+        "symname": "kz.uchet.esfSignUtil",
+        "version": "1.0"
+      },
+      "name": {
+        "ru": "Учёт.kz: подпись ЭСФ (порт OpenNCALayer)",
+        "kk": "Учёт.kz: ЭШФ қолтаңбасы (OpenNCALayer порты)",
+        "en": "Uchet.kz ESF signing (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.workspace",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.workspace-1.0.0.onclp",
+      "sha256": "fbea7275c784c221ae76fed831156dda847343e7d94305ffa0742d12829f8531",
+      "size": 219257,
+      "min_core": "0.1.0-alpha.4",
+      "modules": [
+        "kz.workspace.Signer"
+      ],
+      "replaces": {
+        "symname": "kz.workspace.Signer",
+        "version": "1.3"
+      },
+      "name": {
+        "ru": "Workspace Signer (порт OpenNCALayer)",
+        "kk": "Workspace Signer (OpenNCALayer порты)",
+        "en": "Workspace Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    },
+    {
+      "id": "io.github.arynyklas.openncalayer.port.xdox",
+      "version": "1.0.0",
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/plugins-20261115/io.github.arynyklas.openncalayer.port.xdox-1.0.0.onclp",
+      "sha256": "ad1bd7d1e01dfce1a439772a94b1fae723b4b42c8254cf0cd451c0bc3b5e2370",
+      "size": 126667,
+      "min_core": "0.1.0-alpha.5",
+      "modules": [
+        "kz.xdox.signerbundle"
+      ],
+      "replaces": {
+        "symname": "kz.xdox.osgi.SignerBundle",
+        "version": "1.1"
+      },
+      "name": {
+        "ru": "xdox.kz Signer (порт OpenNCALayer)",
+        "kk": "xdox.kz Signer (OpenNCALayer порты)",
+        "en": "xdox.kz Signer (OpenNCALayer port)"
+      },
+      "rollout": 100,
+      "revoked": false
+    }
+  ]
+}
