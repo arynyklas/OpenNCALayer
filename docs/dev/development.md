@@ -1,6 +1,22 @@
 # Разработка и сборка
 
-Для тех, кто хочет собрать OpenNCALayer из исходников, запустить тесты и подготовить изменение. Сначала — как собрать и запустить, потом — что поставить для тестов и как их запускать.
+Как собрать OpenNCALayer, запустить тесты и проверить изменение перед PR.
+
+## Коротко: от клона до зелёных тестов
+
+1. Поставьте `rustup`, OpenSSL 3 и Python 3.12 (подробно — в разделе [«Что нужно для тестов»](#что-нужно-для-тестов)).
+2. Создайте окружение Python для тестов и укажите его:
+   ```sh
+   python3 -m venv .venv-oracle
+   .venv-oracle/bin/python -m pip install --require-virtualenv -r xtask/assets/oracle/requirements.txt
+   export ONCL_PYHANKO_PYTHON="$PWD/.venv-oracle/bin/python"
+   ```
+   В Windows путь — `.venv-oracle\Scripts\python.exe`.
+3. Скачайте тестовые данные: `cargo xtask fetch-fixtures`.
+4. Запустите тесты: `cargo test --workspace`.
+5. Перед PR: `cargo xtask privacy` и проверки из раздела [«Перед отправкой изменений»](#перед-отправкой-изменений).
+
+Если на каком-то шаге что-то не так — напишите в [Issues](https://github.com/arynyklas/OpenNCALayer/issues), это ошибка документации.
 
 Другие документы для разработчиков: выпуск версии — [`release.md`](release.md), встраивание SDK — [`sdk-overview.md`](sdk-overview.md) и [`sdk.md`](sdk.md).
 
