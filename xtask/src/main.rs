@@ -528,8 +528,8 @@ enum PackageCommand {
         #[command(flatten)]
         args: PackageArgs,
     },
-    /// `PKGBUILD`, `.SRCINFO` and the install script of the AUR package `openncalayer-bin`.
-    Aur {
+    /// `PKGBUILD`, `.SRCINFO` and the install script of the pacman package `openncalayer-bin`.
+    Arch {
         /// The version of the release.
         #[arg(long, value_parser = parse_version)]
         version: Version,
@@ -625,7 +625,7 @@ fn print_published(files: &[PathBuf]) {
 
 /// `cargo xtask package …`.
 fn package(command: PackageCommand) -> anyhow::Result<()> {
-    use xtask::package::{aur, linux, macos, platform, windows};
+    use xtask::package::{arch, linux, macos, platform, windows};
     let root = oncl_testkit::workspace_root();
     match command {
         PackageCommand::Windows { flavor, bin, args } => {
@@ -691,13 +691,13 @@ fn package(command: PackageCommand) -> anyhow::Result<()> {
                 &args.dist,
             )?);
         }
-        PackageCommand::Aur {
+        PackageCommand::Arch {
             version,
             sha256,
             pkgrel,
             out,
         } => {
-            for file in aur::Package::new(version, pkgrel, &sha256)?.write(&out)? {
+            for file in arch::Package::new(version, pkgrel, &sha256)?.write(&out)? {
                 println!("{}", file.display());
             }
         }
