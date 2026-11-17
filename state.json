@@ -648,7 +648,7 @@
       "published_sha1": "fdd90db42251c35f321aef62061085ca55419634",
       "manifest_hash": null,
       "failures": 0,
-      "status": "failing"
+      "status": "ok"
     }
   }
 }
