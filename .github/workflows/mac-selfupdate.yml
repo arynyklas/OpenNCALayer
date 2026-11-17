@@ -20,9 +20,6 @@ name: Mac self-update
 # `.pkg`, `to` a version the published index offers to it. No secrets and no write
 # permissions. Third-party actions are pinned to a commit, with the release tag in a comment.
 on:
-  # TEMPORARY, removed before the merge: proves the workflow on its branch.
-  push:
-    branches: [ci/mac-selfupdate]
   workflow_dispatch:
     inputs:
       from:
