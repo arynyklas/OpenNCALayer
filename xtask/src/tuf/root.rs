@@ -13,6 +13,12 @@
 //! snapshot signed by keys no longer in force: `tuf update` notices and signs new versions
 //! (`--refresh` is not needed). A new timestamp key is for the GitHub secret.
 //!
+//! [`root_v2`] makes the next root of `tuf/v2` (`docs/design/publishers.md`): its snapshot
+//! and timestamp keys are online keys (`v2-<role>.v<N>.key`, for the GitHub secrets), and
+//! its targets keys are always those of `tuf/v1`'s root in force, which the two
+//! repositories share: the targets key is rotated in `tuf/v1`, and the next root of `tuf/v2`
+//! follows it.
+//!
 //! Everything is made in memory, the new keys are written, then the root; the chain of
 //! roots is verified with the client's code, and the root and the new keys are removed
 //! again if it does not hold.

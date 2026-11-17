@@ -936,7 +936,9 @@ mod tests {
             }]
         }))
         .unwrap();
-        let err = registry.check_indexes(&[index.clone()]).unwrap_err();
+        let err = registry
+            .check_indexes(std::slice::from_ref(&index))
+            .unwrap_err();
         assert!(err.to_string().contains("serves"), "{err}");
         p.supersedes.insert(
             "io.github.arynyklas.openncalayer.port.market".to_owned(),

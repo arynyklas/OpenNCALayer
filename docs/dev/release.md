@@ -323,6 +323,8 @@ cargo xtask index check updates/v1 --base origin/main
 
 `cargo xtask tuf check [--dir tuf/v1] [--index updates/v1] [--anchor crates/oncl-update/keys/root.json] [--base <ref>] [--no-timestamp] [--fail-on-expiring] [--min-days 10] [--min-root-days 45] [--now <время>]`. Без каталога и без якоря пишет `tuf check: no TUF repository yet` и завершается с кодом 0 (состояние до церемонии). Без `--no-timestamp` timestamp обязателен и проверяется (репозиторий, который публикуется), с ним timestamp в дереве запрещён.
 
+С `--repo both` (по умолчанию) рядом с `tuf/v1` проверяется и `tuf/v2` (`docs/design/publishers.md`), если он есть: каталог `--v2-dir` (по умолчанию `v2` рядом с `--dir`), якорь `--v2-anchor` (по умолчанию его собственный `metadata/1.root.json`), реестр издателей `--publishers` (по умолчанию `publishers/`). Находки `tuf/v2` начинаются с `tuf/v2: `, сверки двух репозиториев — с `tuf/v1 and tuf/v2: `. `--repo v1` и `--repo v2` проверяют один. С `--no-timestamp` в `tuf/v2` нет ни timestamp, ни snapshot (снимок `tuf/v2` подписывает CI); без него обязательны оба.
+
 Коды выхода: **0** — проверено (предупреждения не меняют код) или репозитория ещё нет; **1** — найдены проблемы или команда не смогла выполниться; **2** — ошибка командной строки. Каждая находка — строка `tuf check: error[<код>]: <сообщение>` в stderr или `tuf check: warning[<код>]: <сообщение>` в stdout, затем `tuf check: ok` либо `tuf check: failed with N problem(s)`. Часы проверки подписей удерживаются внутри срока файлов, так что подписи и цепочка проверяются и у просроченного репозитория; сроки — отдельная находка.
 
 | Код | Значит |
@@ -340,8 +342,19 @@ cargo xtask index check updates/v1 --base origin/main
 | `index-mismatch`, `index-not-listed`, `index-missing`, `unexpected-target` | цель не равна байтам `updates/v1/<канал>.json` (`cargo xtask tuf update`); индекс не перечислен в targets; targets перечисляют индекс, которого нет; цель не индекс |
 | `file-modified`, `file-removed`, `version-rollback`, `no-version-bump` | относительно `--base`: опубликованный файл изменён или удалён, версия упала, файлы добавлены без роста версии |
 | `expired`, `expiring` | срок истёк или осталось меньше `--min-days` (targets, snapshot) / `--min-root-days` (root) дней; с `--fail-on-expiring` — ошибка, иначе предупреждение |
+| `snapshot-committed`, `unexpected-timestamp` | `tuf/v2`: snapshot лежит в дереве; timestamp есть до проверки снимка |
+| `delegation-refused`, `key-reused` | `tuf/v2`: делегирование нарушает профиль; ключ роли издателя совпадает с ключом root |
+| `role` | `tuf/v2`: клиент не принимает последнюю версию роли делегированного издателя (подпись, версия, вложенные делегирования, цель вне путей) |
+| `role-gap`, `role-not-delegated` | `tuf/v2`: пропущена версия роли; файлы роли есть, а делегирования ей не было ни в одном targets |
+| `snapshot-role-missing`, `snapshot-role-stale`, `snapshot-meta-incomplete`, `snapshot-rollback` | `tuf/v2`, страж онлайн-снимка: снимок не перечисляет роль, у которой есть файлы (и отозванного издателя); перечисляет не последнюю версию; запись без длины и sha256; более старый снимок рядом перечислял файл, который новый выкинул, или версию выше |
+| `publishers-invalid`, `publishers-mismatch`, `publishers-not-listed`, `delegations-mismatch` | `tuf/v2`: `publishers/` нарушает правила; `publishers.json` или `delegations` в targets не то, что собрал бы `cargo xtask tuf update` |
+| `shared-key`, `index-diverged` | два репозитория делят ключ, кроме общего ключа targets (или ключ издателя — ключ корня `tuf/v1`); targets двух репозиториев перечисляют разные индексы |
+| `targets-key-differs` (предупреждение) | ключи targets двух корней разные: `cargo xtask tuf root --repo v2` после ротации targets в `tuf/v1` |
+| `role-expired`, `role-expiring` (предупреждения) | `tuf/v2`: срок роли издателя истёк или подходит; публикацию не останавливает |
 
 Остальные команды: `tuf init`, `tuf update [--refresh]`, `tuf timestamp --out <каталог> [--key-env ИМЯ | --key-file ФАЙЛ] [--anchor] [--index]`, `tuf root [--rotate-timestamp] [--rotate-snapshot] [--rotate-targets] [--rotate-root]`, `tuf verify-published --url <база> [--anchor] [--allow-missing]` (`--allow-missing` терпит ещё не опубликованный репозиторий). Для автоматизации и тестов пароль читается из файла: `--passphrase-file`; время подписи задаёт `--now`.
+
+`tuf/v2` (`docs/design/publishers.md`, «xtask»): `tuf init --repo v2 [--v1 tuf/v1] [--anchor]` — свой ключ root (зашифрован), онлайн-ключи `v2-snapshot.key` и `v2-timestamp.key` (секреты `TUF_V2_SNAPSHOT_KEY` и `TUF_V2_TIMESTAMP_KEY`), ключ targets из действующего корня `tuf/v1`; `tuf root --repo v2 [--rotate-root] [--rotate-snapshot] [--rotate-timestamp]` — ключ targets всегда берётся из `tuf/v1` (ротация targets делается в `tuf/v1`, затем `tuf root --repo v2`); `tuf update [--repo v1|v2|both]` — по умолчанию оба: `tuf/v1` как раньше, затем верхний targets `tuf/v2` над теми же индексами, `publishers.json` и делегированиями из `publishers/` (снимок не пишет), при отказе любого ничего не остаётся записанным; `tuf snapshot --out <копия tuf/v2> [--previous https://…/tuf/v2/] [--key-env ИМЯ | --key-file ФАЙЛ]` — онлайн-снимок над проверенной копией, продолжающий опубликованный (тот кладётся рядом); `tuf timestamp --repo v2`, `tuf verify-published --repo v2` (ещё `publishers.json` и каждая делегированная роль).
 
 ## 8. После выпуска
 
