@@ -97,11 +97,9 @@ log = "0.4.34"
 # Only in the plugin port tests (`oncl-port-tests`): a PDF reader independent of the
 # Qoltanba port's writer, to count pages and read text back, and the source PDFs of the tests.
 lopdf = { version = "0.45.0", default-features = false }
-# Signing of update indexes: `cargo xtask sign` and the `oncl-update` tests; the reference
-# implementation's format.
+# The secret key file format of `cargo xtask tuf` (an Ed25519 key in a password-protected
+# minisign file).
 minisign = "0.10.0"
-# Verification of the update index signatures (`oncl-update`): no dependencies of its own.
-minisign-verify = "0.3.0"
 # Fork of the proven multipart parser with an additive raw-framing observer (branch
 # `openncalayer/multer-3.1.0` of arynyklas/multer); the source is named here so that
 # independent API/server consumers receive the same required seam.
@@ -125,7 +123,7 @@ rfd = "0.17.2"
 ring = "0.17.14"
 # XMLDSig: the XML tree with byte positions (the signature is spliced into the input bytes).
 roxmltree = "0.21.2"
-# Only in xtask (`sign`): passwords read without echo; minisign already depends on it.
+# Only in xtask (`tuf`): passphrases read without echo; minisign already depends on it.
 rpassword = "7.5.4"
 # Production RSA generation/decoding/public operations; synthetic fixture/emulator private operations only.
 rsa = { version = "0.9.10", features = ["sha2"] }
@@ -232,7 +230,7 @@ hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf492
 opt-level = 3
 [profile.dev.package.num-bigint-dig]
 opt-level = 3
-# The scrypt of minisign secret keys (`cargo xtask sign` and its tests) takes seconds
+# The scrypt of the minisign secret key files of `cargo xtask tuf` (and its tests) takes seconds
 # unoptimized.
 [profile.dev.package.scrypt]
 opt-level = 3
