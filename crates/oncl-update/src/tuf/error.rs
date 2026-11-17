@@ -270,10 +270,11 @@ pub enum DelegationError {
         /// [`super::Limits::max_delegations`].
         max: u32,
     },
-    /// The role's file is not the version the snapshot lists for it.
-    #[error("it is version {found}, the snapshot lists {expected}")]
+    /// The role's file is not the version the snapshot lists for it (or, for a kept file,
+    /// the version saved).
+    #[error("it is version {found}, not the version {expected} listed")]
     VersionMismatch {
-        /// The version listed.
+        /// The version listed or saved.
         expected: u64,
         /// The version of the file.
         found: u64,
@@ -295,4 +296,8 @@ pub enum DelegationError {
     /// A kept file of the role is checked, but no version of the role was ever accepted.
     #[error("no version of it was accepted")]
     NotAccepted,
+    /// A kept file of the role is checked, but the saved top-level targets do not delegate
+    /// to it.
+    #[error("the top-level targets do not delegate to it")]
+    NotDelegated,
 }

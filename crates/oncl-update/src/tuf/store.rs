@@ -8,6 +8,7 @@
 //! other's update; [`Store::save`] merges what is on disk with what is saved and never
 //! lowers a version.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use super::canonical;
 use super::error::TufError;
 use super::model::{Envelope, MetaFile};
+use super::names::RoleName;
 
 /// The only `schema` of the state file this version reads.
 pub const SCHEMA: u32 = 1;
@@ -63,6 +65,11 @@ pub struct TrustState {
     /// published" only for a client that never saw the repository. Absent means false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ever_published: bool,
+    /// The version of each delegated role accepted last ([`super::TufClient::delegated`]),
+    /// of the keys epoch of the versions above: never lowered, forgotten with them. A client
+    /// of the legacy profile never has one, and writes nothing of it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub delegated: BTreeMap<RoleName, u64>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -106,19 +113,21 @@ impl TrustState {
         } else {
             (disk.root_version, disk.roots.clone())
         };
-        let (timestamp, snapshot, targets, targets_file) =
+        let (timestamp, snapshot, targets, targets_file, delegated) =
             match disk.keys_epoch.cmp(&mine.keys_epoch) {
                 std::cmp::Ordering::Greater => (
                     disk.timestamp,
                     disk.snapshot,
                     disk.targets,
                     disk.targets_file,
+                    disk.delegated,
                 ),
                 std::cmp::Ordering::Less => (
                     mine.timestamp.clone(),
                     mine.snapshot.clone(),
                     mine.targets,
                     mine.targets_file.clone(),
+                    mine.delegated.clone(),
                 ),
                 std::cmp::Ordering::Equal => {
                     // The file goes with the higher version; mine if they are equal.
@@ -127,11 +136,17 @@ impl TrustState {
                     } else {
                         mine.targets_file.clone().or(disk.targets_file)
                     };
+                    let mut delegated = disk.delegated;
+                    for (role, version) in &mine.delegated {
+                        let kept = delegated.entry(role.clone()).or_default();
+                        *kept = (*kept).max(*version);
+                    }
                     (
                         newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
                         newest(disk.snapshot, mine.snapshot.clone(), |s| s.version),
                         disk.targets.max(mine.targets),
                         file,
+                        delegated,
                     )
                 }
             };
@@ -144,7 +159,19 @@ impl TrustState {
             targets,
             targets_file,
             ever_published: disk.ever_published || mine.ever_published,
+            delegated,
         }
+    }
+
+    /// Forgets the versions of the timestamp, snapshot, targets and delegated roles: they
+    /// belong to keys that are no longer trusted, and the epoch `epoch` starts.
+    pub(super) fn forget_versions(&mut self, epoch: u64) {
+        self.timestamp = None;
+        self.snapshot = None;
+        self.targets = None;
+        self.targets_file = None;
+        self.delegated.clear();
+        self.keys_epoch = epoch;
     }
 }
 
@@ -388,6 +415,7 @@ mod tests {
             targets: Some(3),
             targets_file: None,
             ever_published: false,
+            delegated: BTreeMap::new(),
         }
     }
 
@@ -499,6 +527,7 @@ mod tests {
             targets: Some(1),
             targets_file: None,
             ever_published: false,
+            delegated: BTreeMap::new(),
         };
         assert_eq!(s.save(&older).unwrap(), state());
         // An older root with higher versions of its own: the root stays, the versions of the
@@ -512,6 +541,7 @@ mod tests {
             targets: None,
             targets_file: None,
             ever_published: false,
+            delegated: BTreeMap::new(),
         };
         let merged = s.save(&stale_root).unwrap();
         assert_eq!(merged.root_version, 3);
@@ -530,6 +560,7 @@ mod tests {
             targets: None,
             targets_file: None,
             ever_published: false,
+            delegated: BTreeMap::new(),
         };
         let merged = s.save(&rotated).unwrap();
         assert_eq!((merged.root_version, merged.keys_epoch), (4, 4));
@@ -546,6 +577,43 @@ mod tests {
         let mut fresh = rotated.clone();
         fresh.timestamp = Some(ts(10));
         assert_eq!(s.save(&fresh).unwrap().timestamp.unwrap().version, 10);
+    }
+
+    #[test]
+    fn delegated_role_versions_merge_without_going_down_and_go_with_their_epoch() {
+        let role = |name: &str| RoleName::parse(name).unwrap();
+        let with = |epoch: u64, roles: &[(&str, u64)]| TrustState {
+            keys_epoch: epoch,
+            delegated: roles.iter().map(|(n, v)| (role(n), *v)).collect(),
+            ..TrustState::default()
+        };
+        let mut s = MemoryStore::default();
+        s.save(&with(2, &[("pub-ecc", 5), ("pub-abc", 1)])).unwrap();
+        let merged = s.save(&with(2, &[("pub-ecc", 3), ("pub-xyz", 2)])).unwrap();
+        assert_eq!(
+            merged.delegated,
+            with(2, &[("pub-ecc", 5), ("pub-abc", 1), ("pub-xyz", 2)]).delegated
+        );
+        // A newer epoch replaces them; an older one cannot bring them back.
+        let merged = s.save(&with(3, &[("pub-ecc", 1)])).unwrap();
+        assert_eq!(merged.delegated, with(3, &[("pub-ecc", 1)]).delegated);
+        let merged = s.save(&with(2, &[("pub-ecc", 9)])).unwrap();
+        assert_eq!(merged.delegated, with(3, &[("pub-ecc", 1)]).delegated);
+    }
+
+    #[test]
+    fn a_state_with_delegated_roles_loads_back_and_one_without_writes_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = FileStore::new(dir.path());
+        store.save(&state()).unwrap();
+        let text = std::fs::read_to_string(store.path()).unwrap();
+        assert!(!text.contains("delegated"), "{text}");
+        let mut with_roles = state();
+        with_roles
+            .delegated
+            .insert(RoleName::parse("pub-ecc").unwrap(), 4);
+        store.save(&with_roles).unwrap();
+        assert_eq!(store.load().unwrap(), with_roles);
     }
 
     #[test]

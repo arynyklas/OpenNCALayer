@@ -227,3 +227,335 @@ fn the_v1_timestamp_is_not_signed_by_the_v2_root() {
     .unwrap_err();
     assert!(matches!(e, TufError::Signature { valid: 0, .. }), "{e:?}");
 }
+
+// --- the whole client: `refresh` and `delegated` in the delegating profile ---
+
+mod client {
+    use oncl_update::tuf::{
+        Delegated, DelegationError, Limits, MemoryFetcher, MemoryStore, Profile, Store, TufClient,
+        TufError,
+    };
+    use time::OffsetDateTime;
+    use time::format_description::well_known::Rfc3339;
+
+    use super::{fixtures, role};
+
+    fn read_tree(base: &std::path::Path, dir: &std::path::Path, out: &MemoryFetcher) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                read_tree(base, &path, out);
+            } else if path.file_name().unwrap() != "expected.json" {
+                let relative = path.strip_prefix(base).unwrap().to_string_lossy();
+                out.put(relative.replace('\\', "/"), std::fs::read(&path).unwrap());
+            }
+        }
+    }
+
+    fn repository(name: &str) -> MemoryFetcher {
+        let dir = fixtures().join(name);
+        let repo = MemoryFetcher::new();
+        read_tree(&dir, &dir, &repo);
+        repo
+    }
+
+    fn now(name: &str) -> OffsetDateTime {
+        let vector: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(fixtures().join(name).join("expected.json")).unwrap(),
+        )
+        .unwrap();
+        OffsetDateTime::parse(vector["now"].as_str().unwrap(), &Rfc3339).unwrap()
+    }
+
+    fn client<'a>(
+        repo: &'a MemoryFetcher,
+        store: &'a mut MemoryStore,
+    ) -> TufClient<&'a MemoryFetcher, &'a mut MemoryStore> {
+        let anchor =
+            std::fs::read(fixtures().join("delegated-valid/metadata/1.root.json")).unwrap();
+        TufClient::new(&anchor, repo, store, Limits::default())
+            .unwrap()
+            .with_profile(Profile::Delegating)
+    }
+
+    /// `refresh` and `delegated` of the vector `name`, after `prior` was accepted.
+    fn run(name: &str, store: &mut MemoryStore) -> Result<Delegated, TufError> {
+        let repo = repository(name);
+        let mut c = client(&repo, store);
+        let trusted = c.refresh(now(name))?;
+        c.delegated(&trusted, now(name))
+    }
+
+    fn verified(delegated: &Delegated, name: &str) -> u64 {
+        match delegated.role(&role(name)) {
+            Some(Ok(role)) => role.version(),
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    fn refused<'a>(delegated: &'a Delegated, name: &str) -> &'a TufError {
+        match delegated.role(&role(name)) {
+            Some(Err(e)) => e,
+            other => panic!("{name}: {other:?}"),
+        }
+    }
+
+    fn delegation(e: &TufError) -> &DelegationError {
+        match e {
+            TufError::Delegation { error, .. } => error,
+            other => panic!("not a delegation error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn the_valid_repository_trusts_both_roles_and_saves_their_versions() {
+        let mut store = MemoryStore::default();
+        let delegated = run("delegated-valid", &mut store).unwrap();
+        assert_eq!(verified(&delegated, "pub-alpha"), 2);
+        assert_eq!(verified(&delegated, "pub-beta"), 1);
+        let alpha = delegated.role(&role("pub-alpha")).unwrap().unwrap();
+        assert!(
+            alpha
+                .target("plugins/alpha/kz.alpha.signer/1.0.0.onclp")
+                .is_some()
+        );
+        let saved = store.load().unwrap().delegated;
+        assert_eq!(saved.get(&role("pub-alpha")), Some(&2));
+        assert_eq!(saved.get(&role("pub-beta")), Some(&1));
+    }
+
+    #[test]
+    fn a_bad_role_is_refused_alone_as_the_contract_says() {
+        type Check = fn(&TufError) -> bool;
+        let table: [(&str, Check); 9] = [
+            ("delegated-bad-signature", |e| {
+                matches!(e, TufError::Signature { valid: 0, .. })
+            }),
+            ("delegated-threshold-not-met", |e| {
+                matches!(
+                    e,
+                    TufError::Signature {
+                        valid: 1,
+                        threshold: 2,
+                        ..
+                    }
+                )
+            }),
+            ("delegated-version-mismatch", |e| {
+                delegation(e)
+                    == &DelegationError::VersionMismatch {
+                        expected: 1,
+                        found: 2,
+                    }
+            }),
+            ("delegated-hash-mismatch", |e| {
+                matches!(e, TufError::Hash { .. })
+            }),
+            ("delegated-expired", |e| {
+                matches!(delegation(e), DelegationError::Expired { .. })
+            }),
+            ("delegated-not-in-snapshot", |e| {
+                delegation(e) == &DelegationError::NotInSnapshot
+            }),
+            ("delegated-path-outside", |e| {
+                matches!(delegation(e), DelegationError::PathOutside { path }
+                    if path.as_str() == "plugins/alpha/kz.alpha.evil/9.0.0.onclp")
+            }),
+            ("delegated-nested", |e| {
+                delegation(e) == &DelegationError::Nested
+            }),
+            ("delegated-path-hash-prefixes", |e| {
+                delegation(e) == &DelegationError::HashPrefixes
+            }),
+        ];
+        for (name, check) in table {
+            let delegated = run(name, &mut MemoryStore::default()).unwrap();
+            assert_eq!(verified(&delegated, "pub-alpha"), 2, "{name}");
+            let e = refused(&delegated, "pub-beta");
+            assert!(check(e), "{name}: {e:?}");
+        }
+    }
+
+    #[test]
+    fn a_role_on_a_key_of_the_root_is_refused() {
+        let delegated = run("delegated-key-reuse", &mut MemoryStore::default()).unwrap();
+        verified(&delegated, "pub-alpha");
+        let e = refused(&delegated, "pub-beta");
+        assert!(
+            matches!(delegation(e), DelegationError::KeyReused { .. }),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_target_one_segment_deeper_is_outside_the_role() {
+        let delegated = run("delegated-glob-depth", &mut MemoryStore::default()).unwrap();
+        verified(&delegated, "pub-beta");
+        let e = refused(&delegated, "pub-alpha");
+        assert!(
+            matches!(delegation(e), DelegationError::PathOutside { .. }),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_removed_delegation_is_no_role_at_all() {
+        let delegated = run("delegated-removed", &mut MemoryStore::default()).unwrap();
+        verified(&delegated, "pub-alpha");
+        assert!(delegated.role(&role("pub-beta")).is_none());
+        assert_eq!(delegated.roles().count(), 1);
+    }
+
+    #[test]
+    fn a_rolled_back_role_is_refused_at_the_snapshot() {
+        let mut store = MemoryStore::default();
+        run("delegated-valid", &mut store).unwrap();
+        let e = run("delegated-rollback", &mut store).unwrap_err();
+        assert!(
+            matches!(&e, TufError::Rollback { what, found: 1, trusted: 2 } if what.contains("pub-alpha.json")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_role_twice_or_a_top_level_name_refuses_the_refresh() {
+        for name in ["delegated-duplicate-role", "delegated-top-level-name"] {
+            let e = run(name, &mut MemoryStore::default()).unwrap_err();
+            assert!(matches!(e, TufError::Malformed { .. }), "{name}: {e:?}");
+        }
+    }
+
+    #[test]
+    fn the_v1_files_behind_the_v2_root_are_refused_before_anything_is_saved() {
+        let mut store = MemoryStore::default();
+        let e = run("cross-repo", &mut store).unwrap_err();
+        assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+        let state = store.load().unwrap();
+        assert!(state.timestamp.is_none() && state.snapshot.is_none());
+    }
+
+    #[test]
+    fn the_legacy_profile_refuses_the_delegated_repository_as_released_clients_do() {
+        let repo = repository("delegated-valid");
+        let mut store = MemoryStore::default();
+        let anchor =
+            std::fs::read(fixtures().join("delegated-valid/metadata/1.root.json")).unwrap();
+        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default()).unwrap();
+        let e = c.refresh(now("delegated-valid")).unwrap_err();
+        assert!(matches!(e, TufError::Unsupported(_)), "{e:?}");
+    }
+
+    #[test]
+    fn the_delegating_profile_refuses_a_snapshot_without_lengths_and_hashes() {
+        // The valid (v1) repository lists versions only.
+        let repo = super::client_v1::repository();
+        let mut store = MemoryStore::default();
+        let anchor = std::fs::read(fixtures().join("valid/metadata/1.root.json")).unwrap();
+        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default())
+            .unwrap()
+            .with_profile(Profile::Delegating);
+        let e = c.refresh(now("valid")).unwrap_err();
+        assert!(
+            matches!(&e, TufError::Malformed { why, .. } if why.contains("length and sha256")),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_kept_role_is_checked_again_offline() {
+        let repo = repository("delegated-valid");
+        let mut store = MemoryStore::default();
+        let at = now("delegated-valid");
+        let mut c = client(&repo, &mut store);
+        let trusted = c.refresh(at).unwrap();
+        let delegated = c.delegated(&trusted, at).unwrap();
+        let alpha = delegated.role(&role("pub-alpha")).unwrap().unwrap();
+        let beta = delegated.role(&role("pub-beta")).unwrap().unwrap();
+        let again = c
+            .verify_cached_role(&role("pub-alpha"), alpha.file(), at)
+            .unwrap();
+        assert_eq!(again.version(), 2);
+        assert_eq!(again.targets(), alpha.targets());
+        // Another role's bytes are not this role's.
+        let e = c
+            .verify_cached_role(&role("pub-alpha"), beta.file(), at)
+            .unwrap_err();
+        assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+        // After the role expired.
+        let late = alpha.expires();
+        let e = c
+            .verify_cached_role(&role("pub-alpha"), alpha.file(), late)
+            .unwrap_err();
+        assert!(
+            matches!(e, TufError::Expired { .. } | TufError::Delegation { .. }),
+            "{e:?}"
+        );
+        // A role the saved targets do not delegate to.
+        let e = c
+            .verify_cached_role(&role("pub-other"), alpha.file(), at)
+            .unwrap_err();
+        assert!(
+            matches!(delegation(&e), DelegationError::NotDelegated),
+            "{e:?}"
+        );
+    }
+
+    #[test]
+    fn a_kept_role_is_refused_once_its_delegation_names_other_keys() {
+        // The saved targets are those of delegated-key-reuse: pub-beta is on another key.
+        let mut store = MemoryStore::default();
+        let valid = run("delegated-valid", &mut store).unwrap();
+        let beta = valid
+            .role(&role("pub-beta"))
+            .unwrap()
+            .unwrap()
+            .file()
+            .to_vec();
+        let repo = repository("delegated-key-reuse");
+        let at = now("delegated-key-reuse");
+        let c = client(&repo, &mut store);
+        // (The same targets version: the saved file is still that of delegated-valid.)
+        c.verify_cached_role(&role("pub-beta"), &beta, at).unwrap();
+        let mut state = c.store().load().unwrap();
+        drop(c);
+        let file = repo.get("metadata/1.targets.json").unwrap();
+        state.targets_file =
+            Some(oncl_update::tuf::Envelope::parse(&file, 1 << 20, "targets").unwrap());
+        store.state = state;
+        let c = client(&repo, &mut store);
+        let e = c
+            .verify_cached_role(&role("pub-beta"), &beta, at)
+            .unwrap_err();
+        assert!(
+            matches!(delegation(&e), DelegationError::KeyReused { .. }),
+            "{e:?}"
+        );
+    }
+}
+
+mod client_v1 {
+    use oncl_update::tuf::MemoryFetcher;
+
+    pub(super) fn repository() -> MemoryFetcher {
+        let dir = super::fixtures().join("valid");
+        let repo = MemoryFetcher::new();
+        for path in walk(&dir) {
+            let relative = path.strip_prefix(&dir).unwrap().to_string_lossy();
+            repo.put(relative.replace('\\', "/"), std::fs::read(&path).unwrap());
+        }
+        repo
+    }
+
+    fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                out.extend(walk(&path));
+            } else if path.file_name().unwrap() != "expected.json" {
+                out.push(path);
+            }
+        }
+        out
+    }
+}

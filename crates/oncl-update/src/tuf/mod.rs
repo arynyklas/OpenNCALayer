@@ -42,7 +42,7 @@ pub mod store;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
-pub use client::{Limits, Trusted, TufClient};
+pub use client::{Delegated, Limits, Trusted, TufClient, VerifiedRole};
 pub use delegation::{DelegatedRole, Delegations, RefusedRole};
 pub use ed25519::SigningKey;
 pub use error::{DelegationError, Role, TufError};
@@ -54,6 +54,9 @@ pub use model::{
 };
 pub use names::{NameError, NameKind, PathPattern, PublisherName, RoleName, TargetPath};
 pub use store::{FileStore, MemoryStore, SnapshotState, Store, TimestampState, TrustState};
+
+#[cfg(test)]
+mod delegated_tests;
 
 #[cfg(test)]
 mod tests;

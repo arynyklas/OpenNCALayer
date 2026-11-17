@@ -66,14 +66,29 @@ pub fn verify_role(
     role: Role,
     what: &str,
 ) -> Result<(), TufError> {
+    verify_threshold(envelope, root.role(role), &root.keys, what)
+}
+
+/// Checks that `envelope` is signed by a threshold of the keys `role` names, looked up in
+/// `keys`: those of a root, or of the delegations of a targets file. `what` names the file
+/// and whose keys are asked, for the error.
+///
+/// # Errors
+///
+/// As [`verify_role`].
+pub fn verify_threshold(
+    envelope: &Envelope,
+    role: &RoleKeys,
+    keys: &BTreeMap<KeyId, PublicKey>,
+    what: &str,
+) -> Result<(), TufError> {
     let message = envelope.canonical_signed()?;
-    let keys = root.role(role);
-    let valid = count_valid(&message, &envelope.signatures, keys, &root.keys);
-    if valid < keys.threshold as usize {
+    let valid = count_valid(&message, &envelope.signatures, role, keys);
+    if valid < role.threshold as usize {
         return Err(TufError::Signature {
             what: what.to_owned(),
             valid,
-            threshold: keys.threshold,
+            threshold: role.threshold,
         });
     }
     Ok(())
