@@ -61,6 +61,8 @@ struct Publisher {
     keys: Vec<SigningKey>,
     threshold: u64,
     signers: Vec<SigningKey>,
+    /// How many targets its role lists.
+    targets: usize,
 }
 
 fn publisher(name: &str, seed: u8) -> Publisher {
@@ -69,6 +71,7 @@ fn publisher(name: &str, seed: u8) -> Publisher {
         keys: vec![key(seed)],
         threshold: 1,
         signers: vec![key(seed)],
+        targets: 1,
     }
 }
 
@@ -94,11 +97,17 @@ fn publish(repo: &MemoryFetcher, k: &Top, version: u64, publishers: &[Publisher]
             "paths": [format!("plugins/{}/*/*", p.name)],
             "terminating": true,
         }));
+        let targets: Map<String, Value> = (0..p.targets)
+            .map(|n| {
+                (
+                    format!("plugins/{}/x{n}/1.0.0.onclp", p.name),
+                    json!({"length": 1, "hashes": {"sha256": Digest::of(b"x").to_hex()}}),
+                )
+            })
+            .collect();
         let role = json!({
             "_type": "targets", "spec_version": SPEC_VERSION, "version": version,
-            "expires": expires,
-            "targets": {format!("plugins/{}/x/1.0.0.onclp", p.name):
-                {"length": 1, "hashes": {"sha256": Digest::of(b"x").to_hex()}}},
+            "expires": expires, "targets": targets,
         });
         let signers: Vec<&SigningKey> = p.signers.iter().collect();
         let file = build::sign(&role, &signers).unwrap();
@@ -222,7 +231,13 @@ fn a_saved_role_version_above_the_listed_one_is_a_rollback() {
     let k = top(1);
     let (repo, anchor) = repository(&k, &[publisher("ecc", 50)]);
     let mut store = MemoryStore::default();
-    store.state.delegated.insert(role("pub-ecc"), 5);
+    store.state.delegated.insert(
+        role("pub-ecc"),
+        RoleState {
+            version: 5,
+            sha256: Digest([0; 32]),
+        },
+    );
     let mut c = client(&anchor, &repo, store);
     let trusted = c.refresh(T0).unwrap();
     let delegated = c.delegated(&trusted, T0).unwrap();
@@ -237,7 +252,7 @@ fn a_saved_role_version_above_the_listed_one_is_a_rollback() {
         }))
     ));
     // The version saved is not lowered.
-    assert_eq!(c.store().state.delegated[&role("pub-ecc")], 5);
+    assert_eq!(c.store().state.delegated[&role("pub-ecc")].version, 5);
 }
 
 #[test]
@@ -256,7 +271,7 @@ fn a_rotation_of_the_keys_forgets_the_role_versions() {
     let trusted = c.refresh(T0).unwrap();
     assert!(c.store().state.delegated.is_empty());
     c.delegated(&trusted, T0).unwrap();
-    assert_eq!(c.store().state.delegated[&role("pub-ecc")], 2);
+    assert_eq!(c.store().state.delegated[&role("pub-ecc")].version, 2);
 }
 
 #[test]
@@ -284,4 +299,57 @@ fn the_legacy_profile_has_no_delegated_step() {
         Err(TufError::DelegationsMissing)
     ));
     assert!(c.store().state.delegated.is_empty());
+}
+
+#[test]
+fn a_role_of_more_targets_than_the_limit_is_not_trusted() {
+    let k = top(1);
+    let mut at_limit = publisher("full", 50);
+    at_limit.targets = 256;
+    let mut over = publisher("over", 60);
+    over.targets = 257;
+    let (repo, anchor) = repository(&k, &[at_limit, over]);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    let delegated = c.delegated(&trusted, T0).unwrap();
+    assert_eq!(
+        delegated
+            .role(&role("pub-full"))
+            .unwrap()
+            .unwrap()
+            .targets()
+            .len(),
+        256
+    );
+    assert!(matches!(
+        delegated.role(&role("pub-over")),
+        Some(Err(TufError::Delegation {
+            error: DelegationError::TooManyTargets { max: 256 },
+            ..
+        }))
+    ));
+}
+
+#[test]
+fn a_second_validly_signed_file_of_the_accepted_version_is_refused_offline() {
+    let k = top(1);
+    let (repo, anchor) = repository(&k, &[publisher("ecc", 50)]);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    let delegated = c.delegated(&trusted, T0).unwrap();
+    let accepted = delegated.role(&role("pub-ecc")).unwrap().unwrap();
+    c.verify_cached_role(&role("pub-ecc"), accepted.file(), T0)
+        .unwrap();
+    // The same version, signed by the publisher's key, listing another target.
+    let other = json!({
+        "_type": "targets", "spec_version": SPEC_VERSION, "version": accepted.version(),
+        "expires": format_expires(T0 + Duration::days(30)).unwrap(),
+        "targets": {"plugins/ecc/y/9.0.0.onclp":
+            {"length": 1, "hashes": {"sha256": Digest::of(b"y").to_hex()}}},
+    });
+    let other = build::sign(&other, &[&key(50)]).unwrap();
+    let e = c
+        .verify_cached_role(&role("pub-ecc"), &other, T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Hash { .. }), "{e:?}");
 }

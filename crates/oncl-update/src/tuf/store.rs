@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use super::canonical;
 use super::error::TufError;
-use super::model::{Envelope, MetaFile};
+use super::model::{Digest, Envelope, MetaFile};
 use super::names::RoleName;
 
 /// The only `schema` of the state file this version reads.
@@ -65,11 +65,11 @@ pub struct TrustState {
     /// published" only for a client that never saw the repository. Absent means false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub ever_published: bool,
-    /// The version of each delegated role accepted last ([`super::TufClient::delegated`]),
-    /// of the keys epoch of the versions above: never lowered, forgotten with them. A client
-    /// of the legacy profile never has one, and writes nothing of it.
+    /// The file of each delegated role accepted last ([`super::TufClient::delegated`]), of
+    /// the keys epoch of the versions above: never lowered, forgotten with them. A client of
+    /// the legacy profile never has one, and writes nothing of it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub delegated: BTreeMap<RoleName, u64>,
+    pub delegated: BTreeMap<RoleName, RoleState>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -96,6 +96,17 @@ pub struct SnapshotState {
     pub version: u64,
     /// The version of every file it listed, by file name (`targets.json`).
     pub meta: std::collections::BTreeMap<String, u64>,
+}
+
+/// An accepted delegated role: its version, and the sha256 of the file accepted, the only
+/// bytes [`super::TufClient::verify_cached_role`] takes for it offline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RoleState {
+    /// Its version.
+    pub version: u64,
+    /// The sha256 of its file.
+    pub sha256: Digest,
 }
 
 impl TrustState {
@@ -137,9 +148,13 @@ impl TrustState {
                         mine.targets_file.clone().or(disk.targets_file)
                     };
                     let mut delegated = disk.delegated;
-                    for (role, version) in &mine.delegated {
-                        let kept = delegated.entry(role.clone()).or_default();
-                        *kept = (*kept).max(*version);
+                    for (role, accepted) in &mine.delegated {
+                        // The higher version wins; mine if they are equal (as the targets
+                        // file above).
+                        let kept = delegated.entry(role.clone()).or_insert(*accepted);
+                        if accepted.version >= kept.version {
+                            *kept = *accepted;
+                        }
                     }
                     (
                         newest(disk.timestamp, mine.timestamp.clone(), |t| t.version),
@@ -582,9 +597,13 @@ mod tests {
     #[test]
     fn delegated_role_versions_merge_without_going_down_and_go_with_their_epoch() {
         let role = |name: &str| RoleName::parse(name).unwrap();
+        let accepted = |version: u64| RoleState {
+            version,
+            sha256: Digest([version as u8; 32]),
+        };
         let with = |epoch: u64, roles: &[(&str, u64)]| TrustState {
             keys_epoch: epoch,
-            delegated: roles.iter().map(|(n, v)| (role(n), *v)).collect(),
+            delegated: roles.iter().map(|(n, v)| (role(n), accepted(*v))).collect(),
             ..TrustState::default()
         };
         let mut s = MemoryStore::default();
@@ -609,11 +628,34 @@ mod tests {
         let text = std::fs::read_to_string(store.path()).unwrap();
         assert!(!text.contains("delegated"), "{text}");
         let mut with_roles = state();
-        with_roles
-            .delegated
-            .insert(RoleName::parse("pub-ecc").unwrap(), 4);
+        with_roles.delegated.insert(
+            RoleName::parse("pub-ecc").unwrap(),
+            RoleState {
+                version: 4,
+                sha256: Digest([4; 32]),
+            },
+        );
         store.save(&with_roles).unwrap();
         assert_eq!(store.load().unwrap(), with_roles);
+    }
+
+    #[test]
+    fn of_two_files_of_one_role_version_the_one_saved_last_is_kept() {
+        let role = RoleName::parse("pub-ecc").unwrap();
+        let with = |sum: u8| TrustState {
+            delegated: [(
+                role.clone(),
+                RoleState {
+                    version: 3,
+                    sha256: Digest([sum; 32]),
+                },
+            )]
+            .into(),
+            ..TrustState::default()
+        };
+        let mut s = MemoryStore::default();
+        s.save(&with(1)).unwrap();
+        assert_eq!(s.save(&with(2)).unwrap(), with(2));
     }
 
     #[test]

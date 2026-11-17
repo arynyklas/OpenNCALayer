@@ -270,6 +270,12 @@ pub enum DelegationError {
         /// [`super::Limits::max_delegations`].
         max: u32,
     },
+    /// The role lists more targets than the client takes from one role.
+    #[error("it lists more than {max} targets")]
+    TooManyTargets {
+        /// [`super::Limits::max_role_targets`].
+        max: u32,
+    },
     /// The role's file is not the version the snapshot lists for it (or, for a kept file,
     /// the version saved).
     #[error("it is version {found}, not the version {expected} listed")]

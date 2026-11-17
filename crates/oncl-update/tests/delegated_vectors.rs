@@ -320,8 +320,9 @@ mod client {
                 .is_some()
         );
         let saved = store.load().unwrap().delegated;
-        assert_eq!(saved.get(&role("pub-alpha")), Some(&2));
-        assert_eq!(saved.get(&role("pub-beta")), Some(&1));
+        let version = |name: &str| saved.get(&role(name)).map(|accepted| accepted.version);
+        assert_eq!(version("pub-alpha"), Some(2));
+        assert_eq!(version("pub-beta"), Some(1));
     }
 
     #[test]
@@ -480,7 +481,7 @@ mod client {
         let e = c
             .verify_cached_role(&role("pub-alpha"), beta.file(), at)
             .unwrap_err();
-        assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
+        assert!(matches!(e, TufError::Hash { .. }), "{e:?}");
         // After the role expired.
         let late = alpha.expires();
         let e = c

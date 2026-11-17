@@ -53,7 +53,9 @@ pub use model::{
     Timestamp,
 };
 pub use names::{NameError, NameKind, PathPattern, PublisherName, RoleName, TargetPath};
-pub use store::{FileStore, MemoryStore, SnapshotState, Store, TimestampState, TrustState};
+pub use store::{
+    FileStore, MemoryStore, RoleState, SnapshotState, Store, TimestampState, TrustState,
+};
 
 #[cfg(test)]
 mod delegated_tests;
