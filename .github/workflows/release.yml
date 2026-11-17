@@ -729,7 +729,7 @@ jobs:
           mkdir -p release-arch
           chmod 777 release-arch
           # pacman's pkgver of the version: the hyphen is dropped (cargo xtask package arch).
-          PKGVER="${VERSION//-/}"
+          export PKGVER="${VERSION//-/}"
           docker run --rm -e VERSION -e PKGVER -v "$PWD/arch:/arch:ro" -v "$PWD/release-arch:/out" "$ARCH_IMAGE" bash -euo pipefail -c '
             useradd -m builder
             cp -r /arch /home/builder/pkg
@@ -749,7 +749,8 @@ jobs:
             test ! -e /usr/bin/openncalayer
           '
           ls -l release-arch
-          test "$(ls release-arch | wc -l)" = 1
+          files=(release-arch/*)
+          test "${#files[@]}" = 1
       - uses: actions/upload-artifact@v4
         with:
           name: release-arch
