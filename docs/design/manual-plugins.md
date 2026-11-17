@@ -101,7 +101,7 @@ interactive = ["keys_select"]               # ⊆ {keys_select, keys_choose, key
 
 [[operations.uses.key]]
 kind     = "cms_ex"                         # raw | cms | cms_ex | xml | xml_ex | xades
-content  = "param:file"                     # param:<имя> => bound; "derived" => только после MP3b
+content  = "param:file"                     # param:<имя> => bound; "derived" не поддерживается
 max_uses = 1                                # единственно допустимое значение в ручном окне
 [operations.uses.key.profile]               # профиль опций; Core принуждает (см. ниже)
 encapsulate = false
@@ -141,7 +141,7 @@ PluginUse       { plugin_id, package_sha256, operation, kind, content_sha256, op
 OperationContext.plugin_ticket: Option<PluginUse>          // только Core-бэкенд плагина кладёт его
 KeyUseEvent.plugin: Option<PluginUse>                      // берётся из ctx.plugin_ticket.take() в sign_digest
 PluginPermission::declared(plugin_id, operation, caller)   // KeyScope::Declared, только из реестра
-Engine::plugin_operations / plugin_request / plugin_call_approved / (MP3b) plugin_plan
+Engine::plugin_operations / plugin_request / plugin_call_approved
 ```
 
 Авторитетная проверка одна: `KeyUseGuard::before_use`. Она работает с билетом, а не с дайджестом движка, потому что дайджест движка считается от подписываемых атрибутов со временем подписи. Билет строится так:
