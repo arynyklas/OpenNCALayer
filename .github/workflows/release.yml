@@ -25,9 +25,10 @@ name: Release
 # `.zip` and the `.pkg`; the `.pkg` itself is signed and notarized only with the "Developer
 # ID Installer" identity in APPLE_INSTALL_IDENTITY too. The macOS archive stays unsigned.
 #
-# The Firefox xpi is signed by addons.mozilla.org as an unlisted add-on (secrets
-# AMO_JWT_ISSUER and AMO_JWT_SECRET; the add-on is only signed, never listed or published on
-# AMO), and the signed file replaces the unsigned one in the release: the `extension` job.
+# The Firefox xpi of a release (a tag without a suffix) is signed by addons.mozilla.org as an
+# unlisted add-on (secrets AMO_JWT_ISSUER and AMO_JWT_SECRET; the add-on is only signed,
+# never listed or published on AMO), and the signed file replaces the unsigned one in the
+# release: the `extension` job. A pre-release keeps the unsigned xpi.
 #
 # Third-party actions are pinned to a commit, with the release tag in a comment.
 on:
@@ -450,20 +451,29 @@ jobs:
           path: packaged/*
           if-no-files-found: error
 
-  # The Chromium zip and the Firefox xpi. With the AMO secrets the xpi is signed as an
-  # unlisted add-on and replaces the unsigned one under the same name, so SHA256SUMS, the
-  # attestation, the release and the update index all carry the signed file; without them the
-  # unsigned xpi is published as before (Firefox installs it only temporarily). AMO signs a
-  # version once: `cargo xtask ext build` gives every tag its own Firefox version
-  # (`firefox_version` in xtask/src/ext.rs), and re-running a run that already signed fails at
-  # the signing step ("Version already exists"); the fix is a new tag.
+  # The Chromium zip and the Firefox xpi. With the AMO secrets, and for a release only (a tag
+  # without a suffix), the xpi is signed as an unlisted add-on and replaces the unsigned one
+  # under the same name, so SHA256SUMS, the attestation, the release and the update index all
+  # carry the signed file. Without the secrets, and for every pre-release, the unsigned xpi is
+  # published as before (Firefox installs it only temporarily). Pre-releases are not signed
+  # because they share the Firefox version of their release (`0.1.1-rc.1` and `0.1.1` are
+  # both `0.1.1`): AMO signs a version once, and only versions that grow.
+  #
+  # web-ext comes from `extension/sign/package-lock.json` (`npm ci --ignore-scripts`, in a
+  # step without the secrets); the signing step has the secrets but installs nothing.
+  #
+  # AMO signs a version once. When a later job fails after the signing step succeeded, recover
+  # with "Re-run failed jobs"; "Re-run all jobs" signs the same version again and AMO refuses
+  # it, so that run fails at the signing step and the fix is a new tag.
   extension:
     needs: version
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      # Only whether the AMO secrets exist: the secrets reach the signing step alone.
+      # Only whether the AMO secrets exist and whether this tag is signed: the secrets reach
+      # the signing step alone.
       AMO: ${{ secrets.AMO_JWT_ISSUER != '' && secrets.AMO_JWT_SECRET != '' }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
       VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
@@ -471,16 +481,22 @@ jobs:
         run: rustup toolchain install
       - run: cargo xtask ext build
       - uses: actions/setup-node@v5
-        if: env.AMO == 'true'
+        if: env.AMO == 'true' && env.PRERELEASE != 'true'
         with:
           node-version: 22
+      # No secrets here: the install runs the lockfile's packages, and nothing in them may
+      # see the AMO keys.
+      - name: Install web-ext (locked)
+        if: env.AMO == 'true' && env.PRERELEASE != 'true'
+        run: npm ci --ignore-scripts --prefix extension/sign
       - name: Sign the Firefox add-on (AMO, unlisted)
-        if: env.AMO == 'true'
+        if: env.AMO == 'true' && env.PRERELEASE != 'true'
         env:
+          NPM_CONFIG_IGNORE_SCRIPTS: "true"
           WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
           WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          npx --yes web-ext@10.8.0 sign --channel unlisted --no-input \
+          extension/sign/node_modules/.bin/web-ext sign --channel unlisted --no-input \
             --approval-timeout 1200000 \
             --source-dir target/extension/firefox --artifacts-dir target/extension/signed
           signed=(target/extension/signed/*.xpi)
@@ -491,9 +507,13 @@ jobs:
           mv -f -- "${signed[0]}" "target/extension/openncalayer-firefox-$VERSION.xpi"
           echo "::notice::The Firefox add-on is signed by AMO (unlisted): openncalayer-firefox-$VERSION.xpi"
       - name: AMO signing skipped
-        if: env.AMO != 'true'
+        if: env.AMO != 'true' || env.PRERELEASE == 'true'
         run: |
-          echo "::notice::AMO is not configured (secrets AMO_JWT_ISSUER, AMO_JWT_SECRET): the Firefox .xpi is NOT signed and installs only temporarily"
+          if [ "$PRERELEASE" = true ]; then
+            echo "::notice::$VERSION is a pre-release: the Firefox .xpi is NOT signed (only releases are) and installs only temporarily"
+          else
+            echo "::notice::AMO is not configured (secrets AMO_JWT_ISSUER, AMO_JWT_SECRET): the Firefox .xpi is NOT signed and installs only temporarily"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: release-extension

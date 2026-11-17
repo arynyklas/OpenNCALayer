@@ -58,11 +58,12 @@ fn builds_both_extensions_from_the_shared_ids() {
             "{}: unreplaced placeholder",
             package.browser
         );
-        let expected = match package.browser {
-            "firefox" => xtask::ext::firefox_version().unwrap(),
-            _ => xtask::ext::browser_version().to_owned(),
-        };
-        assert_eq!(manifest["version"], expected, "{}", package.browser);
+        assert_eq!(
+            manifest["version"],
+            xtask::ext::browser_version(),
+            "{}",
+            package.browser
+        );
         for script in referenced_scripts(&manifest) {
             assert!(
                 package.dir.join(&script).is_file(),
