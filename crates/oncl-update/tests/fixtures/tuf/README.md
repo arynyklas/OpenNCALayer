@@ -1,22 +1,25 @@
 # Тестовые векторы TUF (оракул python-tuf)
 
-Каталог содержит TUF-репозитории, собранные **эталонной реализацией python-tuf** (`tuf==7.0.1`), а не
-нашим кодом: Rust-верификатор `oncl-update` проверяется ими независимо от самого себя.
+Здесь лежат тестовые репозитории обновлений в формате TUF. Они нужны разработчикам: по ним проверяют, что проверка подписей в `oncl-update` отказывает там, где должна.
 
-- `valid/` — корректный репозиторий в раскладке контракта (корень сайта `…/tuf/v1/`):
+Репозитории собрала не наша программа, а эталонная библиотека **python-tuf** (`tuf==7.0.1`). Поэтому Rust-код проверяется независимо от самого себя.
+
+Что лежит в каталоге:
+
+- `valid/` — корректный репозиторий (корень сайта `…/tuf/v1/`):
   `metadata/{1,2,3}.root.json`, `metadata/timestamp.json`, `metadata/2.snapshot.json`,
   `metadata/2.targets.json`, `targets/indexes/<sha256>.stable.json` и `….beta.json`
   (`consistent_snapshot: true`). Цели — `indexes/stable.json` и `indexes/beta.json`
-  (маленькие синтетические индексы). Пакеты в репозиторий не входят.
-- `<имя-атаки>/` — минимальные мутации `valid/` (полная копия с изменёнными файлами). В каждом лежит
-  `expected.json`: шаг, на котором клиент обязан отказать (`must_fail_at`), класс ошибки словами
-  (`error_class`), изменённые файлы (`changed_files_vs_valid`), предыдущее состояние клиента
-  (`prior_state`) и вердикт python-tuf.
-- `keys.json` — id, публичные ключи и сиды всех шести **синтетических тестовых ключей**. Они
-  сгенерированы только для тестов, нигде не используются и не имеют отношения к реальным ключам
-  проекта: `seed = sha256("oncl-tuf-oracle-v1/" + имя)`.
+  (маленькие учебные индексы). Самих пакетов в репозитории нет.
+- `<имя-атаки>/` — копия `valid/` с одной небольшой порчей. В каждом лежит `expected.json`:
+  шаг, на котором клиент обязан отказать (`must_fail_at`), вид ошибки словами (`error_class`),
+  изменённые файлы (`changed_files_vs_valid`), прежнее состояние клиента (`prior_state`)
+  и вердикт python-tuf.
+- `keys.json` — id, открытые ключи и сиды шести **тестовых ключей**. Они созданы только для тестов,
+  нигде не используются и не связаны с настоящими ключами проекта:
+  `seed = sha256("oncl-tuf-oracle-v1/" + имя)`.
 
-## Контракт, который воспроизводят векторы
+## Правила, которые воспроизводят векторы
 
 Ed25519 (`keytype`/`scheme` = `ed25519`); `keyid` — hex sha256 канонического JSON (OLPC) объекта
 ключа `{keytype, scheme, keyval:{public}}`; подпись — над каноническим JSON объекта `signed`.
@@ -45,12 +48,12 @@ Unix-время подписи (`1794700800`); snapshot и targets в `valid/` �
 - `rollback-targets`: `metadata/timestamp.json` версии `1794708000`, `metadata/3.snapshot.json` с
   записью `targets.json` версии 1 и `metadata/1.targets.json` после принятого targets v2.
 
-## Перегенерация
+## Как пересоздать векторы
 
 ```sh
-python3 -m venv /mnt/d/oncl-tuf-venv        # WSL Ubuntu
-/mnt/d/oncl-tuf-venv/bin/pip install tuf==7.0.1 cryptography==50.0.2
-/mnt/d/oncl-tuf-venv/bin/python xtask/assets/tuf-oracle/gen.py
+python3 -m venv ~/oncl-tuf-venv
+~/oncl-tuf-venv/bin/pip install tuf==7.0.1 cryptography==50.0.2
+~/oncl-tuf-venv/bin/python xtask/assets/tuf-oracle/gen.py
 ```
 
 Скрипт детерминирован (ключи из фиксированных сидов, подписи Ed25519 детерминированы): повторный

@@ -1,71 +1,125 @@
-# Установка и сборки
+# Установка и удаление
 
-Где взять OpenNCALayer, что делают установщики и как удалить. Работа с программой после установки — в [«Рабочем столе»](desktop.md), настройка сертификата — в [`tls.md`](tls.md), расширение браузера — в [`browser-extension.md`](browser-extension.md).
+Здесь — как поставить OpenNCALayer на Windows, macOS или Linux, что установщик делает на вашем компьютере и как программу удалить. Что делать после установки — в [`desktop.md`](desktop.md) и [`browser-extension.md`](browser-extension.md).
 
-## Готовые сборки
+## Быстрый старт
 
-[Releases](https://github.com/arynyklas/OpenNCALayer/releases): установщики (раздел [«Установка»](#установка)), архивы для Windows x64 и x86 (`x86_64-pc-windows-msvc`, `i686-pc-windows-msvc`), Windows 7 SP1 x64 и x86 (`win7-x64`, `win7-x86`; с программами лежат `combase.dll` и `api-ms-win-core-winrt-error-l1-1-0.dll`, держите их в одном каталоге), Linux x64 (`x86_64-unknown-linux-gnu`, собран в контейнере с glibc 2.28: работает с glibc 2.28 и новее) и macOS, универсальный для Intel и Apple Silicon (`universal-apple-darwin`) с `openncalayer` и `nmhost`, пакет для Arch Linux (`openncalayer-bin-*-x86_64.pkg.tar.zst`), пакеты Velopack для автообновления (`OpenNCALayer-<версия>-<флейвор>-full.nupkg` и дельты), расширения `openncalayer-chromium-<версия>.zip` и `openncalayer-firefox-<версия>.xpi` (не подписано: в Firefox ставится только временно), SBOM `openncalayer-<версия>.cdx.json` (CycloneDX) и контрольные суммы `SHA256SUMS`. На каждый файл есть аттестация происхождения сборки: `gh attestation verify <файл> --repo arynyklas/OpenNCALayer`. В релиз также входят `builtins-SHA256SUMS` (суммы вшитых модулей, см. `openncalayer builtins`), `openncalayer-<версия>-win-x64-winget-setup.exe` и `…-win-x86-winget-setup.exe` (вход для WinGet, а не обычный установщик; [`docs/dev/winget.md`](../dev/winget.md)) и файлы каналов Velopack `RELEASES-<флейвор>` и `releases.<флейвор>.json`. Версии с суффиксом (например, `-rc.1`) — предварительные. Подпись кода включается секретами мейнтейнера ([`docs/dev/release.md`](../dev/release.md), раздел 2), поэтому бинари и установщики могут быть не подписаны: Windows SmartScreen и macOS Gatekeeper предупредят при первом запуске. Тег `v<версия>` собирает и публикует релиз сам (`.github/workflows/release.yml`, см. [«Публикация»](../design/update-index.md#публикация)).
+1. Скачайте установщик для своей системы со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases).
+2. Запустите его (подробности по системам — ниже).
+3. Поставьте [расширение браузера](browser-extension.md).
 
-Архив распакуйте и дальше действуйте как со своей сборкой: `openncalayer run`, расширение — по разделу [«Расширение браузера»](browser-extension.md); встроить распакованную копию в систему, как это делает установщик, можно командой `openncalayer integration install`.
+Установщики работают без прав администратора и ставят программу только для вас (исключение — `.pkg` в `/Applications`). Установщики не подписаны, поэтому при первом запуске Windows покажет предупреждение SmartScreen, а macOS — Gatekeeper.
 
-Последний релиз и предварительная версия, с пояснением к каждому файлу, — на странице [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта.
+Ваши настройки, сертификат и журналы лежат в отдельном каталоге данных. Он остаётся при обновлении и при удалении программы.
+
+## Какой файл взять
+
+| Система | Файл |
+|---|---|
+| Windows 10 и 11, 64 бита | `openncalayer-<версия>-win-x64-setup.exe` |
+| Windows 10 и 11, 32 бита | `openncalayer-<версия>-win-x86-setup.exe` |
+| Windows 7 SP1, 64 или 32 бита | `openncalayer-<версия>-win7-x64-setup.exe` или `…-win7-x86-setup.exe` ([подробнее](#windows-7)) |
+| macOS (Intel и Apple Silicon) | `openncalayer-<версия>-osx.pkg` или `openncalayer-<версия>-osx.zip` |
+| Linux x86-64 | `openncalayer-<версия>-linux-x64.AppImage` |
+| Arch Linux | `openncalayer-bin-*-x86_64.pkg.tar.zst` |
+
+Версии с суффиксом (например, `-rc.1`) — предварительные.
+
+Чтобы проверить скачанный файл, сравните его с `SHA256SUMS` из того же релиза. Происхождение файла проверяет команда `gh attestation verify <файл> --repo arynyklas/OpenNCALayer`.
+
+В Releases есть и другие файлы: архивы без установщика (`.zip` для Windows), расширения браузера, список зависимостей (SBOM), пакеты для автообновления. Каждый файл описан на странице «Загрузка».
 
 ## Установка
 
-Установщики ставят OpenNCALayer для пользователя, который их запускает, без прав администратора (кроме `.pkg` в `/Applications`). Сертификаты они не ставят и не удаляют: TLS настраивается мастером «Сертификат для браузера…» (раздел [«Мастер TLS»](desktop.md#мастер-tls)). Каталог данных (настройки, сертификаты TLS, журналы) лежит отдельно от программы и переживает обновления и удаление.
+### Windows 10 и 11
 
-- **Windows 10 и 11**: `openncalayer-<версия>-win-x64-setup.exe`, для 32-битной системы — `openncalayer-<версия>-win-x86-setup.exe`. **Windows 7 SP1**: `openncalayer-<версия>-win7-x64-setup.exe` и `openncalayer-<версия>-win7-x86-setup.exe` (с app-local DLL, см. [«Windows 7»](#windows-7)). Установщик сам проверяет систему до установки: `win-*` отказывается ставиться на Windows 7 и 8, `win7-*` требует Windows 7 SP1, 64-битный — 64-битную Windows. Программа ставится в `%LOCALAPPDATA%\OpenNCALayer` (версия — в `current\`, relay браузеров `nmhost.exe` — рядом, вне `current`), в меню «Пуск» появляется «OpenNCALayer», после установки программа запускается. Удаление — «Параметры» → «Приложения» (или «Программы и компоненты»): удаляется весь `%LOCALAPPDATA%\OpenNCALayer`.
-- **macOS** (Intel и Apple Silicon, одна универсальная программа): `openncalayer-<версия>-osx.pkg` ставит `OpenNCALayer.app` в `/Applications` или, при «Установить только для меня», в `~/Applications`, встраивает её для пользователя, вошедшего в систему, и запускает. `openncalayer-<версия>-osx.zip` — то же приложение без установщика: перетащите его в «Программы» и запустите. Удаление: `"/Applications/OpenNCALayer.app/Contents/MacOS/openncalayer" integration uninstall` (при установке «только для меня» — `"$HOME/Applications/OpenNCALayer.app/Contents/MacOS/openncalayer" integration uninstall`), затем приложение — в Корзину.
+1. Запустите `…-win-x64-setup.exe` (для 32-битной системы — `…-win-x86-setup.exe`). Установщик сам откажется ставиться на Windows 7 и 8.
+2. Программа встанет в `%LOCALAPPDATA%\OpenNCALayer`, в меню «Пуск» появится «OpenNCALayer», и она сразу запустится.
 
-  Сборка для macOS не подписана Apple и не нотаризована (подпись включается секретами мейнтейнера, [`docs/dev/release.md`](../dev/release.md), раздел 2). Поэтому Gatekeeper откажется открыть скачанный в браузере `.pkg` (а потом и приложение) как программу неустановленного разработчика: разрешите её в «Системные настройки» → «Конфиденциальность и безопасность» → «Всё равно открыть» («Open Anyway») и повторите открытие. Этот путь человеком на Mac не проверялся.
+Удаление: «Параметры» → «Приложения» (или «Программы и компоненты»). Удаляется весь каталог `%LOCALAPPDATA%\OpenNCALayer`.
 
-  Что проверено: workflow `mac-smoke.yml` после выпуска каждого тега (и по запросу) ставит `.pkg` этого тега командой `installer -target CurrentUserHomeDirectory` на Mac с Apple Silicon (`macos-15`) и на Mac с Intel (`macos-15-intel`) на GitHub Actions и проверяет: контрольную сумму из `SHA256SUMS` и аттестацию происхождения, версию (`openncalayer --version`), оба среза (`x86_64` и `arm64`) у `openncalayer` и `nmhost` (`lipo -archs`), встраивание (`installation.json`, LaunchAgent, `"autostart": true`, relay), `tls init`, запуск демона (порт 13579 слушает только 127.0.0.1, каталог данных и журнал, встроенные модули, страница `/openncalayer/selftest` по TLS, рукопожатие wss, приветствие, `--heartbeat--`, `getServices` и `getBundles`), затем `integration uninstall`, удаление приложения и сохранность каталога данных. Самообновление проверяет отдельный workflow `mac-selfupdate.yml` (запускается вручную): он ставит опубликованный `.pkg`, ждёт, пока демон сам обновится по опубликованному индексу, и проверяет, что новая версия запустилась и слушает порт 13579. Не проверено: нотаризация, окно Gatekeeper и значок в строке меню (демон в CI запускается с `--no-tray`), работа расширения в браузерах на Mac и подписание ключом на Mac.
-- **Linux** (x86-64, glibc 2.28 и новее: Debian 10, Ubuntu 18.10, RHEL/AlmaLinux/Rocky 8, Fedora 29, Arch и новее): `openncalayer-<версия>-linux-x64.AppImage`. Положите файл туда, где он будет лежать (например, `~/Applications`), сделайте исполняемым (`chmod +x`) и запустите. AppImage монтирует себя через FUSE 2, а в Ubuntu 22.04 и новее его библиотеки по умолчанию нет: без неё файл напрямую не запускается. Поставьте её (`sudo apt install libfuse2`, в Ubuntu 24.04 пакет называется `libfuse2t64`) или запустите AppImage с `--appimage-extract-and-run`: он распаковывается во временный каталог и работает без FUSE. Программе нужен графический сеанс (X11 или Wayland): без `DISPLAY` или `WAYLAND_DISPLAY` она сообщает об этом и завершается с кодом 1. Внутри — библиотеки xkbcommon, которых может не быть в системе; остальное (glibc, fontconfig, X11 или Wayland) берётся из системы. Удаление: `openncalayer-<версия>-linux-x64.AppImage integration uninstall`, затем удалить файл.
-- **Arch Linux**: AppImage (он обновляет себя сам, см. выше) или пакет из [Releases](https://github.com/arynyklas/OpenNCALayer/releases). Скачайте файл `openncalayer-bin-*-x86_64.pkg.tar.zst` и `SHA256SUMS`, проверьте файл (`sha256sum -c --ignore-missing SHA256SUMS`) и поставьте: `sudo pacman -U ./openncalayer-bin-*.pkg.tar.zst`. Программы лежат в `/usr/lib/openncalayer/`, команда — `openncalayer`, в меню появится «OpenNCALayer». Обновляйте пакет так же, вручную: самообновление в нём выключено. Перед удалением выполните `openncalayer integration uninstall` от каждого пользователя, который запускал программу, затем `sudo pacman -R openncalayer-bin`.
-- **WinGet** (Windows 10 1809+, x64 и x86, для пользователя): **пока недоступен.** Команда `winget install --id arynyklas.OpenNCALayer --exact` — цель, а не существующая функция: пакета нет в источнике WinGet, потому что нет ни опубликованного stable-релиза (предварительные версии в WinGet не попадают), ни проверенной установки на чистых Windows 10/11, ни принятого Microsoft манифеста. Как готовится манифест и подаётся пакет — в [`docs/dev/winget.md`](../dev/winget.md). Пока ставьте установщик `win-*-setup.exe` из [Releases](https://github.com/arynyklas/OpenNCALayer/releases).
+### macOS
 
-Что установка делает для пользователя (на Windows — установщик, на macOS — `.pkg` для вошедшего пользователя; AppImage, пакет pacman, `.zip` и пользователи, для которых установщик не запускался, — при первом запуске программы):
-- регистрирует relay браузеров, как `openncalayer nm install` (раздел [«Расширение браузера»](browser-extension.md));
-- включает автозапуск OpenNCALayer (`HKCU\…\Run`, LaunchAgent `~/Library/LaunchAgents/io.github.arynyklas.openncalayer.plist`, `~/.config/autostart/openncalayer.desktop`) и записывает `"autostart": true` в `settings.json`;
-- отключает автозапуск оригинального NCALayer этого пользователя, не удаляя оригинал, так же как кнопка в настройках (раздел [«Оригинальный NCALayer»](desktop.md#оригинальный-ncalayer)); общий для всех пользователей `HKLM\…\Run` не трогает;
-- записывает `installation.json` в каталог данных: какая версия и откуда встроена.
+1. Откройте `openncalayer-<версия>-osx.pkg`. Программа встанет в `/Applications` (или в `~/Applications`, если выбрать «Установить только для меня») и запустится.
+2. Вместо `.pkg` можно взять `openncalayer-<версия>-osx.zip`: перетащите `OpenNCALayer.app` в «Программы» и запустите.
 
-Установка делает каждый из этих шагов один раз и отмечает сделанные в `installation.json`. Повторный запуск установщика (тот же или более новый `Setup.exe`, `.pkg`) и следующий запуск программы после неудачной установки доделывают только то, что не сделано, а остальное обновляют, как обновление ниже: выбор пользователя после первой установки они не отменяют.
+Сборка не подписана Apple. Поэтому Gatekeeper откажется открывать скачанный файл. Разрешите его в «Системные настройки» → «Конфиденциальность и безопасность» → «Всё равно открыть» и повторите открытие. Этот путь на настоящем Mac человеком не проверялся.
 
-Обновление (самообновление, новый установщик, перенесённый AppImage, новый пакет pacman) заново копирует relay, если он зарегистрирован (на Windows установщик поверх старой установки удаляет файлы relay, но не ключи реестра: relay ставится снова), и обновляет пути в его настройках и в нашем автозапуске, но не включает снова то, что выключил пользователь: выключенный автозапуск, удалённую регистрацию расширения, возвращённый оригинал.
+Удаление:
+1. Выполните в Терминале `"/Applications/OpenNCALayer.app/Contents/MacOS/openncalayer" integration uninstall` (при установке «только для меня» — `"$HOME/Applications/OpenNCALayer.app/Contents/MacOS/openncalayer" integration uninstall`).
+2. Перенесите приложение в Корзину.
 
-Удаление убирает только своё: relay, его настройки, манифесты и ключи реестра браузеров, наш автозапуск — и возвращает автозапуск оригинала, который отключила установка (если пользователь не вернул его раньше). Каталог данных остаётся.
+Проверено автоматически на Mac с Apple Silicon и с Intel: установка `.pkg`, запуск, самопроверка по TLS и удаление. Не проверено: работа расширения в браузерах на Mac, значок в строке меню и подпись ключом на Mac.
 
-Если шаг установки или обновления не удался, установщик Windows предупреждает, что установка не завершена, а `.pkg` сообщает об ошибке; подробности — в журнале программы (`logs/` каталога данных), а недоделанный шаг повторяется при следующем запуске установленной программы (это отмечено в `installation.json`; у распакованного архива — повторите `openncalayer integration install`). Удаление в Windows ошибку шага только записывает в журнал (Velopack удаляет программу всё равно) и не повторяет её: оставшееся уберите командой `openncalayer integration uninstall` из архива той же версии (`openncalayer-<версия>-x86_64-pc-windows-msvc.zip` и т. п.) — она уберёт relay и наш автозапуск и вернёт автозапуск оригинала. Удаление стирает `installation.json` даже при ошибке, поэтому следующая установка делает все шаги заново, а оставшееся видно в `openncalayer integration status`. Те же действия вручную: `openncalayer integration install`, `openncalayer integration uninstall`, состояние — `openncalayer integration status` (по шагам, с подсказкой, что делать; код 1, если установка не закончена или последнее обновление встраивания не удалось); их шаги тоже пишутся в журнал.
+### Linux
+
+1. Скачайте `openncalayer-<версия>-linux-x64.AppImage`, сделайте его исполняемым (`chmod +x`) и запустите. Работает на системах с glibc 2.28 и новее (Debian 10, Ubuntu 18.10, RHEL, AlmaLinux и Rocky 8, Fedora 29, Arch и новее).
+2. Нужен графический сеанс (X11 или Wayland). Без `DISPLAY` или `WAYLAND_DISPLAY` программа сообщит об этом и завершится с кодом 1.
+3. AppImage требует FUSE 2. В Ubuntu 22.04 и новее её нет по умолчанию: поставьте `sudo apt install libfuse2` (в Ubuntu 24.04 пакет называется `libfuse2t64`). Или запустите файл с ключом `--appimage-extract-and-run`: он работает без FUSE.
+
+Удаление: выполните `openncalayer-<версия>-linux-x64.AppImage integration uninstall` и удалите файл.
+
+### Arch Linux
+
+Можно взять AppImage (он обновляется сам) или пакет:
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS
+sudo pacman -U ./openncalayer-bin-*.pkg.tar.zst
+```
+
+Программы лягут в `/usr/lib/openncalayer/`, команда называется `openncalayer`. Пакет сам не обновляется: новую версию ставьте так же вручную.
+
+Удаление: выполните `openncalayer integration uninstall` от каждого пользователя, который запускал программу, затем `sudo pacman -R openncalayer-bin`.
+
+### WinGet
+
+Пока недоступен. Команды `winget install --id arynyklas.OpenNCALayer` ещё нет: пакет не принят в источник WinGet. Ставьте обычный установщик. Как готовится пакет — в [`docs/dev/winget.md`](../dev/winget.md).
+
+### Архив без установщика
+
+Распакуйте архив и запустите `openncalayer run`. Чтобы встроить распакованную копию в систему так же, как это делает установщик, выполните `openncalayer integration install`. Такая копия сама не обновляется.
+
+## Что установка делает для вас
+
+Установщик Windows и `.pkg` делают это при установке. Остальные варианты (AppImage, пакет pacman, `.zip`) — при первом запуске программы.
+
+- Регистрирует связь с браузером — то же, что `openncalayer nm install` ([подробнее](browser-extension.md)).
+- Включает автозапуск OpenNCALayer и записывает `"autostart": true` в `settings.json`.
+- Отключает автозапуск оригинального NCALayer у вас. Сам оригинал не удаляется, это можно отменить ([подробнее](desktop.md#оригинальный-ncalayer)). Запись для всех пользователей (`HKLM\…\Run`) не трогается.
+- Записывает файл `installation.json` в каталог данных: какая версия встроена и откуда.
+
+Сертификат для браузера установка не ставит. Его вы настраиваете сами в [мастере](desktop.md#мастер-tls).
+
+**Повторная установка и обновление.** Каждый шаг выполняется один раз. Повторный запуск установщика доделывает только то, что не сделано. Обновление копирует связь с браузером заново и обновляет пути, но не включает снова то, что вы отключили: автозапуск, регистрацию расширения, возврат оригинала.
+
+**Удаление** убирает только то, что поставила программа: связь с браузером, её настройки, ключи реестра браузеров и наш автозапуск. Автозапуск оригинала возвращается, если вы не вернули его раньше. Каталог данных остаётся.
+
+### Если установка не закончилась
+
+Установщик Windows предупредит об этом, `.pkg` покажет ошибку. Причины ищите в журнале (каталог `logs/` внутри каталога данных). Невыполненный шаг повторится при следующем запуске программы.
+
+Состояние смотрите командой `openncalayer integration status`. Она показывает шаги и подсказку, что делать, и возвращает код 1, если установка не закончена. Те же действия вручную: `openncalayer integration install` и `openncalayer integration uninstall`.
+
+Если при удалении в Windows что-то осталось, выполните `openncalayer integration uninstall` из архива той же версии (например, `openncalayer-<версия>-x86_64-pc-windows-msvc.zip`).
 
 ## Windows 7
 
-Для Windows 7 SP1 есть отдельные архивы: `openncalayer-<версия>-win7-x64.zip` (64-битная система) и `openncalayer-<версия>-win7-x86.zip` (32-битная). На Windows 10 и 11 берите обычные `openncalayer-<версия>-x86_64-pc-windows-msvc.zip` и `openncalayer-<версия>-i686-pc-windows-msvc.zip` (x86). Все сборки для Windows собраны со статическим CRT: Visual C++ Redistributable не нужен. `cargo xtask package windows` не выпустит программу или установщик Windows 10/11, которым он нужен.
+Для Windows 7 SP1 есть отдельные архивы `openncalayer-<версия>-win7-x64.zip` и `openncalayer-<версия>-win7-x86.zip` и установщики `…-win7-*-setup.exe`. Visual C++ Redistributable не нужен.
 
-В архиве Windows 7 рядом с `openncalayer.exe` и `nmhost.exe` лежат две маленькие DLL. Распаковывайте архив целиком и держите их в одном каталоге с программой:
-- `combase.dll` — передаёт `CoTaskMemFree` и `CoCreateFreeThreadedMarshaler` в `ole32.dll`. Библиотеки `windows`, на которых построены окна (Slint и его зависимости), импортируют эти функции из `combase.dll`, а её в Windows 7 нет;
-- `api-ms-win-core-winrt-error-l1-1-0.dll` — заглушки `RoOriginateErrorW` и `RoOriginateError`: в Windows 7 нет WinRT, и сообщить об ошибке через него нечем, поэтому они ничего не делают и возвращают `FALSE`.
+В архиве рядом с `openncalayer.exe` лежат две маленькие библиотеки: `combase.dll` и `api-ms-win-core-winrt-error-l1-1-0.dll`. В Windows 7 нет нужных системных функций, и эти библиотеки их заменяют. Распаковывайте архив целиком и держите всё в одном каталоге. В Windows 8 и новее системные библиотеки используются вместо них, поэтому сборка для Windows 7 работает и на новых системах (проверено на Windows 11 и Windows Server 2025).
 
-DLL экспортируют только эти функции и обращаются только к `kernel32.dll` и `ole32.dll`. В Windows 8 и новее обе DLL не загружаются: `combase.dll` там — KnownDLL, а `api-ms-…` — набор API, и загрузчик берёт системные. Поэтому сборка для Windows 7 запускается и на новых Windows: её запуск проверен на Windows 11 и на Windows Server 2025 (job `win7` в CI, x64 и x86); на Windows 10 не проверялся. Relay `nmhost.exe` в этих DLL не нуждается: `nm install` копирует его отдельно.
+Браузеры для Windows 7: Firefox ESR 115 и Chrome 109 — последние версии, которые там работают. У Firefox ESR 115 есть свои ограничения расширения ([подробнее](browser-extension.md#отличия-и-ограничения-расширения)).
 
-Для установки и обновления через Velopack релиз собирает из тех же файлов установщики `openncalayer-<версия>-win7-x64-setup.exe` и `openncalayer-<версия>-win7-x86-setup.exe` и пакеты флейворов `win7-x64` и `win7-x86`. Исполняемые файлы пакета — наши, `Squirrel.exe` (Update.exe Velopack) и его заглушка — и сам `Setup.exe` проверяет тот же гейт импортов: в релизном workflow и в job `win7` CI (`cargo xtask package windows`).
-
-Окна на Windows 7 берут размер шрифта по умолчанию из системных метрик (`SystemParametersInfoW`) с поправкой на DPI: функции `SystemParametersInfoForDpi`, которой пользуется Slint, в Windows 7 нет (подробности — в разделе [«Разработка»](../dev/development.md#разработка)).
-
-Браузеры на Windows 7: Firefox ESR 115 и Chrome 109 — последние версии для этой системы. Расширение ставится в Firefox ESR 115 так же, как в обычный Firefox (раздел [«Расширение браузера»](browser-extension.md)). Там шим работает через Xray, и у этого режима свои ограничения: подкласс `WebSocket` страницы не получает свой класс ни для какого адреса (в остальных браузерах — только для адресов NCALayer), а после отключения, удаления или обновления расширения открытые вкладки нужно перезагрузить (раздел [«Отличия и ограничения расширения»](browser-extension.md#отличия-и-ограничения-расширения)). Сквозная проверка расширения проходит в Firefox ESR 115 на Linux.
-
-Что проверено: в лаборатории проекта на Windows 7 — архив и запуск программы, расширение в Chrome 109 и Firefox ESR 115, установщик с перезагрузкой и удаление. Автоматически проверены импорт каждой функции (гейт импортов: ни одной DLL и функции из списка Windows 8+) и запуск сборки на Windows 11 и Windows Server 2025 (CI). Не проверена сверка импортов с полным списком экспортов Windows 7 SP1.
+Что проверено: в лаборатории проекта на Windows 7 — архив и запуск программы, расширение в Chrome 109 и Firefox ESR 115, установщик с перезагрузкой и удаление.
 
 ## Сайт проекта
 
 [arynyklas.github.io/OpenNCALayer](https://arynyklas.github.io/OpenNCALayer/) — на русском, казахском (`/kk/`) и английском (`/en/`):
-
-- [«Плагины»](https://arynyklas.github.io/OpenNCALayer/plugins/) — каталог портов плагинов оригинала: какой бандл заменяет порт, состояние и сверка, версии в каналах `beta` и `stable`, изменился ли бандл у оригинала после порта; у каждого порта своя страница с возможностями и отличиями от оригинала. Строка бандла — якорь `#<symname>`: на неё ведёт подсказка `installBundle`.
-- [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) — последний релиз и предварительная версия, проверка файлов.
-- [«История оригинала»](https://arynyklas.github.io/OpenNCALayer/upstream/) — версии бандлов оригинального NCALayer и их изменения по данным наблюдателя.
-
-Данные сайта — `plugins/*/plugin.toml` и `registry.toml`, индексы обновлений `updates/v1/`, список релизов и ветка `upstream`. Сайт публикуется на GitHub Pages тем же workflow, что и индексы обновлений, индексы при этом не меняются ни на байт ([`docs/dev/release.md`](../dev/release.md), раздел 7в).
+- [«Плагины»](https://arynyklas.github.io/OpenNCALayer/plugins/) — каталог плагинов, перенесённых из оригинала: какой плагин что заменяет, версии и отличия от оригинала;
+- [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) — последний релиз и предварительная версия;
+- [«История оригинала»](https://arynyklas.github.io/OpenNCALayer/upstream/) — версии модулей оригинального NCALayer и их изменения.
 
 ## Вопросы и ошибки
 
-Вопросы по установке и работе — в чате проекта в Telegram: [t.me/OpenNCALayer](https://t.me/OpenNCALayer). Об ошибках сообщайте в [Issues](https://github.com/arynyklas/OpenNCALayer/issues): приложите версию программы (окно «О программе»), систему и журнал, не прикладывая ключи, пароли и документы. Ссылка на чат есть и в окне «О программе».
+Вопросы — в Telegram-чате [t.me/OpenNCALayer](https://t.me/OpenNCALayer) (ссылка есть и в окне «О программе»). Об ошибках пишите в [Issues](https://github.com/arynyklas/OpenNCALayer/issues). Приложите версию программы (окно «О программе»), систему и журнал. Ключи, пароли и документы не прикладывайте.

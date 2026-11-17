@@ -1,15 +1,12 @@
-# SDK: обзор и платформенные изменения
+# SDK: что умеет и как это проверить
 
-Встраивание `oncl-core`, изменения платформы (CAdES, `oncl-server`), плагины в SDK и описание проверок PDF и XML. Контракты SDK, semver и миграция — в [`sdk.md`](sdk.md); журнал durable-аудита — в [`audit.md`](audit.md). Идентификаторы `P01`–`P03`, `X03`–`X05`, `C03`, `L01` ниже — имена случаев исполняемого `sdk_probe` (`--case`).
+Страница для разработчика, который уже подключил `oncl-core` (или собирается). Здесь коротко: как встроить библиотеку, что она умеет для CAdES, PDF, XML и плагинов и какой командой проверить каждую возможность. Точные контракты, лимиты и заметки о миграции — в [`sdk.md`](sdk.md); журнал аудита сервера — в [`audit.md`](audit.md).
 
-## Встраивание (не в crates.io)
+Имена случаев `C03`, `L01`, `P01`–`P03`, `X03`–`X05` ниже — это значения `--case` у проверочной программы `sdk_probe`. Нужные features и точная команда каждой пробы указаны ниже. Каждая проба работает на искусственных данных и не заменяет полный стенд на 1 ГиБ с замером RSS и проверку на настольных системах.
 
-`oncl-core` — встраиваемый SDK: потоковые подпись, проверка, валидация, инспекция и метки
-времени; доверие, ключи, часы, сеть, аудит и лимиты ресурсов задаёт хозяин приложения. Ему не
-нужны ни графическая сессия, ни демон, ни слушающий порт, ни самообновление. **Ничего не
-опубликовано в crates.io** (свободны ли имена `oncl-*`, не проверялось): подключайте проверенный
-коммит по path или git и тот же `[patch.crates-io]` (с теми же `rev`, что в корневом
-`Cargo.toml`) для изменённых `streebog` и `hmac`, которые берутся из форков:
+## Встраивание
+
+Ничего не опубликовано в crates.io, поэтому подключайте проверенный коммит по path или по git. Кроме того, нужен тот же `[patch.crates-io]` (с теми же `rev`, что в корневом `Cargo.toml`) для изменённых `streebog` и `hmac`: они берутся из наших форков.
 
 ```toml
 [dependencies]
@@ -20,323 +17,236 @@ streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e8
 hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
-Features: без них (минимальный SDK: CMS/CAdES, хеширование, PKI-валидация, файлы ключей,
-пакеты), `tokens`, `xml`, `pdf`, `jose`, `plugins` и `full` — всё сразу; ни одно не тянет Slint,
-desktop, апдейтер, сервер или асинхронный рантайм (проверяет `cargo xtask sdk closure`).
-Исполняемые примеры выпускают одноразовую PKI и не ходят в сеть:
-`cargo run -p oncl-core --example sign_file`, `--example verify_file -- <каталог> <файл>` и
-`--example custom_transport` (транспорт HTTP хозяина; без сети строгая подпись отклоняется до
-применения ключа). Semver, контракты ошибок и лимитов, заметки о миграции и готовность к
-публикации (цепочка упакованных исходников проверяется офлайн `cargo xtask sdk smoke`; загрузка
-заблокирована изменёнными `hmac`/`streebog` и не выполнялась) — в
-[`docs/dev/sdk.md`](sdk.md). Сторонние лицензии замыкания SDK —
-[`crates/oncl-core/THIRD-PARTY.txt`](../../crates/oncl-core/THIRD-PARTY.txt).
+Features:
 
-## Изменения платформы
+- без features — минимальный SDK: CMS/CAdES, хеширование, проверка цепочек сертификатов, файлы ключей, пакеты операций;
+- `tokens`, `xml`, `pdf`, `jose`, `plugins`;
+- `full` — всё сразу.
 
-Rust SDK добавляет отдельные CAdES B/T/LT/LTA: `SignRequest::cades_create` /
-`cades_add`, `VerifyRequest::cades` и `Engine::extend` / `extend_staged`.
-Читатель получает явные `EvidenceLimits`, доверие и сеть задаёт только хозяин.
-Для получения новых меток T+ нужна `CadesConfiguration`; проверка уже вложенных
-доказательств и со-подпись B её не требуют. Достройка требует отдельного
-`Action::Extend`, сохраняет подписанные поля и не использует закрытый ключ.
-Уровень контейнера — проверенный минимум по всем подписантам.
+Ни одна feature не тянет Slint, desktop, самообновление, сервер или асинхронный рантайм (это проверяет `cargo xtask sdk closure`).
 
-Архивный профиль — EN 319 122-1 V1.3.1 `archiveTimestampV3` +
-`ATSHashIndexV3`, пока только SHA-256 для архивного хеша, не старый v2 CAdES-A.
-Это не меняет старые WSS/CLI-контракты. Локальная проверка:
-`cargo run -p oncl-core --example sdk_probe -- --case C03 --out target/c03-public`.
-Она выпускает только публичные синтетические RSA-артефакты всех четырёх
-уровней, attached/detached, несколько подписантов и изменённые архивы для
-независимого оракула; не заменяет полный стенд 1 ГиБ/RSS и desktop-матрицу.
+Примеры выпускают одноразовую PKI и не ходят в сеть:
 
-`oncl-server` — самостоятельный сервис и библиотека. Бинарь `oncl-server` имеет
-подкоманды `serve`, `token-create` и `install-file`; HTTP API **выключен по
-умолчанию** (`enabled = false`, включается в `server.toml` или `--enable-api`),
-доступ — по токенам с правами на отдельные действия, TLS и OTLP включаются
-только оператором (OTLP — по явному согласию). Описание:
-[`docs/user/server.md`](../user/server.md) (настройка, токены, пределы),
-[`docs/user/http-api.md`](../user/http-api.md) (маршруты, ошибки),
-[`docs/dev/platform-interop.md`](platform-interop.md) (сверка с NCANode) и
-[`docs/dev/platform-acceptance.md`](platform-acceptance.md) (приёмка V01,
-статус). Шифрование и расшифрование CMS (G01/G02) есть только библиотекой `oncl-pki`
-(`oncl_pki::cms::envelope`, профили RSA-OAEP); в фасаде SDK, CLI и HTTP их нет. Казахстанский
-ГОСТ-профиль не доказан (Kalkan его не умеет) и не заявляется. WinGet-пакета нет; установка — из Releases.
-Журнал durable-аудита хозяина-библиотеки описан в [`audit.md`](audit.md).
+- `cargo run -p oncl-core --example sign_file`;
+- `cargo run -p oncl-core --example verify_file -- <каталог> <файл>`;
+- `cargo run -p oncl-core --example custom_transport` — свой HTTP-транспорт хоста; без сети строгая подпись отклоняется до применения ключа.
+
+Про semver, ошибки и лимиты, заметки о миграции и готовность к публикации читайте в [`sdk.md`](sdk.md). Упакованные исходники офлайн проверяет `cargo xtask sdk smoke`; публикация заблокирована изменёнными `hmac` и `streebog` и не выполнялась. Лицензии сторонних зависимостей — в [`crates/oncl-core/THIRD-PARTY.txt`](../../crates/oncl-core/THIRD-PARTY.txt).
+
+## CAdES и сервер
+
+### CAdES B, T, LT, LTA
+
+SDK умеет создавать и проверять все четыре уровня CAdES:
+
+- создать подпись: `SignRequest::cades_create`, добавить подпись: `SignRequest::cades_add`;
+- проверить: `VerifyRequest::cades`;
+- достроить подпись до более высокого уровня: `Engine::extend` и `Engine::extend_staged`.
+
+Правила:
+
+- пределы на доказательства задаются явно (`EvidenceLimits`), а доверие и сеть задаёт только хост;
+- чтобы получить новые метки времени (T и выше), нужна `CadesConfiguration`. Проверка уже вложенных доказательств и со-подпись уровня B её не требуют;
+- достройка требует отдельного права `Action::Extend`, сохраняет подписанные поля и не использует закрытый ключ;
+- уровень контейнера — наименьший из проверенных уровней всех подписантов;
+- архивный профиль — `archiveTimestampV3` + `ATSHashIndexV3` по EN 319 122-1 V1.3.1; пока только с SHA-256 для архивного хеша. Старый CAdES-A (v2) не поддерживается. На прежние контракты WSS и CLI это не влияет.
+
+Проверка: `cargo run -p oncl-core --example sdk_probe -- --case C03 --out target/c03-public`. Она выпускает публичные синтетические RSA-артефакты всех четырёх уровней (с присоединёнными и отсоединёнными данными, с несколькими подписантами и с изменёнными архивами) для независимой проверки другими программами.
+
+### Сервис `oncl-server`
+
+`oncl-server` — отдельный сервис и библиотека. У бинаря есть подкоманды `serve`, `token-create` и `install-file`.
+
+- HTTP API **выключен по умолчанию** (`enabled = false`); включается в `server.toml` или флагом `--enable-api`.
+- Доступ — по токенам с правами на отдельные действия.
+- TLS и OTLP включает только оператор (OTLP — по явному согласию).
+
+Подробности: [`server.md`](../user/server.md) (настройка, токены, пределы), [`http-api.md`](../user/http-api.md) (маршруты, ошибки), [`platform-interop.md`](platform-interop.md) (сверка с NCANode), [`platform-acceptance.md`](platform-acceptance.md) (приёмка V01 и статус). Журнал аудита сервера — в [`audit.md`](audit.md).
+
+Чего нет:
+
+- шифрование и расшифрование CMS есть только в библиотеке `oncl-pki` (`oncl_pki::cms::envelope`, профили RSA-OAEP); в SDK, CLI и HTTP их нет;
+- казахстанский ГОСТ-профиль шифрования не доказан (Kalkan его не умеет) и не заявляется;
+- пакета WinGet нет; ставить нужно из Releases.
 
 ## Плагины в SDK
 
-Rust SDK (`oncl-core`, feature `plugins`) выполняет WebAssembly через scoped headless
-host: установка плагина не даёт права вызова. Хозяин явно связывает caller,
-operation, вложенные ABI-методы, ключи, замороженные источники/неопубликованные
-результаты и сетевые endpoints; полномочия пересекаются с манифестом и host policy.
-Raw/CMS/XML/XAdES-подписи используют исходный `OperationContext` и guard, обязательный диалог
-даёт `InteractionRequired` без UI-lock. Пакеты, каталог и updater доступны только
-с отдельной feature `oncl-plugin/distribution`, которую выбирает desktop; settings
-остаются в runtime. Проверка с настоящим WASM и независимым OpenSSL:
-`cargo run -p oncl-core --features plugins,tokens --example sdk_probe -- --case L01 --out target/l01-smoke`.
-Это ограниченный ABI smoke, не приёмка 1 ГиБ/RSS, токенов НУЦ или desktop-матрицы.
-PKI-права задают HTTP-метод и точный base URL, включая внутреннюю проверку
-сертификата перед подписью. Производный GET разрешён только по provenance
-штатного PKI-энкодера от этого base URL; origin/prefix wildcard и redirect
-не расширяют полномочия. Цепочки сертификатов и предсказуемые DER/Base64/PEM
-результаты проходят admission исходных квот до применения ключа; preflight
-не списывает выходные байты. Headless `log` подтверждается без записи guest payload.
+Feature `plugins` запускает плагины WebAssembly в «безголовом» хосте (без окон). Установка плагина не даёт ему права что-либо вызывать: хост явно связывает вызывающего, операцию, вложенные методы ABI, ключи, замороженные источники данных, неопубликованные результаты и сетевые адреса. Итоговые права — пересечение манифеста плагина и политики хоста.
 
-`KeysSignXml`, `KeysSignXmlEx` и `KeysSignXades` вызывают реальные guarded legacy
-фасады Core с исходными селекторами XPath/namespace/layout; T/LT требуют совпадающего
-host TSA и фактических baseline evidence. Публичная цепочка из guest не становится
-trust anchor, а legacy default алгоритма не обходит соответствие реальному ключу.
-Размер serialized XML проверяется до private use по исходной квоте и временному
-ABI target; поздний trap/TSA failure сохраняет `Applied`, не публикуя префикс.
-L01 также запускает bounded libxml2/cryptography oracle (Python `lxml`, `cryptography`):
-проверка RSA, всех references и отрицательной мутации; это не PKIX/GOST/NCA-сертификация.
+- Подписи raw, CMS, XML и XAdES используют исходный `OperationContext` и `KeyUseGuard` хоста. Если плагину нужен диалог, он получает `InteractionRequired`: интерфейс при этом не блокируется.
+- Пакеты, каталог и обновление плагинов доступны только с отдельной feature `oncl-plugin/distribution`, которую выбирает desktop. Настройки плагинов остаются в рантайме.
+- Права на PKI-запросы задают HTTP-метод и точный базовый URL, включая внутреннюю проверку сертификата перед подписью. Производный GET разрешён только для запросов, построенных штатным PKI-кодировщиком от этого URL. Маски по origin и prefix и редиректы права не расширяют.
+- Цепочки сертификатов и предсказуемые результаты (DER, Base64, PEM) проходят проверку исходных квот до применения ключа. Предварительная проверка не списывает выходные байты.
+- Вызов `log` в «безголовом» режиме подтверждается без записи содержимого, которое передал плагин.
+
+Подписи XML используют существующие методы Core с исходными XPath, пространствами имён и раскладкой:
+
+- `KeysSignXml`, `KeysSignXmlEx`, `KeysSignXades` вызывают настоящие защищённые методы Core;
+- для T и LT нужен совпадающий TSA хоста и действительные базовые доказательства;
+- цепочка сертификатов, присланная плагином, якорем доверия не становится, а алгоритм по умолчанию не может обойти соответствие реальному ключу;
+- размер сериализованного XML проверяется до использования закрытого ключа. Если TSA или модуль падает позже, результат остаётся `Applied`, а частичный вывод не публикуется.
+
+Проверка: `cargo run -p oncl-core --features plugins,tokens --example sdk_probe -- --case L01 --out target/l01-smoke`. Она запускает настоящий WASM и сверяет результат с независимым OpenSSL; XML дополнительно сверяет с проверкой на Python (`lxml`, `cryptography`): подпись RSA, все ссылки и испорченная копия. Это ограниченная проверка ABI, а не приёмка 1 ГиБ с RSS, токенов НУЦ или desktop. Сертификацию PKIX, ГОСТ или НУЦ она не заменяет.
 
 ## PDF и PAdES
 
-Низкоуровневый `oncl-pdf` и опциональная фича `oncl-core/pdf` проверяют существующие
-подписи PDF (`VerifyRequest::pdf()`) и добавляют невидимую detached CMS-подпись
-в настоящую incremental PDF-ревизию (`SignRequest::pdf(key, PdfSignProfile)`).
-PAdES B/T/LT/LTA доступны отдельным явным профилем, описанным ниже. Для операций
-нужен явно настроенный `TemporaryStore`: исходные байты один раз копируются в закрытый
-source-role snapshot, а xref, object streams, incremental `/Prev` и подписанные
-ByteRange читаются с ограниченными буферами. Snapshot учитывает фактический ввод,
-не доверяет подсказке длины и исключает подмену файла между разбором и хешированием.
-Отчёт связывает каждого подписанта с защищённой ревизией, точным исключённым
-токеном `Contents` и фактом последующих изменений; криптографическая корректность
-не заменяет полную политику доверия F03. Неподдерживаемый формат не считается Valid.
-Происхождение метаданных подтверждают только закрытые преобразования SDK
-`SnapshotEncoding::{Identity,PdfByteString}`, а не декодер вызывающей стороны.
-Повторный capture подлинного snapshot Source той же операции не увеличивает
-`bytes_in`; чужая операция отклоняется до I/O. Новые копии удерживают реальные
-live-резервы scratch и памяти; Drop копии освобождает её дисковую ёмкость.
-Повторное чтение сохраняет исходные deadline/control и ограниченные упорядоченные
-диапазоны, а не получает новую операцию или новый лимит времени.
-Проверка: `cargo test -p oncl-pdf --test verify`; runtime smoke:
-`cargo run -p oncl-core --features pdf --example sdk_probe -- --case P01 --out target/p01-smoke`.
-Smoke использует настоящий RSA-PDF, подписанный внешним pyHanko; изменения внутри
-подписанной ревизии и отдельное последующее обновление — отрицательные контроли.
-Виртуальный тест xref выше 4 ГиБ проверяет только арифметику/seek, а не готовность
-содержательных 1-ГиБ PDF или предел RSS 1 ГиБ: эти измерения остаются гейтом V01.
-P02 сохраняет весь исходный байтовый префикс, страницы, поля формы и цепочку
-`/Prev`; новые xref streams используют 8-байтовые offsets, в том числе за пределом
-десяти десятичных цифр. Перед Add проверяются все предыдущие подписи и покрытие
-последней ревизии: unsigned последующее обновление нельзя «узаконить» новой
-подписью. Сертификационные/field-lock permission transforms и XFA честно
-отклоняются, а не обходятся. `PdfSignProfile::new(bytes)` задаёт конечный reservation
-CMS (по умолчанию 16 КиБ). Перед private use тот же ASN.1 encoder вычисляет точный
-DER-размер с фактическими сертификатом/атрибутами и фиксированной длиной RSA/ГОСТ
-подписи: заведомо малая ёмкость отклоняется NotApplied, без guard/private use.
-Неожиданно oversized ответ backend после настоящего применения ключа остаётся
-Applied-ошибкой с непубликуемым staging, без скрытого повтора.
-Core требует обычное `Action::Sign`, текущую strict validation и guard;
-`SignDigest`/`allow_prehashed` не дают права подписи PDF.
-Для исторического bare `%%EOF`/CR `revision_end` остаётся точным концом подписанного
-ByteRange; отдельные `parser_revision_end` и `PdfEndpointScope` показывают
-физически прочитанный EOL и допустимую историческую границу. Последняя подпись
-по-прежнему обязана покрывать точный текущий extent; произвольный whitespace,
-`%%EOFX` и неполный EOF не становятся допустимыми signed endpoints.
-Закрытый `PdfSignatureOutput` работает только с пустым live OUTPUT staging той же
-операции: append учитывает output/temp один раз, ByteRange фиксируется до хеша,
-затем изменяется только зарегистрированный hex `Contents`. Он не открывает
-`File`, произвольный seek/patch или mutable доступ к FrozenInput. `shared_view()`
-ResourceScope — ещё один handle той же операции, со всеми общими счётчиками,
-deadline/control и admission lease, а не новая квота для другого запроса.
-Проверка P02: `cargo test -p oncl-pdf --features testing --test sign`; smoke:
-`cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out target/p02-smoke`.
-Smoke публикует только source/once/twice-signed PDF, публичные сертификаты и отчёт:
-четыре внешне созданные страницы, содержательный RGB XObject больше 3 МиБ, два
-разных RSA-ключа, проверка обеих подписей и отрицательный контроль covered mutation.
-Независимые pyHanko/OpenSSL/poppler и полный 1-ГиБ/RSS/платформенный стенд —
-разные гейты; этот smoke не подменяет последние.
+Низкоуровневый крейт `oncl-pdf` и feature `oncl-core/pdf` умеют:
 
-P03: `SignRequest::pades(key, profile, level, material, evidence_limits)`,
-`VerifyRequest::pades(required, evidence_limits)` и
-`ExtendRequest::pdf(level, pdf_limits).with_evidence_limits(evidence_limits)`
-используют настоящие `ETSI.CAdES.detached`, CMS SignatureTimeStamp, общие DSS/VRI
-и RFC3161 DocumentTimeStamp. Профиль соответствует
-[EN 319 142-1 V1.2.1, 5.4.2/5.4.3 и 6.3 n), q), r)–y)](https://www.etsi.org/deliver/etsi_en/319100_319199/31914201/01.02.01_60/en_31914201v010201p.pdf).
-Новая T-подпись получает CMS timestamp над реальным signatureValue; достройка
-ранее выпущенной B использует document timestamp над фактическими ByteRange,
-не меняя старый `Contents` или исходный байтовый префикс. LTA требует последующего
-проверенного timestamp, покрывающего DSS и предыдущие доказательства. Уровень —
-проверенный минимум всех подписантов, а не запрошенное значение или наличие токена.
-Историческое время выдаёт только общий F04 после проверки imprint, TSA crypto/EKU,
-host trust и актуального статуса цепочки TSA; PDF `/M` не даёт proof of existence.
+- проверять существующие подписи PDF: `VerifyRequest::pdf()`;
+- добавлять невидимую отсоединённую подпись CMS в настоящую инкрементальную ревизию PDF: `SignRequest::pdf(key, PdfSignProfile)`;
+- работать на уровнях PAdES B, T, LT, LTA (отдельный профиль, ниже).
 
-Extend требует отдельное `Action::Extend`; его Core-путь вообще не открывает
-KeyProvider, не запрашивает секреты и не выполняет local private use. Новая подпись
-по-прежнему требует `Action::Sign`, strict validation и guard. Для получения
-новых timestamps используется явно заданная host `CadesConfiguration` как общий
-AdES acquisition config; B и проверка уже перенесённых доказательств не требуют
-TSA issuance config. Корни, часы, pins и сетевая политика не берутся из PDF.
-После первой подписи проверяется конечная whitelist изменений: только DSS/VRI,
-сертификаты/статусы и добавление signature/timestamp fields; изменение страниц,
-контента, исходных объектов, permissions или посторонних catalog/trailer данных
-не становится допустимым от новой ревизии или timestamp. Старые объекты (и с ними 
-прежние доказательства и timestamps) остаются байт-в-байт; VRI проверяется только
-на уровне ключей (ключ VRI старой подписи не удаляется, а его содержимое может
-быть перенаправлено на другие объекты); 
-DSS может быть пересказан новыми объектами (например, свежий OCSP), как делает NCANode. 
-Поле подписи/timestamp (`/FT /Sig`, настоящий `/V`) допускается и как невидимый widget (`/F 132`) нулевой площади с пустым 
-appearance, если страница меняется только добавлением этого widget в `/Annots`. 
-Профиль `pdf` не судит DocTimeStamp как подписанта и не отказывает из-за него;
-при этом пропущенный DocTimeStamp не проверяется на ByteRange/Contents: искажённый или
-не покрывающий документ токен в общем профиле молча игнорируется.
-Верификация всех подписей PDF использует один operation-owned набор общего
-DSS/timestamp evidence и один F04 PreparedEvidence: общие сертификаты и декодирование
-токенов не копируются заново для каждого подписанта. Каждая source CMS сохраняет
-свою проверку фактического digest/SID/ESS и inclusion graph; imprint, время, trust
-и актуальный статус цепочки TSA проверяются для каждого доказательства.
-Поддерживаемый DSS использует прямые ссылки на DER streams без фильтров;
-другие кодировки и неподдерживаемые permission transforms явно отклоняются.
-OUTPUT renewal — только append в новом transaction epoch, без старых patch slots;
-ошибка, включая отмену при самом входе в resume/sealed snapshot, навсегда запрещает
-публикацию даже после снятия host-флага отмены. Чужие/SOURCE artifacts не портятся.
-Счётчики исходного ввода и конечного вывода не дебетуют повторно внутренние replay/проверки.
+Для этих операций хосту нужно настроить `TemporaryStore`. Исходные байты один раз копируются в закрытый снимок, и дальше xref, потоки объектов, цепочка `/Prev` и подписанные `ByteRange` читаются из него ограниченными буферами. Длина, которую подсказывает вызывающий, не учитывается: считается реальный ввод. Подменить файл между разбором и хешированием нельзя.
 
-Проверка P03: `cargo test -p oncl-pdf --features testing --test ades`; smoke:
-`cargo run -p oncl-core --features pdf --example sdk_probe -- --case P03 --out target/p03-smoke`.
-Он выполняет настоящие RSA/ГОСТ-2004/ГОСТ-2015-512 операции с loopback TSA/OCSP/CRL,
-все четыре уровня, renewal, B→T, несколько подписантов и отрицательные DSS/token
-контроли. Независимая проверка новых RSA-PDF (включая archive validation и tamper)
-в окружении с pyHanko 0.38+:
-`python crates/oncl-core/examples/sdk_probe/pades_oracle.py --out target/p03-smoke`.
-Это не квалифицированная/NCA-сертификация, независимая ГОСТ-матрица или замена
-содержательным 1-ГиБ PDF (границы 2/4 ГиБ — арифметические пробы выше гарантии), RSS и платформенным гейтам V01.
+Отчёт для каждого подписанта показывает защищённую ревизию, точную исключённую из хеша область `Contents` и факт последующих изменений. Криптографическая корректность не заменяет полную политику доверия. Неподдерживаемый формат никогда не считается `Valid`.
+
+Проверка: `cargo test -p oncl-pdf --test verify` и `cargo run -p oncl-core --features pdf --example sdk_probe -- --case P01 --out target/p01-smoke`. Проба использует настоящий RSA-PDF, подписанный внешним pyHanko; изменение внутри подписанной ревизии и отдельное последующее обновление — отрицательные контроли. Виртуальный тест с xref выше 4 ГиБ проверяет только арифметику и seek, а не готовность настоящих PDF в 1 ГиБ или предел RSS: это остаётся в приёмке V01.
+
+### Добавление подписи (P02)
+
+Новая подпись сохраняет весь исходный префикс байт, страницы, поля формы и цепочку `/Prev`. Новые xref-потоки используют 8-байтовые смещения, в том числе за пределом десяти десятичных цифр.
+
+Правила:
+
+- перед добавлением проверяются все предыдущие подписи и покрытие последней ревизии: неподписанное обновление после последней подписи нельзя «узаконить» новой подписью;
+- сертификационные подписи, блокировки полей и XFA честно отклоняются, а не обходятся;
+- `PdfSignProfile::new(bytes)` задаёт размер места под CMS (по умолчанию 16 КиБ). До использования ключа тот же ASN.1-кодировщик считает точный размер DER с реальными сертификатом и атрибутами и фиксированной длиной подписи RSA или ГОСТ. Заведомо малое место отклоняется как `NotApplied`, без охранника и без использования ключа;
+- если после настоящего применения ключа ответ бэкенда неожиданно слишком велик, остаётся ошибка `Applied`, вывод не публикуется, скрытого повтора нет;
+- нужны обычное право `Action::Sign`, действующая строгая проверка и охранник. Права на подпись PDF не дают ни `SignDigest`, ни `allow_prehashed`;
+- для старого формата с голым `%%EOF`/CR `revision_end` — точный конец подписанного `ByteRange`. Отдельные `parser_revision_end` и `PdfEndpointScope` показывают физически прочитанный конец строки и допустимую историческую границу. Последняя подпись всё равно обязана покрывать точный текущий размер; произвольные пробелы, `%%EOFX` и неполный EOF допустимыми концами не становятся.
+
+Запись результата: `PdfSignatureOutput` работает только с пустым выходным буфером той же операции. `ByteRange` фиксируется до хеширования, после этого меняется только зарегистрированный hex-блок `Contents`. Произвольного seek, правки и изменяемого доступа к замороженному вводу у него нет. `shared_view()` у `ResourceScope` — ещё один дескриптор той же операции со всеми общими счётчиками, сроком, управлением и допуском, а не новая квота для другого запроса.
+
+Проверка: `cargo test -p oncl-pdf --features testing --test sign` и `cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out target/p02-smoke`. Проба публикует только исходный, один раз и дважды подписанный PDF, публичные сертификаты и отчёт: четыре страницы, созданные внешней программой, содержательный RGB-объект больше 3 МиБ, два разных RSA-ключа, проверка обеих подписей и отрицательный контроль изменения под подписью. Независимые pyHanko, OpenSSL и poppler и полный стенд 1 ГиБ/RSS — отдельные проверки; эта их не заменяет.
+
+### Уровни PAdES (P03)
+
+Методы:
+
+- `SignRequest::pades(key, profile, level, material, evidence_limits)`;
+- `VerifyRequest::pades(required, evidence_limits)`;
+- `ExtendRequest::pdf(level, pdf_limits).with_evidence_limits(evidence_limits)`.
+
+Они используют `ETSI.CAdES.detached`, метку времени подписи CMS, общие DSS/VRI и RFC 3161 DocumentTimeStamp. Профиль — [EN 319 142-1 V1.2.1, 5.4.2/5.4.3 и 6.3 n), q), r)–y)](https://www.etsi.org/deliver/etsi_en/319100_319199/31914201/01.02.01_60/en_31914201v010201p.pdf).
+
+- Новая T-подпись получает метку времени CMS над реальным `signatureValue`.
+- Достройка ранее выпущенной B-подписи использует документную метку времени над фактическим `ByteRange`; старый `Contents` и исходный префикс байт не меняются.
+- LTA требует последующей проверенной метки времени, покрывающей DSS и прежние доказательства.
+- Уровень — наименьший проверенный уровень среди подписантов, а не запрошенный и не «есть токен».
+- Историческое время выдаётся только после проверки отпечатка, криптографии и EKU службы меток времени, доверия хоста и актуального статуса её цепочки. Поле PDF `/M` доказательством существования не служит.
+
+Достройка:
+
+- требует отдельного права `Action::Extend`; её путь в Core вообще не открывает `KeyProvider`, не запрашивает секреты и не применяет закрытый ключ;
+- новая подпись по-прежнему требует `Action::Sign`, строгой проверки и охранника;
+- для получения новых меток нужна явная `CadesConfiguration` хоста. Корни доверия, часы, закреплённые сертификаты и сетевая политика из PDF не берутся. Для уровня B и для проверки уже перенесённых доказательств настройка выпуска меток не нужна.
+
+Что разрешено менять после первой подписи (список закрытый):
+
+- DSS/VRI, сертификаты и статусы;
+- добавление полей подписи и меток времени (поле `/FT /Sig` с настоящим `/V`; допускается и как невидимый widget `/F 132` нулевой площади с пустым appearance, если страница меняется только добавлением этого widget в `/Annots`).
+
+Изменение страниц, содержимого, исходных объектов, разрешений и посторонних данных каталога или trailer допустимым не становится ни от новой ревизии, ни от метки времени. Старые объекты (а с ними старые доказательства и метки) остаются байт в байт. Для VRI проверяются только ключи: ключ VRI старой подписи не удаляется, но его содержимое может быть перенаправлено на другие объекты. DSS может быть пересказан новыми объектами (например, свежий OCSP) — так делает и NCANode.
+
+Профиль `pdf` не судит DocTimeStamp как подписанта и не отказывает из-за него. При этом пропущенный DocTimeStamp не проверяется на `ByteRange` и `Contents`: искажённый токен или токен, не покрывающий документ, в общем профиле молча игнорируется.
+
+Как проверяются все подписи PDF:
+
+- для них используется один набор общих DSS и свидетельств меток времени на операцию; общие сертификаты и декодирование токенов не копируются заново для каждого подписанта;
+- каждая исходная CMS по-прежнему проверяется отдельно (реальный digest, SID, ESS и граф включений);
+- отпечаток, время, доверие и актуальный статус цепочки службы меток времени проверяются для каждого доказательства;
+- поддерживаемый DSS использует прямые ссылки на потоки DER без фильтров; другие кодировки и неподдерживаемые преобразования разрешений явно отклоняются.
+
+Продление выхода — только дописывание в новой транзакционной эпохе, без старых мест под патчи. Ошибка (в том числе отмена в момент входа в возобновление или запечатанный снимок) навсегда запрещает публикацию, даже если хост потом снимет флаг отмены. Чужие и исходные артефакты не портятся. Счётчики исходного ввода и итогового вывода не списываются повторно за внутренние повторные чтения и проверки.
+
+Проверка: `cargo test -p oncl-pdf --features testing --test ades` и `cargo run -p oncl-core --features pdf --example sdk_probe -- --case P03 --out target/p03-smoke`. Проба выполняет настоящие операции RSA, ГОСТ-2004 и ГОСТ-2015-512 с локальными TSA, OCSP и CRL: все четыре уровня, обновление, переход B→T, несколько подписантов, отрицательные контроли для DSS и токенов. Новые RSA-PDF независимо проверяет (включая проверку архива и порчу) команда с pyHanko 0.38 или новее: `python crates/oncl-core/examples/sdk_probe/pades_oracle.py --out target/p03-smoke`. Это не сертификация квалифицированной подписи или НУЦ, не независимая проверка ГОСТ и не замена содержательным PDF на 1 ГиБ (границы 2 и 4 ГиБ — арифметические пробы, за пределами гарантии), RSS и платформенным проверкам V01.
 
 ## XML, XAdES и WS-Security
 
-Опциональная фича `oncl-core/xml` добавляет UTF-8 Source sign/Add/verify и
-keyless evidence extension: `SignRequest::xml/xades`, `VerifyRequest::xml/xades`,
-`ExtendRequest::xml`. Явный `VerifyRequest::xml_kalkan()` сохраняет прежние байты
-Kalkan. Нужны host-настройки `ValidationServices` и `TemporaryStore`; TSA задаёт
-общий `CadesConfiguration`, запрос не расширяет корни или сетевую политику.
-`oncl-xml::verify_source` проверяет каждый SignedInfo, сертификат, SignatureValue
-и Reference; отчёт хранит scoped per-signer факты, SHA-256 реального сертификата
-и точные диапазоны покрытых узлов. Один canonical writer обслуживает bounded DOM
-и индексированный raw-span Source; большого DOM/RAM-буфера нет. Канонические
-References могут храниться в учтённом TemporaryStore до открытия ключа.
-Поддерживаются inclusive/exclusive C14N с вариантами comments, InclusiveNamespaces,
-ID/percent-URI, однозначные XPointer location paths, ограниченные Manifest и
-namespace-bound XPath-фильтр `not(ancestor-or-self::ds:Signature)`. Enveloped
-исключает текущую подпись; прежнее исключение последующих подписей включено только
-в `KalkanLegacy`. Неоднозначные IDs/KeyInfo/X509Data и неподдерживаемые трансформации
-отклоняются; изменение неподписанного узла не приписывается подписи.
-XAdES B/T/LT/LTA использует F03/F04, а не наличие timestamp-элемента.
-SignatureTimeStamp 1.3.2 покрывает целый канонический SignatureValue; выбран
-недистрибутивный ArchiveTimeStamp 1.4.1 из ETSI EN 319 132-1 V1.2.1 §5.5.2.2:
-все преобразованные References, SignedInfo/SignatureValue/KeyInfo, предыдущие
-unsigned properties и прочие Objects в установленном порядке. Extend/renewal
-проверяет все старые и новые proofs и не требует KeyProvider или Sign guard.
-Минимальный проверенный уровень возвращается только при Valid. Поддержан один
-SignatureTimeStamp и несколько ArchiveTimeStamp renewal; каждый proof проверяется.
-Независимые повторные SignatureTimeStamp, другие версии и распределённое archive
-coverage отклоняются явно, а не превращаются в lower-level Valid.
-Новые baseline-подписи содержат подписанный DataObjectFormat/MimeType для каждой
-data Reference; ObjectReference связан с Reference@Id, а не ID подписанных данных.
-Прежний bounded XAdES остаётся математически проверяемым, но без обязательных
-baseline-свойств не получает достигнутый baseline-уровень. Keyless LTA renewal
-обновляет устаревшие публичные статусы только после проверки всех прежних proofs
-и до выпуска архива, покрывающего весь текущий evidence; финальная проверка
-защищённого archive prefix не ослаблена.
-`oncl-xml::sign_spec_source` даёт bounded `XmlSignSpec` через DigestSigner и
-исходный ResourceScope; старые XPath/placement/output/layout/лимиты сохранены,
-builder и canonical writer общие. Source sign не строит DOM большого документа;
-Add сохраняет прежние подписи, но стандартная whole-document reference может
-быть нарушена последующим Add. WS-Security использует тот же индекс и canonical writer.
-Внутренние hash/evidence replay не расходуют финальную output-квоту; внешний
-`copy_entry` списывает каждую доставку. OUTPUT-derived captures остаются OUTPUT,
-а отмена/ошибка закрытого output transaction запрещает публикацию после очистки
-сигнала отмены.
-Core `SignRequest::xml_legacy` сохраняет bounded wire-контракт XmlSignSpec через
-исходный AuthorizedSigner. `SignRequest::xades_legacy` принимает bounded XadesSpec
-и создаёт полный B/T/LT общим evidence kernel, не раскрывая raw key; TSA должен
-совпадать с явной host-конфигурацией. Селекторы и канонические References
-подготавливаются до открытия ключа.
-Выбранные LT request chain и публичный host material совместно проверяются по
-encoded размеру/числу до capture и ключа, без предварительного копирования/DER.
-B/T сохраняют совместимость и не сериализуют request chain.
-`capture_signed_input` сохраняет SHA-256 неизменяемого signed wire и закрытую
-роль format-reader для approval/replay в той же операции. Signed intake
-необратимо считает фактический wire progress, отдельно классифицируя ограниченный
-реальный signature overhead. Прикладные Objects, fake metadata, whitespace и PI
-остаются document bytes. Кредит сериализации получают только распознанные parser
-bounded declaration/BOM и раскрытие пустого parent, содержащего лишь подписи;
-это не утверждение о первоначальном написании документа. Обычные original-input
-и hash consumers отклоняют classified format readers.
-Signature layout проверяется сразу по framing/work-лимитам; ёмкость сохраняемой
-геометрии резервируется до роста, без лимита на число узлов документа.
-Динамический Core берёт trusted host clock после фактического TSA-ответа;
-финальная XML-проверка использует один поздний момент для всех signers.
-Прямые fixed-as-of API сохраняют прежнюю семантику и монотонные deadlines.
+Feature `oncl-core/xml` добавляет для UTF-8 XML: подпись, добавление подписи, проверку и продление свидетельств без ключа:
 
-Проверки: `cargo test -p oncl-xml --features testing`; runtime:
-`cargo run -p oncl-core --features xml --example sdk_probe -- --case X03 --out target/x03-smoke`.
-Probe создаёт содержательный XML с двумя настоящими подписями и защищённой ссылкой
-более 64 МиБ, проверяет дальнюю mutation и положительный неподписанный контроль,
-записывает отдельные per-signer артефакты. Независимый bounded oracle:
-`python crates/oncl-core/examples/sdk_probe/xml_oracle.py --out target/x03-smoke`
-(lxml/libxml2 и cryptography; exact C14N/digests и RSA math, не ГОСТ и не trust).
-Это не гейт содержательных 1 ГиБ/пикового RSS 1 ГиБ — он остаётся в V01.
+- `SignRequest::xml` и `SignRequest::xades`;
+- `VerifyRequest::xml` и `VerifyRequest::xades`;
+- `ExtendRequest::xml`;
+- `VerifyRequest::xml_kalkan()` — явный режим, который сохраняет прежние байты Kalkan.
 
-X04 выполняет настоящие sign/Add/LTA над содержательной ссылкой более 64 МиБ,
-проверяет content/evidence mutation и число private uses, а bounded matrix
-покрывает B/T/LT/LTA/renewal через Core. PKI — только явно закреплённый loopback:
-`cargo run -p oncl-core --features xml --release --example sdk_probe -- --case X04 --out target/x04-smoke`.
-Независимый oracle:
-`python crates/oncl-core/examples/sdk_probe/xml_xades_oracle.py --out target/x04-smoke`
-сравнивает точные canonical/archive bytes, RSA XML/CMS math, RFC3161 nonce,
-issuer-bound synthetic RSA status, порядок/покрытие и отрицательные контроли.
-Это bounded direct-root профиль, не универсальный PKIX/XAdES validator и не
-независимое доказательство ГОСТ, 1 ГиБ или RSS.
+Хосту нужны `ValidationServices` и `TemporaryStore`. TSA задаёт общая `CadesConfiguration`; запрос корни доверия и сетевую политику не расширяет.
 
-X05 добавляет `oncl_xml::wsse::{SourceWsseSignProfile, WsseVerifyProfile}` и Core
-`SignRequest::wsse` / `VerifyRequest::wsse`, включая approved batch Create/Add.
-Используемый Body — единственный прямой Body настоящего SOAP 1.1/1.2 Envelope,
-с одним глобально уникальным WSU Id. Каждый signer проверяется относительно
-этого региона: whole-document math, перенесённый старый Body, неподписанная
-подмена, ID aliases, неверный namespace и token из другого recipient не дают
-утверждения о покрытии. Host выбирает Security actor/role, обязательные прямые
-прикладные headers и политику подписанного UTC Created/Expires. Timestamp —
-только signed freshness claim, не proof of existence и не replay prevention.
-Поддержаны полный сертификат в KeyIdentifier (фактический pinned NCANode variant)
-и стандартный локальный BinarySecurityToken/STR Reference. Remote tokens,
-SKI/issuer-serial lookup, шифрование, SAML и неизвестные recognized Security proofs
-явно не поддержаны. Новые подписи — RSA-SHA256, ГОСТ-2004 и ГОСТ-2015/512 через
-прежние строгие host PKI/algorithm/key authority.
-Только bounded recognized Security framing, типизированные token/Timestamp и
-необходимая вставка WSU Id получают format accounting; обычные headers и Body
-остаются прикладными байтами. Остальные lexical bytes сохраняются.
-Scoped `XmlVerificationFacts::wsse()` возвращает реальные per-signer Body/header/
-Timestamp coverage; `read_used_soap_body` читает только байты исходного scope.
-Host не может выбрать `role/none` для обработки. Прикладные Header/Body/Envelope
-в чужом namespace не являются SOAP-контейнерами. Unicode Id одинаково записываются
-и проверяются как однозначные bare fragments. Комментарии/PI в типизированных
-token/Timestamp и лишний текст Timestamp явно отклоняются, а не становятся
-бесплатными metadata. Проверяется фактическая raw-длина Security и содержащего
-только Security Header вместе с суммарным framing, не нормализованный lexer buffer.
-`wsse::sign_prepared` обязательно проверяет явное host time до применения ключа.
-У convenience `wsse::sign_source` нет clock authority: Timestamp-bearing input/
-profile требует prepared API с trusted ValidationContext. Неподдержанное требование
-генерации EN baseline и заведомо невозможные layout/reference limits отклоняются
-до provider. Проверка существующих carried XAdES proofs сохранена; генератор WSSE
-не приписывает себе EN baseline properties.
-Предварительный размер считает тот же signature emitter через checked UTF-8 sink
-с потоковым XML attribute escaping. References заимствуют допущенные Id: полная
-escaped подпись и копии строк Id ради подсчёта не создаются. Временные descriptor/
-token buffers допускаются до allocation. Известный из profile отказ по размеру
-происходит до Core/B01 intake, provider и private use, без повышения metadata caps; metadata
-reservation уже учитывает live RAM.
+### Проверка подписей
 
-Runtime: `cargo run -p oncl-core --features xml --example sdk_probe -- --case X05 --out target/x05-smoke`.
-Probe покрывает содержательный SOAP Body более 64 МиБ, RSA и GOST Add, все три
-алгоритма на bounded случаях, настоящий pinned loopback PKI и mutation/wrapping.
-Независимый bounded oracle (жёсткий DOM cap 1 МиБ):
-`python crates/oncl-core/examples/sdk_probe/wsse_oracle.py target/x05-smoke`;
-сначала скопируйте `target/fixtures/ncanode/wsse-ncanode.xml` (после `cargo xtask fetch-fixtures`) в output как
-`pinned-ncanode.xml`. Он независимо сверяет libxml2 exclusive C14N, SHA-256 и RSA
-math внешнего pinned fixture и нового RSA fixture. GOST canonical decomposition
-не является независимой проверкой GOST math, просроченный внешний fixture —
-только math, не trusted Valid. Нет Java/Kalkan runtime, production-сертификации,
-измеренного RSS либо приёмки 1 ГиБ: эти платформенные гейты остаются в V01.
+`oncl-xml::verify_source` проверяет каждый SignedInfo, сертификат, SignatureValue и Reference. Отчёт хранит факты по каждому подписанту, SHA-256 реального сертификата и точные диапазоны покрытых узлов. Большого DOM и буфера в оперативной памяти нет: один канонический писатель обслуживает ограниченный DOM и индексированный источник по диапазонам байт. Канонические Reference могут храниться во временном хранилище до открытия ключа.
+
+Поддерживается:
+
+- inclusive и exclusive C14N, в том числе с комментариями; `InclusiveNamespaces`;
+- ID и процентные URI, однозначные XPointer-пути;
+- ограниченные Manifest;
+- XPath-фильтр с привязкой к пространству имён: `not(ancestor-or-self::ds:Signature)`.
+
+Режим enveloped исключает текущую подпись. Прежнее исключение всех последующих подписей есть только в режиме `KalkanLegacy`. Неоднозначные ID, KeyInfo и X509Data и неподдерживаемые преобразования отклоняются; изменение неподписанного узла подписи не приписывается.
+
+### XAdES B, T, LT, LTA
+
+Уровни XAdES определяются доказательствами, а не наличием элемента метки времени.
+
+- `SignatureTimeStamp` 1.3.2 покрывает весь канонический `SignatureValue`.
+- Архивная метка — `ArchiveTimeStamp` 1.4.1 из ETSI EN 319 132-1 V1.2.1 §5.5.2.2 (недистрибутивная): все преобразованные Reference, SignedInfo, SignatureValue, KeyInfo, предыдущие неподписанные свойства и прочие Objects в установленном порядке.
+- Продление и обновление проверяют все старые и новые доказательства и не требуют `KeyProvider` или охранника подписи.
+- Минимальный проверенный уровень возвращается только при `Valid`.
+- Поддерживаются одна `SignatureTimeStamp` и несколько обновлений `ArchiveTimeStamp`; каждое доказательство проверяется. Независимые повторные `SignatureTimeStamp`, другие версии и распределённое покрытие архива явно отклоняются, а не превращаются в `Valid` более низкого уровня.
+- Новые подписи уровня baseline содержат подписанный `DataObjectFormat/MimeType` для каждой Reference с данными; `ObjectReference` связан с `Reference@Id`, а не с ID подписанных данных. Прежний ограниченный XAdES остаётся математически проверяемым, но без обязательных baseline-свойств baseline-уровня не получает.
+- Обновление LTA без ключа освежает устаревшие публичные статусы только после проверки всех прежних доказательств и до выпуска архива, который покрывает всё текущее доказательство; итоговая проверка защищённого префикса архива не ослаблена.
+
+### Подпись XML
+
+- `oncl-xml::sign_spec_source` создаёт ограниченный `XmlSignSpec` через `DigestSigner` и исходный `ResourceScope`. Старые XPath, места вставки, вывод, раскладка и лимиты сохранены; построитель и канонический писатель общие. Для большого документа DOM не строится.
+- Добавление подписи сохраняет прежние подписи, но стандартная Reference на весь документ может быть нарушена последующим добавлением.
+- `SignRequest::xml_legacy` сохраняет ограниченный контракт `XmlSignSpec` через исходный `AuthorizedSigner`.
+- `SignRequest::xades_legacy` принимает ограниченный `XadesSpec` и строит полный B/T/LT общим ядром доказательств, не выдавая сырой ключ. TSA должен совпадать с явной настройкой хоста. Селекторы и канонические Reference готовятся до открытия ключа.
+- Выбранные цепочки LT из запроса и публичный материал хоста вместе проверяются по размеру и числу до чтения данных и до ключа, без предварительного копирования и DER. B и T остаются совместимыми и цепочку запроса не сериализуют.
+- Динамическое Core берёт время доверенных часов хоста после реального ответа TSA; итоговая проверка XML использует один поздний момент для всех подписантов. Прямые API с фиксированным моментом сохраняют прежнюю семантику и монотонные сроки.
+
+### Учёт размера подписанного ввода
+
+`capture_signed_input` запоминает SHA-256 неизменяемого подписанного потока и закрытую роль читателя формата для утверждения и повторного чтения в той же операции. При приёме необратимо считается реальный размер, а ограниченные байты самой подписи классифицируются отдельно.
+
+- Прикладные Objects, подставные метаданные, пробелы и инструкции обработки остаются байтами документа.
+- Зачёт сериализации получают только распознанные парсером ограниченные объявление и BOM, а также раскрытие пустого родителя, содержащего лишь подписи. Это не утверждение о том, как документ был написан изначально.
+- Обычные потребители исходного ввода и хеша классифицированных читателей формата отклоняют.
+- Раскладка подписей проверяется сразу по лимитам обрамления и работы; ёмкость сохраняемой геометрии резервируется до роста; лимита на число узлов документа нет.
+- Внутренние повторные чтения для хеша и доказательств выходную квоту не расходуют; внешний `copy_entry` списывает каждую доставку. Данные, полученные из выхода, остаются выходом; отмена или ошибка закрытой транзакции вывода запрещает публикацию даже после снятия сигнала отмены.
+
+### WS-Security
+
+`oncl_xml::wsse::{SourceWsseSignProfile, WsseVerifyProfile}` и методы Core `SignRequest::wsse` и `VerifyRequest::wsse` (включая одобренные пакеты Create и Add) подписывают и проверяют SOAP 1.1 и 1.2.
+
+Правила:
+
+- подписывается единственный прямой `Body` настоящего SOAP-конверта с одним глобально уникальным WSU `Id`;
+- каждый подписант проверяется относительно этого региона. Математика по всему документу, перенесённый старый `Body`, неподписанная подмена, псевдонимы ID, неверное пространство имён и токен другого получателя утверждения о покрытии не дают;
+- хост выбирает actor или role для Security, обязательные прямые прикладные заголовки и политику подписанных UTC `Created` и `Expires`. `Timestamp` — всего лишь подписанное утверждение о свежести, а не доказательство существования и не защита от повтора;
+- поддержаны полный сертификат в `KeyIdentifier` (фактический закреплённый вариант NCANode) и стандартный локальный `BinarySecurityToken` / `STR Reference`;
+- не поддержаны: удалённые токены, поиск по SKI и issuer-serial, шифрование, SAML и неизвестные распознанные доказательства Security;
+- новые подписи — RSA-SHA256, ГОСТ-2004 и ГОСТ-2015/512 с прежними строгими правилами PKI, алгоритма и ключа хоста.
+
+Формат и учёт: ограниченные распознанные элементы Security, типизированные токен и `Timestamp` и необходимая вставка WSU `Id` учитываются как формат; обычные заголовки и `Body` остаются прикладными байтами; остальные лексические байты сохраняются. `XmlVerificationFacts::wsse()` возвращает реальное покрытие `Body`, заголовков и `Timestamp` по каждому подписанту; `read_used_soap_body` читает только байты исходной области. Хост не может выбрать `role/none` для обработки. Прикладные `Header`, `Body` и `Envelope` в чужом пространстве имён SOAP-контейнерами не считаются. Unicode `Id` записываются и проверяются одинаково как однозначные bare-фрагменты. Комментарии и инструкции обработки в типизированных токене и `Timestamp` и лишний текст `Timestamp` отклоняются явно. Проверяется реальная длина Security и заголовка, содержащего только Security, вместе с суммарным обрамлением, а не нормализованный буфер лексера.
+
+Время: `wsse::sign_prepared` обязательно проверяет явное время хоста до применения ключа. У упрощённого `wsse::sign_source` своего источника времени нет: ввод или профиль с `Timestamp` требует `prepared`-API с доверенным `ValidationContext`. Неподдерживаемое требование выпуска baseline по EN и заведомо невозможные лимиты раскладки и ссылок отклоняются до обращения к провайдеру ключа. Уже вложенные доказательства XAdES проверяются как прежде; сам генератор WSSE baseline-свойств EN себе не приписывает.
+
+Размер заранее считает тот же эмиттер подписи через проверяемый UTF-8-приёмник с потоковым экранированием атрибутов. Reference заимствуют допущенные `Id`: полная экранированная подпись и копии строк `Id` ради подсчёта не создаются. Временные буферы дескрипторов и токенов допускаются до выделения. Отказ по размеру, известный из профиля, происходит до приёма в Core, до провайдера и до использования ключа, без повышения лимита метаданных; резервирование метаданных уже учитывает живую память.
+
+### Как проверить XML
+
+| Случай | Команда | Что делает |
+|---|---|---|
+| `X03` | `cargo run -p oncl-core --features xml --example sdk_probe -- --case X03 --out target/x03-smoke` | содержательный XML с двумя настоящими подписями и защищённой ссылкой больше 64 МиБ; проверка далёкого изменения и положительный контроль неподписанного; отдельные артефакты по подписантам |
+| `X04` | `cargo run -p oncl-core --features xml --release --example sdk_probe -- --case X04 --out target/x04-smoke` | настоящие подпись, добавление подписи и LTA над ссылкой больше 64 МиБ; проверка изменений содержимого и доказательств и числа применений ключа; ограниченная матрица B/T/LT/LTA/обновление через Core; PKI — только явно закреплённый локальный |
+| `X05` | `cargo run -p oncl-core --features xml --example sdk_probe -- --case X05 --out target/x05-smoke` | содержательный SOAP `Body` больше 64 МиБ; добавление RSA и ГОСТ; все три алгоритма на ограниченных случаях; настоящий закреплённый локальный PKI; подмена и обёртывание |
+
+Независимые проверки (скрипты на Python, ограниченные):
+
+- `python crates/oncl-core/examples/sdk_probe/xml_oracle.py --out target/x03-smoke` — lxml/libxml2 и cryptography: точные C14N и digest, математика RSA; не ГОСТ и не доверие;
+- `python crates/oncl-core/examples/sdk_probe/xml_xades_oracle.py --out target/x04-smoke` — точные канонические и архивные байты, математика RSA для XML и CMS, nonce RFC 3161, синтетический статус RSA с привязкой к эмитенту, порядок и покрытие, отрицательные контроли. Это ограниченный профиль «прямой корень», а не универсальная проверка PKIX/XAdES и не независимое доказательство для ГОСТ, 1 ГиБ или RSS;
+- `python crates/oncl-core/examples/sdk_probe/wsse_oracle.py target/x05-smoke` (жёсткий предел DOM — 1 МиБ). Сначала скопируйте `target/fixtures/ncanode/wsse-ncanode.xml` (он появляется после `cargo xtask fetch-fixtures`) в выходной каталог как `pinned-ncanode.xml`. Скрипт независимо сверяет exclusive C14N libxml2, SHA-256 и математику RSA внешнего закреплённого образца и нового RSA-образца. Разложение канонического вида для ГОСТ не есть независимая проверка математики ГОСТ; просроченный внешний образец проверяет только математику, но не доверие.
+
+Чего нет ни в одной из этих проб: Java или Kalkan, промышленной сертификации, измеренного RSS и приёмки 1 ГиБ. Эти проверки остаются в V01.
