@@ -3,7 +3,7 @@ members = ["crates/*", "xtask"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 edition = "2024"
 rust-version = "1.99.1"
 license = "Apache-2.0"
@@ -33,25 +33,25 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 # these names (crates.io's lack the `secret-input` feature), so a registry release is blocked
 # until that is decided. A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
-oncl-flows = { path = "crates/oncl-flows", version = "=0.1.0-rc.3" }
-oncl-gost = { path = "crates/oncl-gost", version = "=0.1.0-rc.3" }
+oncl-flows = { path = "crates/oncl-flows", version = "=0.1.0-rc.4" }
+oncl-gost = { path = "crates/oncl-gost", version = "=0.1.0-rc.4" }
 oncl-ipc = { path = "crates/oncl-ipc" }
-oncl-pki = { path = "crates/oncl-pki", version = "=0.1.0-rc.3" }
-oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.0-rc.3" }
-oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.0-rc.3" }
+oncl-pki = { path = "crates/oncl-pki", version = "=0.1.0-rc.4" }
+oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.0-rc.4" }
+oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.0-rc.4" }
 # Explicit defaults also keep inherited no-default SDK dependencies valid outside this workspace.
-oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.0-rc.3" }
-oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.0-rc.3" }
-oncl-registry = { path = "crates/oncl-registry", version = "=0.1.0-rc.3" }
+oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.0-rc.4" }
+oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.0-rc.4" }
+oncl-registry = { path = "crates/oncl-registry", version = "=0.1.0-rc.4" }
 oncl-testkit = { path = "crates/oncl-testkit" }
 oncl-tls = { path = "crates/oncl-tls" }
-oncl-token = { path = "crates/oncl-token", version = "=0.1.0-rc.3" }
+oncl-token = { path = "crates/oncl-token", version = "=0.1.0-rc.4" }
 oncl-trust = { path = "crates/oncl-trust" }
 oncl-ui = { path = "crates/oncl-ui" }
-oncl-update = { path = "crates/oncl-update", version = "=0.1.0-rc.3" }
+oncl-update = { path = "crates/oncl-update", version = "=0.1.0-rc.4" }
 # The installer entry WinGet runs: `xtask package` writes the Setup it carries into it.
 oncl-winget-setup = { path = "crates/oncl-winget-setup", default-features = false }
-oncl-xml = { path = "crates/oncl-xml", version = "=0.1.0-rc.3" }
+oncl-xml = { path = "crates/oncl-xml", version = "=0.1.0-rc.4" }
 
 aes = "0.9.0"
 anyhow = "1.0.104"

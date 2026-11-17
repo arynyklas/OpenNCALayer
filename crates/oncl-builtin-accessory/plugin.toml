@@ -1,6 +1,6 @@
 id = "io.github.arynyklas.openncalayer.builtin.accessory"
-version = "0.1.0-rc.3"
-min_core = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
+min_core = "0.1.0-rc.4"
 modules = ["kz.gov.pki.ncalayerservices.accessory"]
 builtin = true
 
