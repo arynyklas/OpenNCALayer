@@ -1,6 +1,6 @@
 id = "io.github.arynyklas.openncalayer.builtin.commonutils"
-version = "0.1.0-rc.4"
-min_core = "0.1.0-rc.4"
+version = "0.1.0"
+min_core = "0.1.0"
 modules = ["kz.gov.pki.knca.commonUtils"]
 builtin = true
 
