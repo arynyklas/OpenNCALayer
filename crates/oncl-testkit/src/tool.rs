@@ -285,10 +285,7 @@ mod tests {
     #[test]
     fn message_names_executables_variable_package_and_document() {
         let text = message(
-            &[
-                "openssl".to_owned(),
-                "/opt/git/usr/bin/openssl".to_owned(),
-            ],
+            &["openssl".to_owned(), "/opt/git/usr/bin/openssl".to_owned()],
             Some("ONCL_TOOL_THAT_IS_NEVER_SET"),
             "OpenSSL 3",
         );
