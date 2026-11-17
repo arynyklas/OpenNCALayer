@@ -140,8 +140,8 @@ jobs:
           listener_pid() { lsof -nP -iTCP:13579 -sTCP:LISTEN -t 2> /dev/null | head -n 1; }
 
           # ---- the published index offers `to` -----------------------------------------------
-          # Informational: the client reads the TUF repository, the legacy index is published
-          # with it and lists the same versions.
+          # Informational: the client reads the TUF repository, the index is published as
+          # the TUF target and lists the same versions.
           if curl -fsS --max-time 30 "https://arynyklas.github.io/OpenNCALayer/updates/v1/beta.json" -o "$OUT/beta.json" 2> "$OUT/beta-curl.txt"; then
             if grep -q "\"version\": \"$TO\"" "$OUT/beta.json"; then
               res PASS index-lists-to "updates/v1/beta.json lists $TO"

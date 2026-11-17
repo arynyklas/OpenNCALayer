@@ -149,7 +149,7 @@ jobs:
               echo "- \`$(basename "$package")\`"
             done
             echo
-            echo "The index check refuses an index that \`tuf/v1\` does not list. To publish it, on this branch:"
+            echo "\`tuf check\` refuses an index that \`tuf/v1\` does not list. To publish it, on this branch:"
             echo
             echo "1. optionally lower \`rollout\` of the new versions;"
             echo "2. \`cargo xtask index check updates/v1 --base origin/main\`;"

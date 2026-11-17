@@ -977,6 +977,9 @@ fn main() -> anyhow::Result<()> {
                 },
         } => {
             let dir = index_dir(dir);
+            if let Some(version) = tag.strip_prefix('v').and_then(|v| Version::parse(v).ok()) {
+                xtask::index::check_tag_root(&dir, &version)?;
+            }
             let added = xtask::index::add(
                 &dir,
                 channel,
