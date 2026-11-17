@@ -804,6 +804,9 @@ enum ExtCommand {
         /// Directory with `v<version>/openncalayer-firefox-<version>.xpi` and `SHA256SUMS`.
         #[arg(long)]
         assets: std::path::PathBuf,
+        /// The repository the releases belong to, `owner/name`.
+        #[arg(long)]
+        repo: String,
         /// The file to write.
         #[arg(long)]
         out: std::path::PathBuf,
@@ -867,9 +870,10 @@ fn main() -> anyhow::Result<()> {
                 ExtCommand::Updates {
                     releases,
                     assets,
+                    repo,
                     out,
                 },
-        } => xtask::ext_updates::write(releases.as_deref(), &assets, &out),
+        } => xtask::ext_updates::write(releases.as_deref(), &assets, &repo, &out),
         Command::Ext {
             command: ExtCommand::Build,
         } => {

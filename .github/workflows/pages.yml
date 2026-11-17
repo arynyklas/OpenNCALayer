@@ -312,7 +312,7 @@ jobs:
           assets="$RUNNER_TEMP/firefox"
           mkdir -p "$assets"
           releases="$RUNNER_TEMP/site/releases.jsonl"
-          args=(--assets "$assets" --out _site/firefox/updates.json)
+          args=(--assets "$assets" --repo "$GITHUB_REPOSITORY" --out _site/firefox/updates.json)
           if [ -f "$releases" ]; then
             args+=(--releases "$releases")
             for tag in $(jq -r 'select(.draft == false and .prerelease == false and (.tag_name | test("^v[0-9]+[.][0-9]+[.][0-9]+$"))) | select(any(.assets[]; .name | test("^openncalayer-firefox-.*[.]xpi$"))) | .tag_name' "$releases"); do

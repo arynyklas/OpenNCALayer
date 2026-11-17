@@ -9,6 +9,7 @@
 //! checksum of the downloaded file.
 
 use std::fs::{self, File};
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, bail, ensure};
@@ -21,9 +22,6 @@ use crate::registry::inputs::{Release, read_releases};
 
 /// The first release whose `.xpi` is offered for updating.
 pub const FIRST_VERSION: Version = Version::new(0, 1, 1);
-
-/// Where the add-on's releases are downloaded from.
-const DOWNLOAD_BASE: &str = "https://github.com/arynyklas/OpenNCALayer/releases/download";
 
 /// The AMO signature file inside a signed `.xpi`.
 const SIGNATURE: &str = "META-INF/mozilla.rsa";
@@ -46,18 +44,21 @@ struct Update {
 }
 
 /// Writes the update manifest for `releases` (a JSON Lines list as `gh api` gives it; `None`
-/// when it could not be read) to `out`, using the files under `assets`.
+/// when it could not be read) to `out`, using the files under `assets`. Links point at the
+/// releases of `repo` (`owner/name`).
+///
+/// A release whose files are unusable (corrupt zip, `SHA256SUMS` missing, without a line for
+/// the `.xpi` or with another checksum) is left out with a `::warning::` line.
 ///
 /// # Errors
 ///
-/// If the release list is unreadable, a downloaded `.xpi` is not a zip, its `SHA256SUMS` has
-/// no line for it or a different checksum, or `out` cannot be written.
-pub fn write(releases: Option<&Path>, assets: &Path, out: &Path) -> anyhow::Result<()> {
+/// If the release list is malformed or `out` cannot be written.
+pub fn write(releases: Option<&Path>, assets: &Path, repo: &str, out: &Path) -> anyhow::Result<()> {
     let releases = match releases {
         Some(path) => read_releases(path)?,
         None => Vec::new(),
     };
-    let updates = updates(&releases, assets)?;
+    let updates = updates(&releases, assets, repo);
     let manifest = Manifest {
         addons: [(FIREFOX_EXTENSION_ID, Addon { updates })].into(),
     };
@@ -70,7 +71,7 @@ pub fn write(releases: Option<&Path>, assets: &Path, out: &Path) -> anyhow::Resu
 }
 
 /// The signed releases, oldest first.
-fn updates(releases: &[Release], assets: &Path) -> anyhow::Result<Vec<Update>> {
+fn updates(releases: &[Release], assets: &Path, repo: &str) -> Vec<Update> {
     let mut candidates: Vec<&Release> = releases
         .iter()
         .filter(|r| !r.prerelease && r.version.pre.is_empty() && r.version >= FIRST_VERSION)
@@ -78,34 +79,50 @@ fn updates(releases: &[Release], assets: &Path) -> anyhow::Result<Vec<Update>> {
     candidates.sort_by(|a, b| a.version.cmp(&b.version));
     let mut updates = Vec::new();
     for release in candidates {
-        let version = &release.version;
-        let name = format!("openncalayer-firefox-{version}.xpi");
-        let dir = assets.join(format!("v{version}"));
-        let xpi = dir.join(&name);
-        if !xpi.is_file() {
-            continue;
+        match update(&release.version, assets, repo) {
+            Ok(Some(update)) => updates.push(update),
+            Ok(None) => {}
+            Err(e) => println!(
+                "::warning::v{}: left out of the Firefox update manifest: {e:#}",
+                release.version
+            ),
         }
-        if !is_signed(&xpi)? {
-            continue;
-        }
-        let sums = fs::read_to_string(dir.join("SHA256SUMS"))
-            .with_context(|| format!("reading SHA256SUMS of v{version}"))?;
-        let listed = checksum_of(&sums, &name)
-            .with_context(|| format!("SHA256SUMS of v{version} has no line for {name}"))?;
-        let actual = hex(&Sha256::digest(
-            fs::read(&xpi).with_context(|| format!("reading {}", xpi.display()))?,
-        ));
-        ensure!(
-            listed == actual,
-            "{name}: SHA256SUMS says {listed}, the file is {actual}"
-        );
-        updates.push(Update {
-            version: version.to_string(),
-            update_link: format!("{DOWNLOAD_BASE}/v{version}/{name}"),
-            update_hash: format!("sha256:{actual}"),
-        });
     }
-    Ok(updates)
+    updates
+}
+
+/// The entry of `version`, `None` when it has no downloaded or no signed `.xpi`.
+fn update(version: &Version, assets: &Path, repo: &str) -> anyhow::Result<Option<Update>> {
+    let name = format!("openncalayer-firefox-{version}.xpi");
+    let dir = assets.join(format!("v{version}"));
+    let xpi = dir.join(&name);
+    if !xpi.is_file() || !is_signed(&xpi)? {
+        return Ok(None);
+    }
+    let sums = fs::read_to_string(dir.join("SHA256SUMS")).context("reading SHA256SUMS")?;
+    let listed = checksum_of(&sums, &name)?;
+    let mut file = File::open(&xpi).with_context(|| format!("opening {}", xpi.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buffer)
+            .with_context(|| format!("reading {}", xpi.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    let actual = hex(&hasher.finalize());
+    ensure!(
+        listed == actual,
+        "{name}: SHA256SUMS says {listed}, the file is {actual}"
+    );
+    Ok(Some(Update {
+        version: version.to_string(),
+        update_link: format!("https://github.com/{repo}/releases/download/v{version}/{name}"),
+        update_hash: format!("sha256:{actual}"),
+    }))
 }
 
 fn is_signed(xpi: &Path) -> anyhow::Result<bool> {
@@ -191,9 +208,11 @@ mod tests {
         path
     }
 
+    const REPO: &str = "o/r";
+
     fn run(dir: &Path, releases: Option<&Path>) -> serde_json::Value {
         let out = dir.join("firefox/updates.json");
-        write(releases, &dir.join("assets"), &out).unwrap();
+        write(releases, &dir.join("assets"), REPO, &out).unwrap();
         serde_json::from_str(&fs::read_to_string(out).unwrap()).unwrap()
     }
 
@@ -214,12 +233,12 @@ mod tests {
             serde_json::json!([
                 {
                     "version": "0.1.1",
-                    "update_link": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.1/openncalayer-firefox-0.1.1.xpi",
+                    "update_link": "https://github.com/o/r/releases/download/v0.1.1/openncalayer-firefox-0.1.1.xpi",
                     "update_hash": format!("sha256:{s1}"),
                 },
                 {
                     "version": "0.1.2",
-                    "update_link": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/openncalayer-firefox-0.1.2.xpi",
+                    "update_link": "https://github.com/o/r/releases/download/v0.1.2/openncalayer-firefox-0.1.2.xpi",
                     "update_hash": format!("sha256:{s2}"),
                 },
             ])
@@ -269,18 +288,51 @@ mod tests {
     }
 
     #[test]
-    fn a_checksum_that_differs_from_the_file_is_an_error() {
+    fn a_bad_release_is_skipped_and_the_others_are_listed() {
         let dir = tempfile::tempdir().unwrap();
         let assets = dir.path().join("assets");
-        download(&assets, "0.1.1", true);
+        download(&assets, "0.1.1", true); // checksum mismatch
         fs::write(
             assets.join("v0.1.1/SHA256SUMS"),
             format!("{}  openncalayer-firefox-0.1.1.xpi\n", "a".repeat(64)),
         )
         .unwrap();
-        let list = releases(dir.path(), &[("v0.1.1", false, false)]);
+        download(&assets, "0.1.2", true); // no SHA256SUMS
+        fs::remove_file(assets.join("v0.1.2/SHA256SUMS")).unwrap();
+        download(&assets, "0.1.3", true); // no line for the xpi
+        fs::write(assets.join("v0.1.3/SHA256SUMS"), "").unwrap();
+        download(&assets, "0.1.4", true); // corrupt zip
+        fs::write(
+            assets.join("v0.1.4/openncalayer-firefox-0.1.4.xpi"),
+            b"not a zip",
+        )
+        .unwrap();
+        let good = download(&assets, "0.1.5", true);
+        let list = releases(
+            dir.path(),
+            &[
+                ("v0.1.1", false, false),
+                ("v0.1.2", false, false),
+                ("v0.1.3", false, false),
+                ("v0.1.4", false, false),
+                ("v0.1.5", false, false),
+            ],
+        );
+        let manifest = run(dir.path(), Some(&list));
+        let updates = manifest["addons"][FIREFOX_EXTENSION_ID]["updates"]
+            .as_array()
+            .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0]["version"], "0.1.5");
+        assert_eq!(updates[0]["update_hash"], format!("sha256:{good}"));
+    }
+
+    #[test]
+    fn a_malformed_release_list_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let list = dir.path().join("releases.jsonl");
+        fs::write(&list, "[1]\n").unwrap();
         let out = dir.path().join("u.json");
-        let error = write(Some(&list), &assets, &out).unwrap_err();
-        assert!(error.to_string().contains("SHA256SUMS says"), "{error}");
+        assert!(write(Some(&list), dir.path(), REPO, &out).is_err());
     }
 }
