@@ -4668,10 +4668,6 @@ dependencies = [
 [[package]]
 name = "oncl-win7shim-combase"
 version = "0.1.1"
-dependencies = [
- "oncl-testkit",
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "oncl-win7shim-winrt-error"
