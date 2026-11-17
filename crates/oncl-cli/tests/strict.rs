@@ -402,14 +402,17 @@ fn closed_stdout_during_extraction_is_failure_not_success() {
     ];
     args.extend(common(&w));
     assert_eq!(run(&args, b"").status.code(), Some(0));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_oncl"))
+    // The read end is closed before the child starts, so its first write to stdout fails
+    // whatever the scheduling (closing it after `spawn` raced the child's write).
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let child = Command::new(env!("CARGO_BIN_EXE_oncl"))
         .args(["extract", "--input", path(&attached), "--output", "-"])
         .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
+        .stdout(writer)
         .stderr(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    drop(child.stdout.take());
     let result = child.wait_with_output().unwrap();
     assert_no_secret(&result);
     assert_eq!(result.status.code(), Some(1), "{result:?}");
