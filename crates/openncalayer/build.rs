@@ -1,12 +1,14 @@
 //! Gives the program the git commit it is built from (`ONCL_GIT_COMMIT`, `unknown` outside
-//! a git checkout), for the About window, and embeds the built-in modules' WebAssembly
-//! (`$OUT_DIR/builtins.rs`): taken from `ONCL_BUILTINS_DIR` if it is set, else built.
+//! a git checkout), for the About window, embeds the built-in modules' WebAssembly
+//! (`$OUT_DIR/builtins.rs`): taken from `ONCL_BUILTINS_DIR` if it is set, else built, and on
+//! Windows embeds the application manifest ([`embed_manifest`]).
 
 use std::path::Path;
 use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    embed_manifest();
     let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     if let Err(e) = oncl_builtins_build::embed(&workspace) {
         panic!("the built-in modules: {e}");
@@ -28,6 +30,29 @@ fn main() {
             println!("cargo:rerun-if-changed={path}");
         }
     }
+}
+
+/// The program stays a console program (shells wait for it and get its output and exit
+/// code), and its manifest asks Windows 11 24H2 and later not to allocate a console when
+/// nothing started it from one (`consoleAllocationPolicy` `detached`): the Start menu
+/// shortcut, the autostart entry and Velopack's restart start it without a console window.
+/// Older Windows ignore the setting. The MSVC linker writes the `RT_MANIFEST` resource
+/// itself (`/MANIFEST:EMBED`) and adds the default `asInvoker` trust info.
+fn embed_manifest() {
+    let manifest = "windows/openncalayer.manifest";
+    println!("cargo:rerun-if-changed={manifest}");
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").is_ok_and(|os| os == "windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").is_ok_and(|env| env == "msvc");
+    if !windows_msvc {
+        return;
+    }
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(manifest);
+    let bin = "openncalayer";
+    println!("cargo:rustc-link-arg-bin={bin}=/MANIFEST:EMBED");
+    println!(
+        "cargo:rustc-link-arg-bin={bin}=/MANIFESTINPUT:{}",
+        path.display()
+    );
 }
 
 /// The trimmed output of `git <args>`, if it succeeds.
