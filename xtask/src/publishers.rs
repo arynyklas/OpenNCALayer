@@ -443,12 +443,14 @@ pub struct Registry {
 
 impl Registry {
     /// The registry in `dir` (`publishers/`): every directory in it is a publisher with its
-    /// `publisher.toml`. No directory is an empty registry.
+    /// `publisher.toml`; the only other entry allowed is a `README.md` file. No directory is
+    /// an empty registry.
     ///
     /// # Errors
     ///
-    /// If a directory cannot be read, a publisher's file is missing or breaks a rule, or the
-    /// publishers break a rule between them ([`Registry::new`]).
+    /// If a directory cannot be read, an entry is neither a publisher's directory nor
+    /// `README.md`, a publisher's file is missing or breaks a rule, or the publishers break a
+    /// rule between them ([`Registry::new`]).
     pub fn read(dir: &Path) -> anyhow::Result<Registry> {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -463,7 +465,17 @@ impl Registry {
             .collect::<Result<_, _>>()
             .with_context(|| format!("reading {}", dir.display()))?;
         paths.sort();
-        for path in paths.into_iter().filter(|p| p.is_dir()) {
+        for path in paths {
+            if !path.is_dir() {
+                if path.file_name().is_some_and(|n| n == "README.md") && path.is_file() {
+                    continue;
+                }
+                bail!(
+                    "{} is not a publisher's directory: {} holds only those and README.md",
+                    path.display(),
+                    dir.display()
+                );
+            }
             let dir_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -620,8 +632,9 @@ impl Registry {
     }
 
     /// The owner's `indexes` against the active publishers: no plugin of an index is under a
-    /// publisher's prefix, and no module or bundle a publisher claims is served by a port,
-    /// unless the publisher supersedes that port.
+    /// publisher's prefix, no module or bundle a publisher claims is served by a port unless
+    /// the publisher supersedes that port, and every port a publisher supersedes is a plugin
+    /// of some index (its plugin id is under the publisher's prefix: [`parse_publisher`]).
     ///
     /// # Errors
     ///
@@ -663,6 +676,19 @@ impl Registry {
                             port.id
                         );
                     }
+                }
+            }
+        }
+        for p in self.active() {
+            for port in p.supersedes.keys() {
+                let listed = indexes
+                    .iter()
+                    .any(|index| index.plugins.iter().any(|plugin| plugin.id == *port));
+                if !listed {
+                    bail!(
+                        "{} supersedes {port}, which is no plugin of the owner's indexes",
+                        p.name
+                    );
                 }
             }
         }
@@ -944,9 +970,43 @@ mod tests {
             "io.github.arynyklas.openncalayer.port.market".to_owned(),
             "kz.ecc.market".to_owned(),
         );
-        Registry::new(vec![p])
+        Registry::new(vec![p.clone()])
+            .unwrap()
+            .check_indexes(std::slice::from_ref(&index))
+            .unwrap();
+        // A port that no index has cannot be superseded.
+        p.supersedes.insert(
+            "io.github.arynyklas.openncalayer.port.gone".to_owned(),
+            "kz.ecc.gone".to_owned(),
+        );
+        let err = Registry::new(vec![p])
             .unwrap()
             .check_indexes(&[index])
-            .unwrap();
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no plugin of the owner's indexes"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn the_registry_directory_holds_publishers_and_a_readme_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let ecc = dir.path().join("ecc");
+        fs::create_dir_all(&ecc).unwrap();
+        fs::write(
+            ecc.join(FILE_NAME),
+            toml_of("ecc", "kz.ecc.", "kz.ecc.Signer", 7),
+        )
+        .unwrap();
+        fs::write(dir.path().join("README.md"), "the publishers").unwrap();
+        let registry = Registry::read(dir.path()).unwrap();
+        assert_eq!(registry.publishers().count(), 1);
+        fs::write(dir.path().join("ecc.toml"), "name = \"ecc\"").unwrap();
+        let err = Registry::read(dir.path()).unwrap_err();
+        assert!(
+            err.to_string().contains("not a publisher's directory"),
+            "{err}"
+        );
     }
 }
