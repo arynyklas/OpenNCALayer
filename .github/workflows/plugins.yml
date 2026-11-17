@@ -6,8 +6,8 @@ name: Plugins
 # without the Latest flag (the core stays the latest release) with THIRD-PARTY.txt (the
 # licences of the crates and the fonts the ports embed, checked fresh first), SHA256SUMS
 # and a build provenance attestation of every file. Then a pull request adds the
-# packages to the beta index, unsigned: the maintainer signs it locally
-# (`cargo xtask sign`), never CI. Stable gets a plugin version only by hand
+# packages to the beta index: the maintainer signs the TUF targets over it locally
+# (`cargo xtask tuf update`), never CI. Stable gets a plugin version only by hand
 # (`cargo xtask index add-plugin --channel stable`), once it has proved itself in beta and
 # its port's registry.toml says `conformance = "confirmed"`.
 #
@@ -149,21 +149,20 @@ jobs:
               echo "- \`$(basename "$package")\`"
             done
             echo
-            echo "The index is unsigned, and the index check refuses an unsigned one. To publish it, on this branch:"
+            echo "The index check refuses an index that \`tuf/v1\` does not list. To publish it, on this branch:"
             echo
             echo "1. optionally lower \`rollout\` of the new versions;"
-            echo "2. \`cargo xtask sign updates/v1/beta.json --key <secret key>\`;"
-            echo "3. \`cargo xtask index check updates/v1 --base origin/main\`;"
-            echo "4. once the TUF repository exists (\`tuf/v1\` in the tree): \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over this index (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
-            echo "5. commit the index, its \`.minisig\` file and \`tuf/v1\` and push: the index check runs on that push;"
-            echo "6. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
+            echo "2. \`cargo xtask index check updates/v1 --base origin/main\`;"
+            echo "3. \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over this index (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
+            echo "4. commit the index and \`tuf/v1\` and push: the index check runs on that push;"
+            echo "5. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
             echo
             echo "Stable gets a plugin version by hand, once it has proved itself in beta and its port's \`registry.toml\` says \`conformance = \"confirmed\"\`: \`cargo xtask index add-plugin --channel stable\`."
           } > "$RUNNER_TEMP/index-pr.md"
       - name: Open the index pull request
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          # The index and the removal of its stale signature.
+          # The index.
           add-paths: updates/v1
           branch: updates/${{ github.ref_name }}
           base: main
