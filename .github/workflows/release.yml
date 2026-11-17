@@ -821,7 +821,7 @@ jobs:
           persist-credentials: false
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      # `index add` refuses a tag without the TUF trust root, `crates/oncl-update/keys/root.json`,
+      # `index add` and `index check` refuse a tag without the TUF trust root, `crates/oncl-update/keys/root.json`,
       # which the client embeds (without it its updater is off): a build without one cannot
       # update itself, so no installation may be moved onto it. Such a release (before the
       # maintainer's keys exist) gets no index pull request, with a notice.
@@ -861,7 +861,7 @@ jobs:
           {
             echo "Adds $VERSION to $subject (\`cargo xtask index add\`, rollout 100 %): a release goes into \`stable\` and \`beta\`, a pre-release into \`beta\` only."
             echo
-            echo "The index check refuses an index that \`tuf/v1\` does not list. To publish them, on this branch:"
+            echo "\`tuf check\` refuses an index that \`tuf/v1\` does not list. To publish them, on this branch:"
             echo
             echo "1. optionally lower \`rollout\` of the new version;"
             echo "2. \`cargo xtask index check updates/v1 --base origin/main\`;"

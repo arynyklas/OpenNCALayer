@@ -139,10 +139,14 @@ impl Repo {
 fn empty_repo() -> Repo {
     let repo = tempfile::tempdir().unwrap();
     git(repo.path(), &["init", "--quiet"]);
-    git(
-        repo.path(),
-        &["commit", "--quiet", "--allow-empty", "-m", "start"],
-    );
+    let root = repo.path().join(index::TAG_ROOT);
+    fs::create_dir_all(root.parent().unwrap()).unwrap();
+    fs::write(&root, "{}").unwrap();
+    git(repo.path(), &["add", "."]);
+    git(repo.path(), &["commit", "--quiet", "-m", "start"]);
+    for tag in [TAG, NEXT_TAG, STABLE_TAG] {
+        git(repo.path(), &["tag", tag]);
+    }
     let dir = repo.path().join("updates").join("v1");
     Repo { repo, dir }
 }
@@ -694,4 +698,32 @@ fn no_index_published_yet_passes() {
     fs::remove_dir_all(repo.path().join("updates")).unwrap();
     let result = index::check(&dir, &options(Some("HEAD")), None);
     assert!(error_text(result).contains("removed here"));
+}
+
+#[test]
+fn a_version_tagged_without_the_tuf_root_is_refused() {
+    let repo = empty_repo();
+    // Retag NEXT_TAG on a commit without the root.
+    let root = repo.repo.path().join(index::TAG_ROOT);
+    fs::remove_file(&root).unwrap();
+    git(repo.repo.path(), &["add", "--all", "."]);
+    git(repo.repo.path(), &["commit", "--quiet", "-m", "no root"]);
+    git(repo.repo.path(), &["tag", "--force", NEXT_TAG]);
+
+    // `index add` refuses it, the check too (against a base without the index).
+    let assets = release_assets(NEXT_TAG, &[Flavor::WinX64], None);
+    let result = index::check_tag_root(repo.path(), &version(NEXT_TAG));
+    assert!(error_text(result).contains("has no crates/oncl-update/keys/root.json"));
+    add(repo.path(), NEXT_TAG, assets.path());
+    let result = index::check(repo.path(), &options(Some("HEAD")), None);
+    let text = error_text(result);
+    assert!(
+        text.contains("has no crates/oncl-update/keys/root.json"),
+        "{text}"
+    );
+
+    // A tag with the root passes; a tag that is not there is refused.
+    index::check_tag_root(repo.path(), &version(TAG)).unwrap();
+    let result = index::check_tag_root(repo.path(), &version("v0.3.0"));
+    assert!(error_text(result).contains("there is no tag v0.3.0"));
 }

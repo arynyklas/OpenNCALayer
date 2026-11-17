@@ -844,6 +844,22 @@ pub fn check(
             None => (None, index.core.iter().map(|r| r.version.clone()).collect()),
         };
 
+        // A version an installation may be moved onto must be able to update itself again.
+        if options.base.is_some() {
+            for release in &index.core {
+                let changed = match &base {
+                    Some((_, base_index)) => base_index
+                        .release(&release.version)
+                        .is_none_or(|old| old.flavors != release.flavors),
+                    None => true,
+                };
+                if changed {
+                    check_tag_root(dir, &release.version)
+                        .with_context(|| format!("{} is refused", path.display()))?;
+                }
+            }
+        }
+
         if let Some(remote) = remote {
             for url in asset_urls(&index) {
                 let status = remote.head(url)?;
@@ -951,4 +967,72 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> anyhow::Result<Output> {
         .args(args)
         .output()
         .with_context(|| format!("running git {}", args.join(" ")))
+}
+
+/// Where a build's TUF trust root is, from the workspace root: what the client embeds.
+pub const TAG_ROOT: &str = "crates/oncl-update/keys/root.json";
+
+/// Refuses `version` unless its tag `v<version>`, in the git repository of `dir`, holds
+/// [`TAG_ROOT`]: an installation moved onto it must be able to verify later indexes. A
+/// build without the root has its updater off for good.
+///
+/// # Errors
+///
+/// The tag is missing or has no trust root.
+pub fn check_tag_root(dir: &Path, version: &Version) -> anyhow::Result<()> {
+    let tag = format!("v{version}");
+    // The index directory may not exist yet (the first index of a channel).
+    let (dir, _) = existing_ancestor(dir)?;
+    let dir = dir.as_path();
+    let commit = format!("refs/tags/{tag}^{{commit}}");
+    if !git(dir, &["rev-parse", "--verify", "--quiet", &commit])?
+        .status
+        .success()
+    {
+        bail!("{version}: there is no tag {tag} (fetch the tags)");
+    }
+    let object = format!("refs/tags/{tag}:{TAG_ROOT}");
+    if !git(dir, &["cat-file", "-e", &object])?.status.success() {
+        bail!(
+            "{version}: {tag} has no {TAG_ROOT}: its build cannot update itself, so no installation may be moved onto it"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid(generated: OffsetDateTime, expires: OffsetDateTime) -> Vec<u8> {
+        use time::format_description::well_known::Rfc3339;
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": 1,
+            "channel": "beta",
+            "seq": 1,
+            "generated": generated.format(&Rfc3339).unwrap(),
+            "expires": expires.format(&Rfc3339).unwrap(),
+            "core": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_index_over_the_size_limit_is_refused() {
+        let now = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        let mut bytes = valid(now, now + MAX_AGE);
+        read_valid(&bytes, Channel::Beta, now).unwrap();
+        bytes.resize(MAX_INDEX_LEN as usize + 1, b' ');
+        let error = read_valid(&bytes, Channel::Beta, now).unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+    }
+
+    #[test]
+    fn an_index_older_than_max_age_is_refused_whatever_its_expires() {
+        let generated = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        let bytes = valid(generated, generated + time::Duration::days(365));
+        read_valid(&bytes, Channel::Beta, generated + time::Duration::days(29)).unwrap();
+        let error = read_valid(&bytes, Channel::Beta, generated + MAX_AGE).unwrap_err();
+        assert!(error.to_string().contains("expired"), "{error}");
+    }
 }
