@@ -120,7 +120,7 @@ openncalayer run        # запустить сервер со значком; `
 | `git` в `PATH` | тесты `xtask` и сборки встроенных модулей | `git --version` |
 | JDK, `keytool` в `PATH` | тест JKS в `oncl-cli` | `keytool -help` |
 | `python` в `PATH` | вспомогательные скрипты тестов (без сторонних пакетов) | `python --version` |
-| `certutil` из NSS (только Linux) | тест `oncl-trust` | `certutil -H` |
+| `certutil` из NSS (только Linux; пакет `libnss3-tools` или `nss-tools`) | тесты записи сертификата в базы браузеров в `oncl-trust` | `certutil -H` |
 | Отдельное окружение Python | независимая проверка подписей: pyHanko, lxml, cryptography, asn1crypto, gostcrypto | см. ниже |
 | Тестовые данные NCANode | файлы для тестов | `cargo xtask fetch-fixtures` |
 
@@ -310,7 +310,7 @@ cargo xtask tuf check --no-timestamp --base origin/main
 
 ### Клиент демо-страницы
 
-`web/demo/vendor/ncalayer-client.js` взят без изменений из npm-пакета `ncalayer-js-client@1.6.1` (файл `package/ncalayer-client.js`, лицензия MIT). Тест `demo_assets_served` сверяет sha256 файла, который отдаёт сервер. Лицензия клиента лежит рядом: `/demo/vendor/LICENSE`.
+`web/demo/vendor/ncalayer-client.js` взят без изменений из npm-пакета `ncalayer-js-client@1.6.1` (файл `package/ncalayer-client.js`, лицензия MIT, sha256 `bdf2015c3e422eed70ccf38eef3246af67a0d38639e6b70fe6b8655a2fa03489`). Тест `demo_assets_served` сверяет sha256 файла, который отдаёт сервер. Лицензия клиента лежит рядом: `/demo/vendor/LICENSE`.
 
 ## Форки сторонних крейтов
 
