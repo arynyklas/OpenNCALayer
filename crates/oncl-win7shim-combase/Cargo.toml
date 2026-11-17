@@ -10,7 +10,3 @@ publish.workspace = true
 
 [lib]
 crate-type = ["cdylib"]
-
-[target.'cfg(windows)'.dev-dependencies]
-oncl-testkit.workspace = true
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_LibraryLoader"] }

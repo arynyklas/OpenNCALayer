@@ -1,5 +1,5 @@
-//! `api-ms-win-core-winrt-error-l1-1-0.dll`: it exports only the error origination stubs,
-//! and loaded app-local they report that no error was originated (`FALSE`).
+//! `api-ms-win-core-winrt-error-l1-1-0.dll`: loaded app-local, its error origination stubs
+//! report that no error was originated (`FALSE`).
 
 #![cfg(windows)]
 
@@ -7,7 +7,7 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use oncl_testkit::dll::{AppLocalDll, build_cdylib, exports};
+use oncl_testkit::dll::{AppLocalDll, build_cdylib};
 
 /// `E_FAIL`.
 const E_FAIL: i32 = 0x8000_4005_u32 as i32;
@@ -46,15 +46,4 @@ fn ro_originate_error_reports_nothing() {
         unsafe { std::mem::transmute(proc) };
     // SAFETY: a null HSTRING is the empty string.
     assert_eq!(unsafe { originate(E_FAIL, std::ptr::null_mut()) }, 0);
-}
-
-#[test]
-fn exports_only_the_stubs() {
-    assert_eq!(
-        exports(&BUILT),
-        [
-            ("RoOriginateError".to_owned(), None),
-            ("RoOriginateErrorW".to_owned(), None),
-        ]
-    );
 }

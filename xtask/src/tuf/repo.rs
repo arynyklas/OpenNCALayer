@@ -246,7 +246,7 @@ pub fn write_new(dir: &Path, path: &str, bytes: &[u8]) -> anyhow::Result<PathBuf
             full.display()
         );
     }
-    crate::sign::write_new(&full, bytes, false)?;
+    crate::files::write_new(&full, bytes, false)?;
     Ok(full)
 }
 

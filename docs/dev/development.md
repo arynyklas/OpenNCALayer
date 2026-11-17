@@ -1,6 +1,6 @@
 # Разработка и сборка
 
-Сборка из исходников, запуск, тесты и проверки перед отправкой изменений. Выпуск версии и подпись индекса — в [`release.md`](release.md); встраивание SDK — в [`sdk-overview.md`](sdk-overview.md) и [`sdk.md`](sdk.md).
+Сборка из исходников, запуск, тесты и проверки перед отправкой изменений. Выпуск версии и публикация индекса — в [`release.md`](release.md); встраивание SDK — в [`sdk-overview.md`](sdk-overview.md) и [`sdk.md`](sdk.md).
 
 ## Сборка и запуск
 
@@ -113,7 +113,7 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo deny check
 cargo xtask licenses --check   # сторонние лицензии окна «О программе» свежие
-# при изменении updates/ или tuf/ (проверки индексов и репозитория TUF, `docs/dev/release.md`, разделы 4 и 7г):
+# при изменении updates/ или tuf/ (проверки индексов и репозитория TUF, `docs/dev/release.md`, разделы 3 и 10):
 cargo xtask index check updates/v1 --offline --base origin/main
 cargo xtask tuf check --no-timestamp --base origin/main
 ```
