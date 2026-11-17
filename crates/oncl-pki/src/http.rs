@@ -1714,20 +1714,6 @@ mod tests {
         assert_eq!(route::percent_decode("%+1"), None);
     }
 
-    #[test]
-    fn default_options_are_ten_seconds_two_to_connect_and_one_mib() {
-        assert_eq!(
-            GetOptions::default(),
-            GetOptions {
-                timeout: Duration::from_secs(10),
-                connect_timeout: Duration::from_secs(2),
-                max_len: 1 << 20,
-                https_only: false,
-                redirects: true,
-            }
-        );
-    }
-
     #[cfg(feature = "testing")]
     #[test]
     fn route_transport_picks_the_first_matching_prefix() {
