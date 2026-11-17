@@ -69,9 +69,10 @@ pub fn verify_published<F: Fetcher>(
     ];
     for path in trusted.targets().targets.keys() {
         let bytes = client
-            .download_target(&trusted, path, MAX_TARGET, now)
+            .download_target(&trusted, path.as_str(), MAX_TARGET, now)
             .map_err(|e| anyhow::anyhow!("the target {path}: {e}"))?;
         let name = path
+            .as_str()
             .strip_prefix("indexes/")
             .and_then(|n| n.strip_suffix(".json"))
             .ok_or_else(|| anyhow::anyhow!("{path} is not an update index"))?;

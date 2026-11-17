@@ -39,7 +39,7 @@ use super::error::{Role, TufError};
 use super::fetch::{Fetcher, Response};
 use super::layout;
 use super::model::{
-    Digest, Envelope, MetaFile, Root, Snapshot, TARGETS_META, Target, Targets, Timestamp,
+    Digest, Envelope, MetaFile, Profile, Root, Snapshot, TARGETS_META, Target, Targets, Timestamp,
     ensure_fresh,
 };
 use super::store::{SnapshotState, Store, TimestampState, TrustState};
@@ -531,7 +531,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         let file = Envelope::parse(&body, self.limits.targets, TARGETS_META)?;
         // 5.6.3: signed by a threshold of the targets keys of the trusted root.
         verify_role(&file, root, Role::Targets, "the targets")?;
-        let targets = Targets::from_signed(&file.signed)?;
+        let targets = Targets::from_signed(&file.signed, Profile::Legacy)?;
         // 5.6.4: the version the snapshot lists.
         if targets.version != listed.version {
             return Err(TufError::VersionMismatch {
@@ -583,31 +583,32 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
     ) -> Result<Vec<u8>, TufError> {
         trusted.ensure_fresh(now)?;
         // 5.7.1-5.7.2: the metadata of the target.
-        let target = trusted
-            .target(path)
+        let (path, target) = trusted
+            .targets
+            .targets
+            .get_key_value(path)
             .ok_or_else(|| TufError::NoSuchTarget(path.to_owned()))?;
         if target.length > max_len {
             return Err(TufError::TargetTooLarge {
-                path: path.to_owned(),
+                path: path.to_string(),
                 len: target.length,
                 max: max_len,
             });
         }
         // 5.7.3: download up to the listed length, from the name with the hash ...
-        let stored = layout::target_file_path(path, &target.sha256)
-            .ok_or_else(|| TufError::NoSuchTarget(path.to_owned()))?;
+        let stored = layout::target_file_path(path, &target.sha256);
         let body = self.get_required(&stored, target.length)?;
         // ... and verify its length and hash.
         if body.len() as u64 != target.length {
             return Err(TufError::Length {
-                what: path.to_owned(),
+                what: path.to_string(),
                 expected: target.length,
                 actual: body.len() as u64,
             });
         }
         if Digest::of(&body) != target.sha256 {
             return Err(TufError::Hash {
-                what: path.to_owned(),
+                what: path.to_string(),
             });
         }
         Ok(body)
@@ -647,7 +648,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             return Err(TufError::NoSuchTarget(path.to_owned()));
         };
         verify_role(file, &root, Role::Targets, "the saved targets")?;
-        let targets = Targets::from_signed(&file.signed)?;
+        let targets = Targets::from_signed(&file.signed, Profile::Legacy)?;
         if targets.version != version {
             return Err(TufError::malformed(
                 "the saved targets",

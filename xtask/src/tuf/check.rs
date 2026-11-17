@@ -33,8 +33,8 @@ use anyhow::{Context, bail};
 use oncl_update::Channel;
 use oncl_update::tuf::ed25519::verify_role;
 use oncl_update::tuf::{
-    Digest, Envelope, Limits, MemoryStore, Role, Root, Snapshot, Targets, Timestamp, TufClient,
-    TufError, layout,
+    Digest, Envelope, Limits, MemoryStore, Profile, Role, Root, Snapshot, Targets, Timestamp,
+    TufClient, TufError, layout,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -229,8 +229,8 @@ fn verify_inner(
         Snapshot::from_signed(&snapshot_file.signed).map_err(|e| malformed(&snapshot_path, &e))?;
     let targets_path = layout::targets_path(last_targets);
     let targets_file = parse_file(dir, &targets_path, limits.targets)?;
-    let top_targets =
-        Targets::from_signed(&targets_file.signed).map_err(|e| malformed(&targets_path, &e))?;
+    let top_targets = Targets::from_signed(&targets_file.signed, Profile::Legacy)
+        .map_err(|e| malformed(&targets_path, &e))?;
     let top_timestamp = if listing.timestamp {
         let file = parse_file(dir, layout::TIMESTAMP_PATH, limits.timestamp)?;
         Some(
@@ -279,7 +279,7 @@ fn verify_inner(
             }
             for path in trusted.targets().targets.keys() {
                 client
-                    .download_target(&trusted, path, MAX_TARGET, client_now)
+                    .download_target(&trusted, path.as_str(), MAX_TARGET, client_now)
                     .map_err(|e| match e {
                         TufError::NotFound(_) => problem("missing-file", format!("{path}: {e}")),
                         TufError::Hash { .. } | TufError::Length { .. } => {
@@ -342,7 +342,8 @@ fn verify_inner(
         } else {
             let path = layout::targets_path(*version);
             match parse_file(dir, &path, limits.targets).and_then(|file| {
-                Targets::from_signed(&file.signed).map_err(|e| malformed(&path, &e))
+                Targets::from_signed(&file.signed, Profile::Legacy)
+                    .map_err(|e| malformed(&path, &e))
             }) {
                 Ok(t) => t,
                 Err(p) => {
@@ -352,9 +353,7 @@ fn verify_inner(
             }
         };
         for (target, entry) in &targets.targets {
-            if let Some(stored) = layout::target_file_path(target, &entry.sha256) {
-                listed.insert(stored);
-            }
+            listed.insert(layout::target_file_path(target, &entry.sha256));
         }
     }
     for stored in listing.target_files.difference(&listed) {
@@ -415,7 +414,8 @@ fn lower(
         .map_err(|e| malformed(&targets_path, &e))?;
     verify_role(&file, root, Role::Targets, &targets_path)
         .map_err(|e| malformed(&targets_path, &e))?;
-    let targets = Targets::from_signed(&file.signed).map_err(|e| malformed(&targets_path, &e))?;
+    let targets = Targets::from_signed(&file.signed, Profile::Legacy)
+        .map_err(|e| malformed(&targets_path, &e))?;
     if targets.version != last_targets {
         return Err(problem(
             "version-mismatch",
@@ -423,8 +423,7 @@ fn lower(
         ));
     }
     for (path, target) in &targets.targets {
-        let stored = layout::target_file_path(path, &target.sha256)
-            .ok_or_else(|| problem("malformed", format!("{path} is not a target path")))?;
+        let stored = layout::target_file_path(path, &target.sha256);
         let bytes = match fs::read(dir.join(&stored)) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -517,7 +516,7 @@ fn compare_indexes(index: &Path, targets: &Targets, problems: &mut Vec<Problem>)
     for channel in Channel::ALL {
         let target = format!("indexes/{}.json", channel.as_str());
         let file = index.join(format!("{}.json", channel.as_str()));
-        let listed = targets.targets.get(&target);
+        let listed = targets.targets.get(target.as_str());
         expected.insert(target.clone());
         match (fs::read(&file), listed) {
             (Ok(bytes), Some(t)) => {
@@ -555,7 +554,7 @@ fn compare_indexes(index: &Path, targets: &Targets, problems: &mut Vec<Problem>)
         }
     }
     for target in targets.targets.keys() {
-        if !expected.contains(target) {
+        if !expected.contains(target.as_str()) {
             problems.push(problem(
                 "unexpected-target",
                 format!("{target} is not an update index"),

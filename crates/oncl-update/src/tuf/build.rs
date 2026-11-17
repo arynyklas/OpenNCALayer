@@ -29,9 +29,10 @@ use super::error::{Role, TufError};
 use super::keys::PublicKey;
 use super::layout;
 use super::model::{
-    Digest, Envelope, Root, SPEC_VERSION, Snapshot, TARGETS_META, Targets, Timestamp,
+    Digest, Envelope, Profile, Root, SPEC_VERSION, Snapshot, TARGETS_META, Targets, Timestamp,
     format_expires,
 };
+use super::names::TargetPath;
 
 /// The largest file [`add_signatures`] reads.
 const MAX_FILE_LEN: u64 = 4 << 20;
@@ -101,7 +102,8 @@ pub fn root(version: u64, expires: OffsetDateTime, def: &RootDef) -> Result<Valu
 }
 
 /// The `signed` of a targets file over `files`, `(target path, content)`: each listed by
-/// its length and sha256. Paths are distinct and valid ([`super::model::valid_target_path`]).
+/// its length and sha256. Paths are distinct and valid ([`TargetPath`]); there are no
+/// delegations ([`Profile::Legacy`]).
 ///
 /// # Errors
 ///
@@ -131,7 +133,7 @@ pub fn targets(
         "expires": format_expires(expires)?,
         "targets": listed,
     });
-    Targets::from_signed(&signed)?;
+    Targets::from_signed(&signed, Profile::Legacy)?;
     Ok(signed)
 }
 
@@ -260,11 +262,12 @@ pub fn target_files(files: &[(&str, &[u8])]) -> Result<Vec<(String, Vec<u8>)>, T
     files
         .iter()
         .map(|(path, content)| {
-            layout::target_file_path(path, &Digest::of(content))
-                .map(|stored| (stored, content.to_vec()))
-                .ok_or_else(|| {
-                    TufError::malformed("targets", format!("{path:?} is not a valid target path"))
-                })
+            let path = TargetPath::parse(path)
+                .map_err(|e| TufError::malformed("targets", e.to_string()))?;
+            Ok((
+                layout::target_file_path(&path, &Digest::of(content)),
+                content.to_vec(),
+            ))
         })
         .collect()
 }
@@ -351,7 +354,7 @@ mod tests {
             ("indexes/beta.json", b"[]"),
         ];
         let targets_signed = targets(3, EXPIRES, files).unwrap();
-        let read = Targets::from_signed(&targets_signed).unwrap();
+        let read = Targets::from_signed(&targets_signed, Profile::Legacy).unwrap();
         assert_eq!(read.targets["indexes/beta.json"].length, 2);
         assert_eq!(read.targets["indexes/beta.json"].sha256, Digest::of(b"[]"));
 

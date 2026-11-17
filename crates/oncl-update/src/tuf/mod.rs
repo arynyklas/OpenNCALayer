@@ -6,8 +6,9 @@
 //! everything here is the authentication around them, and nothing in this module reads an
 //! index. The subset implemented, anything else is refused:
 //!
-//! - roles `root`, `timestamp`, `snapshot` and top-level `targets`; no delegations, no
-//!   mirrors, no path hash prefixes;
+//! - roles `root`, `timestamp`, `snapshot` and top-level `targets`; in the delegating
+//!   profile ([`Profile`]) one level of delegated roles of third-party publishers
+//!   ([`delegation`], [`names`]); no mirrors, no path hash prefixes;
 //! - Ed25519 keys and signatures only, sha256 only ([`keys`], [`ed25519`]);
 //! - consistent snapshots are required ([`layout`]);
 //! - signatures over the OLPC canonical JSON of the `signed` value, whatever it holds
@@ -29,24 +30,29 @@
 pub mod build;
 pub mod canonical;
 pub mod client;
+pub mod delegation;
 pub mod ed25519;
 mod error;
 pub mod fetch;
 pub mod keys;
 pub mod layout;
 pub mod model;
+pub mod names;
 pub mod store;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 
 pub use client::{Limits, Trusted, TufClient};
+pub use delegation::{DelegatedRole, Delegations, RefusedRole};
 pub use ed25519::SigningKey;
-pub use error::{Role, TufError};
+pub use error::{DelegationError, Role, TufError};
 pub use fetch::{Fetcher, HttpFetcher, MemoryFetcher, Response};
 pub use keys::{KeyId, PublicKey};
 pub use model::{
-    Digest, Envelope, MetaFile, RoleKeys, Root, Signature, Snapshot, Target, Targets, Timestamp,
+    Digest, Envelope, MetaFile, Profile, RoleKeys, Root, Signature, Snapshot, Target, Targets,
+    Timestamp,
 };
+pub use names::{NameError, NameKind, PathPattern, PublisherName, RoleName, TargetPath};
 pub use store::{FileStore, MemoryStore, SnapshotState, Store, TimestampState, TrustState};
 
 #[cfg(test)]
