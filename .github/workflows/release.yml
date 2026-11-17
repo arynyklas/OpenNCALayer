@@ -12,8 +12,8 @@ name: Release
 # by the `platform` jobs as workflow artifacts (`platform-*`), outside this release: no job
 # of this file publishes them, signs them or uploads them to a registry or a browser store.
 # Then a pull request adds the version to the update indexes (`updates/v1/<channel>.json`:
-# a pre-release to beta, a release to stable and beta), unsigned: the maintainer signs them
-# locally (`cargo xtask sign`), never CI.
+# a pre-release to beta, a release to stable and beta): the maintainer signs the TUF targets
+# over them locally (`cargo xtask tuf update`), never CI.
 #
 # Code signing runs only with its secrets, otherwise it is skipped with a notice:
 # Authenticode through SignPath (secret SIGNPATH_API_TOKEN, variables
@@ -821,21 +821,18 @@ jobs:
           persist-credentials: false
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
-      # `index add` refuses a tag without a trusted update key: a build without one cannot
-      # update itself, so no installation may be moved onto it. The tag needs both the TUF
-      # trust root, `crates/oncl-update/keys/root.json`, which the client of rc.2 and later
-      # embeds (without it its updater is off), and the minisign key `current.pub`, which the
-      # clients of rc.1 and before read the legacy indexes `updates/v1` with. Such a release
-      # (before the maintainer's keys exist) gets no index pull request, with a notice.
+      # `index add` refuses a tag without the TUF trust root, `crates/oncl-update/keys/root.json`,
+      # which the client embeds (without it its updater is off): a build without one cannot
+      # update itself, so no installation may be moved onto it. Such a release (before the
+      # maintainer's keys exist) gets no index pull request, with a notice.
       - name: The tag's update key
         id: key
         run: |
           git fetch --no-tags --depth 1 origin "refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
-          if git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/root.json" \
-            && git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/current.pub"; then
+          if git cat-file -e "refs/tags/$GITHUB_REF_NAME:crates/oncl-update/keys/root.json"; then
             echo "keyed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::$GITHUB_REF_NAME lacks crates/oncl-update/keys/root.json or crates/oncl-update/keys/current.pub: its build cannot update itself; it is not added to the update indexes"
+            echo "::notice::$GITHUB_REF_NAME lacks crates/oncl-update/keys/root.json: its build cannot update itself; it is not added to the update indexes"
             echo "keyed=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Download the release
@@ -864,24 +861,20 @@ jobs:
           {
             echo "Adds $VERSION to $subject (\`cargo xtask index add\`, rollout 100 %): a release goes into \`stable\` and \`beta\`, a pre-release into \`beta\` only."
             echo
-            echo "The indexes are unsigned, and the index check refuses an unsigned one. To publish them, on this branch:"
+            echo "The index check refuses an index that \`tuf/v1\` does not list. To publish them, on this branch:"
             echo
             echo "1. optionally lower \`rollout\` of the new version;"
-            echo "2. sign every index of this PR:"
-            for channel in "${channels[@]}"; do
-              echo "   - \`cargo xtask sign updates/v1/$channel.json --key <secret key>\`"
-            done
-            echo "3. \`cargo xtask index check updates/v1 --base origin/main\`;"
-            echo "4. once the TUF repository exists (\`tuf/v1\` in the tree): \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over these indexes (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
-            echo "5. commit the indexes, their \`.minisig\` files and \`tuf/v1\` and push: the index check runs on that push and refuses indexes that \`tuf/v1\` does not list;"
-            echo "6. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
+            echo "2. \`cargo xtask index check updates/v1 --base origin/main\`;"
+            echo "3. \`cargo xtask tuf update --keys <TUF key directory>\` signs the new targets and snapshot over these indexes (CI never signs with the offline keys), then \`cargo xtask tuf check --no-timestamp --base origin/main\`;"
+            echo "4. commit the indexes and \`tuf/v1\` and push: the index check runs on that push;"
+            echo "5. merge: GitHub Pages publishes \`updates/\` and \`tuf/v1/\`."
           } > "$RUNNER_TEMP/index-pr.md"
           echo "subject=$subject" >> "$GITHUB_OUTPUT"
       - name: Open the index pull request
         if: steps.key.outputs.keyed == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          # The indexes and the removal of their stale signatures.
+          # The indexes.
           add-paths: updates/v1
           branch: updates/${{ github.ref_name }}
           base: main

@@ -4,7 +4,6 @@ use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
 use oncl_update::{Channel, Version};
 use time::OffsetDateTime;
-use zeroize::Zeroizing;
 
 /// OpenNCALayer development tasks.
 #[derive(Parser)]
@@ -106,19 +105,6 @@ enum Command {
         /// guarantee, so that `oncl` accepts them (a size at or above it is refused).
         #[arg(long, default_value_t = xtask::platform_interop::cases::large::DEFAULT_LARGE_BYTES)]
         large_bytes: u64,
-    },
-    /// Sign an update index with minisign: writes `<index>.minisig` beside it, with the
-    /// trusted comment `channel=<channel>;seq=<seq>`. The password is read without echo.
-    #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
-    Sign {
-        #[command(subcommand)]
-        command: Option<SignCommand>,
-        /// The index, e.g. `updates/v1/beta.json`.
-        #[arg(required = true)]
-        index: Option<PathBuf>,
-        /// The encrypted secret key made by `sign keygen`.
-        #[arg(long, required = true)]
-        key: Option<PathBuf>,
     },
     /// Installers and update packages of a release (Velopack's `vpk` on the `PATH`, or
     /// `$VPK`); every command copies what is published into `--dist`.
@@ -300,23 +286,9 @@ enum RegistryCommand {
 }
 
 #[derive(Subcommand)]
-enum SignCommand {
-    /// Make the minisign key pair of the update index: the secret key encrypted with a
-    /// password (read without echo) and the public key. Refuses a directory where git could
-    /// commit the secret key.
-    Keygen {
-        /// The directory of the key pair, outside the repository (or git-ignored).
-        #[arg(long)]
-        out: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
 enum IndexCommand {
     /// Append a released version to the channel's index, from the release's downloaded
-    /// assets: sha256 and sizes of its packages, the next `seq`, 30 days of validity. The
-    /// result is unsigned. The tag must hold a trusted update key (a build without one
-    /// cannot update itself, so no installation may be moved onto it).
+    /// assets: sha256 and sizes of its packages, the next `seq`, 30 days of validity.
     Add {
         /// `stable` or `beta`.
         #[arg(long, value_parser = parse_channel)]
@@ -333,12 +305,9 @@ enum IndexCommand {
         /// The directory of the indexes [default: `updates/v1/` of the workspace].
         #[arg(long)]
         dir: Option<PathBuf>,
-        /// The directory of the trusted public keys [default: `crates/oncl-update/keys/`].
-        #[arg(long)]
-        keys: Option<PathBuf>,
     },
     /// Give the channel's index the next `seq`, a new `generated` and 30 days of validity,
-    /// and nothing else, to sign it again before it expires. The result is unsigned.
+    /// and nothing else.
     Refresh {
         /// `stable` or `beta`.
         #[arg(long, value_parser = parse_channel)]
@@ -350,7 +319,7 @@ enum IndexCommand {
     /// Append plugin packages of a `plugins-YYYYMMDD[.N]` release to the channel's index:
     /// id, version, modules and hashes come from the packages. A prerelease plugin, or one
     /// whose port's `registry.toml` does not say `conformance = "confirmed"`, is not added
-    /// to `stable`. The result is unsigned.
+    /// to `stable`.
     AddPlugin {
         /// `stable` or `beta`.
         #[arg(long, value_parser = parse_channel)]
@@ -372,8 +341,7 @@ enum IndexCommand {
         #[arg(long)]
         plugins: Option<PathBuf>,
     },
-    /// Check the indexes in a directory before publishing: format, signature by
-    /// `current.pub` only (a `next.pub` is for clients, not for signing), validity, asset URLs
+    /// Check the indexes in a directory before publishing: format, validity, asset URLs
     /// on the project's releases, `seq` growth against the base branch, and that every asset
     /// answers `HEAD` with 200.
     Check {
@@ -385,13 +353,10 @@ enum IndexCommand {
         /// The git revision of the base branch.
         #[arg(long, default_value = "origin/main")]
         base: String,
-        /// No base (a first push, a manual run): signatures, schema, expiry and URLs are
-        /// checked; `seq` growth and the update key in the tags of new versions are not.
+        /// No base (a first push, a manual run): schema, expiry and URLs are checked; `seq`
+        /// growth is not.
         #[arg(long)]
         no_base: bool,
-        /// The directory of the trusted public keys [default: `crates/oncl-update/keys/`].
-        #[arg(long)]
-        keys: Option<PathBuf>,
         /// Require the `vm-smoke` commit status to be `success` on the tag of every new
         /// version.
         #[arg(long, conflicts_with = "offline")]
@@ -410,25 +375,15 @@ fn parse_channel(name: &str) -> Result<Channel, String> {
         .ok_or_else(|| format!("{name:?} is not a channel (stable, beta)"))
 }
 
-/// Reads a password from the terminal without echo.
-fn password(prompt: &str) -> anyhow::Result<Zeroizing<String>> {
-    rpassword::prompt_password(prompt)
-        .map(Zeroizing::new)
-        .context("reading the password")
-}
-
 /// The directory of the indexes: `dir`, or `updates/v1/` of the workspace.
 fn index_dir(dir: Option<PathBuf>) -> PathBuf {
     dir.unwrap_or_else(|| oncl_testkit::workspace_root().join(xtask::index::INDEX_DIR))
 }
 
-/// Prints what [`xtask::index::add`] or [`xtask::index::refresh`] wrote.
+/// Prints what to do after [`xtask::index::add`] or [`xtask::index::refresh`] wrote an index.
 fn print_written(written: &xtask::index::Written) {
-    if let Some(signature) = &written.removed_signature {
-        println!("removed the stale {}", signature.display());
-    }
     println!(
-        "unsigned: cargo xtask sign {} --key <secret key>",
+        "next: cargo xtask tuf update --keys <keys> (signs {} into the TUF targets)",
         written.path.display()
     );
 }
@@ -1011,44 +966,6 @@ fn main() -> anyhow::Result<()> {
             println!("{output} is up to date");
             Ok(())
         }
-        Command::Sign {
-            command: Some(SignCommand::Keygen { out }),
-            ..
-        } => {
-            xtask::sign::keygen_target(&out)?;
-            let first = password("Password of the new secret key: ")?;
-            if password("The password again: ")? != first {
-                bail!("the passwords differ");
-            }
-            let files = xtask::sign::keygen(&out, &first)?;
-            println!(
-                "Secret key: {} (keep it offline, never in the repository)",
-                files.secret.display()
-            );
-            println!("Public key: {}", files.public.display());
-            println!(
-                "Copy the public key to {}/current.pub (or next.pub, to prepare a key \
-                 rotation) and commit it.",
-                xtask::sign::TRUSTED_KEYS_DIR
-            );
-            Ok(())
-        }
-        Command::Sign {
-            command: None,
-            index,
-            key,
-        } => {
-            let (Some(index), Some(key)) = (index, key) else {
-                bail!("`sign` needs an index and --key");
-            };
-            let secret = xtask::sign::load_secret_key(
-                &key,
-                &password(&format!("Password of {}: ", key.display()))?,
-            )?;
-            let signature = xtask::sign::sign(&index, &secret, OffsetDateTime::now_utc())?;
-            println!("{}", signature.display());
-            Ok(())
-        }
         Command::Index {
             command:
                 IndexCommand::Add {
@@ -1057,16 +974,9 @@ fn main() -> anyhow::Result<()> {
                     release_assets,
                     rollout,
                     dir,
-                    keys,
                 },
         } => {
             let dir = index_dir(dir);
-            if let Some(version) = tag.strip_prefix('v').and_then(|v| Version::parse(v).ok()) {
-                let keys = xtask::index::trusted_keys(&keys.unwrap_or_else(|| {
-                    oncl_testkit::workspace_root().join(xtask::sign::TRUSTED_KEYS_DIR)
-                }))?;
-                xtask::index::check_tag_key(&dir, &version, &keys)?;
-            }
             let added = xtask::index::add(
                 &dir,
                 channel,
@@ -1159,20 +1069,14 @@ fn main() -> anyhow::Result<()> {
                     offline,
                     base,
                     no_base,
-                    keys,
                     vm_smoke,
                     conformance,
                 },
         } => {
-            let keys = keys.unwrap_or_else(|| {
-                oncl_testkit::workspace_root().join(xtask::sign::TRUSTED_KEYS_DIR)
-            });
-            let keys = xtask::index::trusted_keys(&keys)?;
             let github = xtask::index::GitHub::new();
             let remote: Option<&dyn xtask::index::Remote> =
                 if offline { None } else { Some(&github) };
             let options = xtask::index::CheckOptions {
-                keys: &keys,
                 base: (!no_base).then_some(base.as_str()),
                 vm_smoke,
                 conformance,
@@ -1180,10 +1084,7 @@ fn main() -> anyhow::Result<()> {
             };
             let all = xtask::index::check(&dir, &options, remote)?;
             if all.is_empty() {
-                println!(
-                    "{}: no index is published yet; the trusted keys read fine",
-                    dir.display()
-                );
+                println!("{}: no index is published yet", dir.display());
             }
             for checked in all {
                 let versions: Vec<_> = checked.new_versions.iter().map(|v| v.to_string()).collect();
@@ -1252,39 +1153,6 @@ mod tests {
     #[test]
     fn the_cli_is_consistent() {
         Cli::command().debug_assert();
-    }
-
-    #[test]
-    fn sign_takes_an_index_or_keygen() {
-        let Ok(Command::Sign {
-            command: None,
-            index: Some(index),
-            key: Some(key),
-        }) = parse(&["sign", "updates/v1/beta.json", "--key", "k.key"])
-        else {
-            panic!("sign <index> --key");
-        };
-        assert_eq!(
-            (index.to_str(), key.to_str()),
-            (Some("updates/v1/beta.json"), Some("k.key"))
-        );
-        assert!(matches!(
-            parse(&["sign", "keygen", "--out", "keys"]),
-            Ok(Command::Sign {
-                command: Some(SignCommand::Keygen { .. }),
-                index: None,
-                key: None,
-            })
-        ));
-        for args in [
-            &["sign"][..],
-            &["sign", "beta.json"],
-            &["sign", "--key", "k.key"],
-            &["sign", "keygen"],
-            &["sign", "--key", "k.key", "keygen", "--out", "keys"],
-        ] {
-            assert!(parse(args).is_err(), "{args:?}");
-        }
     }
 
     #[test]

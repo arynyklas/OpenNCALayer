@@ -297,7 +297,7 @@ cargo deny check
 cargo xtask licenses --check   # сторонние лицензии для окна «О программе» свежие
 ```
 
-Если менялись `updates/` или `tuf/` (проверки индексов и репозитория TUF, разделы 4 и 7г в [`release.md`](release.md)):
+Если менялись `updates/` или `tuf/` (проверки индексов и репозитория TUF, разделы 3 и 10 в [`release.md`](release.md)):
 
 ```sh
 cargo xtask index check updates/v1 --offline --base origin/main

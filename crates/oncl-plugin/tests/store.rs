@@ -322,9 +322,4 @@ fn a_kept_index_is_still_held_to_its_channel_and_last_seq() {
             .kind(),
         std::io::ErrorKind::InvalidData
     );
-    // The signature file an older version kept is removed by a save.
-    let stale = dir.path().join("plugins/catalog/beta.json.minisig");
-    std::fs::write(&stale, b"old").unwrap();
-    store.save_catalog(Channel::Beta, &index(8, now)).unwrap();
-    assert!(!stale.exists());
 }
