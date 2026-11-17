@@ -94,9 +94,9 @@ engine.begin(ExecutionGrant, OperationPolicy, Arc<dyn OperationControl>)? -> Ope
 engine.sign / verify / hash / inspect / extend / stamp / ... (request, Source, output, &mut ctx)
 ```
 
-Швы, которыми владеет хост (ничего не читается из сети, UI или настроек десктопа):
+Что программа, встраивающая SDK, передаёт ему сама. SDK ничего не берёт из сети, окон или настроек десктопа — всё приходит через эти объекты:
 
-| шов | тип | примечания |
+| что | тип | примечания |
 |---|---|---|
 | разрешение | `ExecutionGrant` | действия и id ключей, только из доверенного кода хоста |
 | ключи | `KeyProvider` (`keys::KeySources` для файлов/inline/named/токенов) | секреты берутся в заём, затираются (zeroize), не попадают в spool |
