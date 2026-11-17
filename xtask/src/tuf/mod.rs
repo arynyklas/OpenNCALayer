@@ -1,27 +1,38 @@
-//! `cargo xtask tuf`: the operator's side of the TUF repository that authenticates the update
-//! indexes (`docs/design/tuf.md`, `docs/dev/release.md`). The verifier and the builder are
+//! `cargo xtask tuf`: the operator's side of the TUF repositories that authenticate the
+//! update indexes (`docs/design/tuf.md`, `docs/dev/release.md`) and, in `tuf/v2`, the
+//! publishers' plugins (`docs/design/publishers.md`). The verifier and the builder are
 //! `oncl_update::tuf`: this module only decides what to sign, when, and with which key, and
 //! checks the result with the client's own code. Nothing here has a second implementation of
 //! canonical JSON, signatures or the client workflow.
 //!
-//! - [`init`]: the keys and root version 1 (the ceremony, once);
-//! - [`update`]: targets and snapshot over the update indexes, signed with the owner's keys;
-//! - [`timestamp`]: the one file CI signs, with the online key, when Pages is published;
+//! - [`init`]: the keys and root version 1 (the ceremony, once per repository);
+//! - [`update`]: targets (and, in `tuf/v1`, snapshot) over the update indexes and the
+//!   publishers, signed with the owner's keys;
+//! - [`snapshot`]: the snapshot of `tuf/v2`, which CI signs with its online key;
+//! - [`timestamp`]: the file CI signs, with the online key, when Pages is published;
 //! - [`root`]: the next root: a renewal, or a rotation of any role's key;
-//! - [`check`]: offline verification of a repository with the client over a directory;
+//! - [`check`], [`check_v2`]: offline verification of a repository with the client over a
+//!   directory;
 //! - [`published`]: the client over HTTPS against the published site.
 //!
-//! The repository is a directory ([`repo`]): `metadata/<N>.root.json`, `<N>.targets.json`,
+//! A repository is a directory ([`repo`]): `metadata/<N>.root.json`, `<N>.targets.json`,
 //! `<N>.snapshot.json` (every version is kept for good), `metadata/timestamp.json` (never
-//! committed) and `targets/indexes/<sha256>.<channel>.json`. Secret keys are in [`keystore`].
+//! committed) and `targets/indexes/<sha256>.<channel>.json`. `tuf/v2` has its own chain of
+//! roots and online snapshot and timestamp keys, and shares the targets key of `tuf/v1`; its
+//! top-level targets delegate to the publishers ([`crate::publishers`]) and also list
+//! `targets/<sha256>.publishers.json`; the publishers' roles are
+//! `metadata/<N>.pub-<name>.json`; its snapshot is never committed. Secret keys are in
+//! [`keystore`].
 
 pub mod check;
+pub mod check_v2;
 pub mod cli;
 pub mod init;
 pub mod keystore;
 pub mod published;
 pub mod repo;
 pub mod root;
+pub mod snapshot;
 pub mod timestamp;
 pub mod update;
 
@@ -36,8 +47,15 @@ use zeroize::Zeroizing;
 /// Where the repository is committed, from the workspace root.
 pub const REPO_DIR: &str = "tuf/v1";
 
+/// Where `tuf/v2` is committed, from the workspace root.
+pub const V2_REPO_DIR: &str = "tuf/v2";
+
 /// The root of trust the client embeds (a copy of root version 1), from the workspace root.
 pub const ANCHOR: &str = "crates/oncl-update/keys/root.json";
+
+/// The root of trust of `tuf/v2`, from the workspace root: its root version 1, until the
+/// client that reads `tuf/v2` embeds it (`docs/design/publishers.md`, "Миграция").
+pub const V2_ANCHOR: &str = "tuf/v2/metadata/1.root.json";
 
 /// How long each role's metadata is valid, in days, from the moment it is signed
 /// (`docs/design/tuf.md`).
@@ -48,6 +66,9 @@ pub const TARGETS_DAYS: i64 = 30;
 pub const SNAPSHOT_DAYS: i64 = 30;
 /// See [`ROOT_DAYS`].
 pub const TIMESTAMP_DAYS: i64 = 7;
+/// The snapshot of `tuf/v2`, signed online on every publication
+/// (`docs/design/publishers.md`, "Сроки и лимиты").
+pub const V2_SNAPSHOT_DAYS: i64 = 7;
 
 /// The largest index (and so target) the tools read: the client's own limit.
 pub const MAX_TARGET: u64 = oncl_update::MAX_INDEX_LEN;

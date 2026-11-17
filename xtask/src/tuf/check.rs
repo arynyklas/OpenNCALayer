@@ -38,7 +38,7 @@ use oncl_update::tuf::{
 };
 use time::{Duration, OffsetDateTime};
 
-use super::repo::{DirFetcher, Kind, Listing};
+use super::repo::{DirFetcher, Kind, Layout, Listing};
 use super::{MAX_TARGET, Problem, show_time};
 
 /// Whether the repository has a timestamp.
@@ -132,11 +132,11 @@ impl Verified {
     }
 }
 
-fn problem(code: &'static str, message: impl Into<String>) -> Problem {
+pub(super) fn problem(code: &'static str, message: impl Into<String>) -> Problem {
     Problem::new(code, message)
 }
 
-fn malformed(what: &str, e: &TufError) -> Problem {
+pub(super) fn malformed(what: &str, e: &TufError) -> Problem {
     match e {
         TufError::Signature { .. } => problem("signature", format!("{what}: {e}")),
         _ => problem("malformed", format!("{what}: {e}")),
@@ -144,7 +144,7 @@ fn malformed(what: &str, e: &TufError) -> Problem {
 }
 
 /// The newest file of a kind, parsed (not verified).
-fn parse_file(dir: &Path, path: &str, limit: u64) -> Result<Envelope, Problem> {
+pub(super) fn parse_file(dir: &Path, path: &str, limit: u64) -> Result<Envelope, Problem> {
     let bytes = fs::read(dir.join(path))
         .map_err(|e| problem("unreadable", format!("reading {path}: {e}")))?;
     Envelope::parse(&bytes, limit, path).map_err(|e| malformed(path, &e))
@@ -481,37 +481,80 @@ pub fn final_root(dir: &Path, anchor: &[u8], now: OffsetDateTime) -> anyhow::Res
     Root::from_signed(&env.signed).map_err(|e| anyhow::anyhow!("the final root: {e}"))
 }
 
-/// The expired and expiring metadata of `verified` at `now`.
-pub fn expiry_findings(verified: &Verified, now: OffsetDateTime, policy: &Expiry) -> Vec<Problem> {
-    let mut found = Vec::new();
-    for (role, version, expires) in verified.expiries() {
-        let left = expires - now;
-        let days = left.whole_days();
-        let when = show_time(expires);
-        if left <= Duration::ZERO {
-            found.push(problem(
-                "expired",
-                format!("{role} {version} expired at {when}"),
-            ));
-            continue;
-        }
-        let min = match role {
-            Role::Root => policy.min_root_days,
-            Role::Targets | Role::Snapshot => policy.min_days,
-            Role::Timestamp => continue,
-        };
-        if left < Duration::days(min) {
-            found.push(problem(
-                "expiring",
-                format!("{role} {version} expires at {when}, in {days} days (less than {min})"),
-            ));
-        }
-    }
-    found
+/// The root in force in the repository `dir`, followed from its own root version 1 with a
+/// clock at the start of time: the keys it names, whether or not it has expired.
+///
+/// # Errors
+///
+/// If `dir` has no root version 1, or its roots are not a chain.
+pub fn committed_root(dir: &Path) -> anyhow::Result<Root> {
+    let anchor = super::repo::read(dir, &layout::root_path(1))?;
+    final_root(
+        dir,
+        &anchor,
+        OffsetDateTime::UNIX_EPOCH + Duration::seconds(1),
+    )
 }
 
-/// The index files in `index` against the targets: the same files, byte for byte.
-fn compare_indexes(index: &Path, targets: &Targets, problems: &mut Vec<Problem>) {
+/// The expired and expiring metadata of `verified` at `now`.
+pub fn expiry_findings(verified: &Verified, now: OffsetDateTime, policy: &Expiry) -> Vec<Problem> {
+    verified
+        .expiries()
+        .into_iter()
+        .filter_map(|(role, version, expires)| {
+            let min = match role {
+                Role::Root => Some(policy.min_root_days),
+                Role::Targets | Role::Snapshot => Some(policy.min_days),
+                Role::Timestamp => None,
+            };
+            expiry_finding(
+                ("expired", "expiring"),
+                &role.to_string(),
+                version,
+                expires,
+                now,
+                min,
+            )
+        })
+        .collect()
+}
+
+/// Whether the file `what` of `version` has expired at `now` (`codes.0`), or has fewer than
+/// `min` days left (`codes.1`; never with `min` `None`).
+pub(super) fn expiry_finding(
+    codes: (&'static str, &'static str),
+    what: &str,
+    version: u64,
+    expires: OffsetDateTime,
+    now: OffsetDateTime,
+    min: Option<i64>,
+) -> Option<Problem> {
+    let left = expires - now;
+    let days = left.whole_days();
+    let when = show_time(expires);
+    if left <= Duration::ZERO {
+        return Some(problem(
+            codes.0,
+            format!("{what} {version} expired at {when}"),
+        ));
+    }
+    let min = min?;
+    (left < Duration::days(min)).then(|| {
+        problem(
+            codes.1,
+            format!("{what} {version} expires at {when}, in {days} days (less than {min})"),
+        )
+    })
+}
+
+/// The index files in `index` against the targets: the same files, byte for byte. Targets
+/// other than the indexes and `extra` are unexpected.
+pub(super) fn compare_indexes(
+    index: &Path,
+    targets: &Targets,
+    extra: &[&str],
+    problems: &mut Vec<Problem>,
+) {
     let mut expected = BTreeSet::new();
     for channel in Channel::ALL {
         let target = format!("indexes/{}.json", channel.as_str());
@@ -554,7 +597,7 @@ fn compare_indexes(index: &Path, targets: &Targets, problems: &mut Vec<Problem>)
         }
     }
     for target in targets.targets.keys() {
-        if !expected.contains(target.as_str()) {
+        if !expected.contains(target.as_str()) && !extra.contains(&target.as_str()) {
             problems.push(problem(
                 "unexpected-target",
                 format!("{target} is not an update index"),
@@ -565,7 +608,7 @@ fn compare_indexes(index: &Path, targets: &Targets, problems: &mut Vec<Problem>)
 
 /// The files of the repository at the git revision `rev`, below `dir`'s place in it:
 /// relative path to bytes. Empty if the revision has none.
-fn base_files(dir: &Path, rev: &str) -> anyhow::Result<BTreeMap<String, Vec<u8>>> {
+pub(super) fn base_files(dir: &Path, rev: &str) -> anyhow::Result<BTreeMap<String, Vec<u8>>> {
     let (repo, below) = crate::index::existing_ancestor(dir)?;
     let commit = format!("{rev}^{{commit}}");
     if !crate::index::git(&repo, &["rev-parse", "--verify", "--quiet", &commit])?
@@ -607,11 +650,14 @@ fn base_files(dir: &Path, rev: &str) -> anyhow::Result<BTreeMap<String, Vec<u8>>
     Ok(files)
 }
 
-/// The tree in `dir` against the repository at `rev`: history is kept for good.
-fn compare_base(
+/// The tree in `dir` against the repository of `layout` at `rev`: history is kept for good.
+/// In `tuf/v2` a delegated role's version never goes back either, and a new version of one
+/// is a version bump.
+pub(super) fn compare_base(
     dir: &Path,
     listing: &Listing,
     base: &BTreeMap<String, Vec<u8>>,
+    layout: Layout,
     problems: &mut Vec<Problem>,
 ) {
     for (path, bytes) in base {
@@ -630,7 +676,7 @@ fn compare_base(
             )),
         }
     }
-    let base_listing = Listing::of(base.keys().cloned());
+    let base_listing = Listing::of_layout(base.keys().cloned(), layout);
     let (br, bt, bs) = base_listing.highest();
     let (r, t, s) = listing.highest();
     for (what, now, then) in [("root", r, br), ("targets", t, bt), ("snapshot", s, bs)] {
@@ -641,13 +687,24 @@ fn compare_base(
             ));
         }
     }
+    let base_roles = base_listing.newest_roles();
+    let roles = listing.newest_roles();
+    for (role, then) in &base_roles {
+        let now = roles.get(role).copied().unwrap_or(0);
+        if now < *then {
+            problems.push(problem(
+                "version-rollback",
+                format!("the newest {role} is version {now}, the base has {then}"),
+            ));
+        }
+    }
     let base_names: BTreeSet<&String> = base.keys().filter(|p| !classify_is_timestamp(p)).collect();
     let now_names: BTreeSet<&String> = listing
         .all
         .iter()
         .filter(|p| !classify_is_timestamp(p))
         .collect();
-    if base_names != now_names && (r, t, s) == (br, bt, bs) {
+    if base_names != now_names && (r, t, s) == (br, bt, bs) && roles == base_roles {
         problems.push(problem(
             "no-version-bump",
             "files were added but no version is higher than the base's",
@@ -776,13 +833,19 @@ pub fn check(options: &Options) -> anyhow::Result<Outcome> {
                 report.warnings.extend(findings);
             }
             if let Some(index) = options.index {
-                compare_indexes(index, &verified.targets, &mut report.problems);
+                compare_indexes(index, &verified.targets, &[], &mut report.problems);
             }
             report.verified = Some(verified);
         }
     }
     if let Some(base) = &base {
-        compare_base(options.dir, &listing, base, &mut report.problems);
+        compare_base(
+            options.dir,
+            &listing,
+            base,
+            Layout::V1,
+            &mut report.problems,
+        );
     }
     Ok(Outcome::Checked(Box::new(report)))
 }

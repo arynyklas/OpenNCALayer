@@ -27,7 +27,7 @@ use time::{Duration, OffsetDateTime};
 
 use super::check;
 use super::keystore::{self, Unlock};
-use super::repo;
+use super::repo::{self, Layout};
 use super::{PassphraseSource, ROOT_DAYS, expiry};
 
 /// What [`root`] does.
@@ -62,6 +62,29 @@ pub struct Rotated {
     pub expires: OffsetDateTime,
     /// The new keys: role, id and file.
     pub new_keys: Vec<(Role, KeyId, PathBuf)>,
+    /// Whether the targets keys are not those of the root before (a rotation of the targets
+    /// key; in `tuf/v2`, following one of `tuf/v1`).
+    pub targets_changed: bool,
+}
+
+/// What [`root_v2`] does.
+pub struct V2Options<'a> {
+    /// The directory of the secret keys.
+    pub keys: &'a Path,
+    /// The repository directory (`tuf/v2`).
+    pub out: &'a Path,
+    /// `tuf/v1`, whose root in force names the targets key the two share.
+    pub v1: &'a Path,
+    /// Replace the root key.
+    pub rotate_root: bool,
+    /// Replace the snapshot key (an online key, for the GitHub secret).
+    pub rotate_snapshot: bool,
+    /// Replace the timestamp key (an online key, for the GitHub secret).
+    pub rotate_timestamp: bool,
+    /// The signing time.
+    pub now: OffsetDateTime,
+    /// Where the passphrase of the keys comes from.
+    pub passphrase: &'a PassphraseSource,
 }
 
 /// Makes the next root (see the module's description).
@@ -72,8 +95,50 @@ pub struct Rotated {
 /// found or opened, a new key file exists, or the new chain does not verify (the root is
 /// then removed again).
 pub fn root(options: &Options) -> anyhow::Result<Rotated> {
-    let anchor = repo::read(options.out, &layout::root_path(1))
-        .context("the repository has no root version 1: run `cargo xtask tuf init` first")?;
+    next_root(options, Layout::V1, None)
+}
+
+/// The next root of `tuf/v2`: as [`root`], with online snapshot and timestamp keys, and the
+/// targets keys always those of `tuf/v1`'s root in force. The targets key is rotated in
+/// `tuf/v1`; this root then follows it.
+///
+/// # Errors
+///
+/// As [`root`], and if `tuf/v1` has no chain of roots.
+pub fn root_v2(options: &V2Options) -> anyhow::Result<Rotated> {
+    let v1 = check::committed_root(options.v1)
+        .context("tuf/v2 shares the targets key of tuf/v1: tuf/v1 must be there")?;
+    let targets = v1.role(Role::Targets);
+    let targets = RoleDef {
+        keys: targets.keyids.iter().map(|id| v1.keys[id]).collect(),
+        threshold: targets.threshold,
+    };
+    next_root(
+        &Options {
+            keys: options.keys,
+            out: options.out,
+            rotate_root: options.rotate_root,
+            rotate_targets: false,
+            rotate_snapshot: options.rotate_snapshot,
+            rotate_timestamp: options.rotate_timestamp,
+            now: options.now,
+            passphrase: options.passphrase,
+        },
+        Layout::V2,
+        Some(targets),
+    )
+}
+
+/// The next root of the repository of `layout`; `targets`, if given, are its targets keys.
+fn next_root(
+    options: &Options,
+    layout: Layout,
+    targets: Option<RoleDef>,
+) -> anyhow::Result<Rotated> {
+    let anchor = repo::read(options.out, &layout::root_path(1)).with_context(|| match layout {
+        Layout::V1 => "the repository has no root version 1: run `cargo xtask tuf init` first",
+        Layout::V2 => "tuf/v2 has no root version 1: run `cargo xtask tuf init --repo v2` first",
+    })?;
     // The root in force may have expired: renewing it is what this is for, so the chain is
     // followed with a clock at the start of time (signatures and thresholds are what it
     // verifies; the expiry of the root in force is the owner's to see).
@@ -93,7 +158,10 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
     // What may refuse comes before anything is made.
     for (role, rotate) in rotated {
         if rotate {
-            keystore::key_path(options.keys, &keystore::file_name(role, Some(version)))?;
+            keystore::key_path(
+                options.keys,
+                &keystore::file_name_in(layout, role, Some(version)),
+            )?;
         }
     }
     let target = options.out.join(layout::root_path(version));
@@ -125,7 +193,7 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
         if !rotate {
             continue;
         }
-        let (key, text) = if role == Role::Timestamp {
+        let (key, text) = if keystore::is_online(layout, role) {
             keystore::generate_seed()?
         } else {
             keystore::generate_encrypted(role, unlock.passphrase()?)?
@@ -133,6 +201,9 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
         fresh.push((role, key, text));
     }
     let role_def = |role: Role| -> RoleDef {
+        if let (Role::Targets, Some(targets)) = (role, &targets) {
+            return targets.clone();
+        }
         if let Some((_, key, _)) = fresh.iter().find(|(r, _, _)| *r == role) {
             return RoleDef {
                 keys: vec![key.public()],
@@ -151,6 +222,17 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
         snapshot: role_def(Role::Snapshot),
         targets: role_def(Role::Targets),
     };
+    let targets_changed = {
+        let old_targets = old.role(Role::Targets);
+        def.targets.threshold != old_targets.threshold
+            || def
+                .targets
+                .keys
+                .iter()
+                .map(|k| k.key_id())
+                .collect::<std::collections::BTreeSet<_>>()
+                != old_targets.keyids.iter().copied().collect()
+    };
     let expires = expiry(options.now, ROOT_DAYS);
     let signed =
         build::root(version, expires, &def).map_err(|e| anyhow::anyhow!("making the root: {e}"))?;
@@ -166,7 +248,7 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
     for (role, key, text) in &fresh {
         let path = keystore::write_key_file(
             options.keys,
-            &keystore::file_name(*role, Some(version)),
+            &keystore::file_name_in(layout, *role, Some(version)),
             text,
         )?;
         new_keys.push((*role, key.key_id(), path));
@@ -200,5 +282,6 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
         root: path,
         expires,
         new_keys,
+        targets_changed,
     })
 }
