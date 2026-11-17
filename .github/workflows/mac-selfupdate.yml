@@ -1,0 +1,313 @@
+name: Mac self-update
+
+# The proof that an installed copy of OpenNCALayer on macOS updates itself from the published
+# update indexes, on GitHub-hosted Macs (the lab has no Mac). The published `.pkg` of the
+# release `from` is installed for the current user (checked against that release's
+# `SHA256SUMS`), the daemon is started the way mac-smoke starts it (`run --no-tray`), and
+# nothing is done to it: its own scheduler checks the live update repository (the first check
+# 2-10 minutes after the start), downloads the package, applies it and starts the new
+# version, which must prove itself healthy. The workflow only watches, for up to 60
+# minutes: the installed program's `--version` and the daemon's log every 30 seconds. A check
+# that could not read the update repository, or could not download the package, is retried by
+# the product only after 30 minutes to 24 hours, so the daemon is then restarted (what a
+# reboot does) to get the next check in 2-10 minutes; every restart is counted and printed.
+# It ends when the installed version is `to`, and then checks the log (`the update is healthy`
+# from -> to), that the daemon is the new version's and listens on 127.0.0.1:13579 only.
+# Every check is a line `PASS|FAIL <name> <detail>`; any FAIL, or the time running out, fails
+# the job. The logs of each runner are an artifact.
+#
+# By hand only (`workflow_dispatch`): `from` is a release that is already published and has a
+# `.pkg`, `to` a version the published index offers to it. No secrets and no write
+# permissions. Third-party actions are pinned to a commit, with the release tag in a comment.
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: The release tag to install, v<version> (published, with a .pkg)
+        required: false
+        default: v0.1.0-rc.4
+      to:
+        description: The release tag the installed copy must update itself to
+        required: false
+        default: v0.1.0
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-selfupdate-${{ inputs.from || 'v0.1.0-rc.4' }}-${{ inputs.to || 'v0.1.0' }}
+  cancel-in-progress: false
+
+jobs:
+  selfupdate:
+    name: self-update (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon (arm64). GitHub's runner images:
+          # https://github.com/actions/runner-images#available-images
+          - name: apple-silicon
+            runner: macos-15
+            arch: arm64
+          # Intel (x86_64): `macos-15-intel` replaced `macos-13`, retired in December 2025
+          # https://github.blog/changelog/2025-09-19-github-actions-macos-13-runner-image-is-closing-down
+          - name: intel
+            runner: macos-15-intel
+            arch: x86_64
+    env:
+      FROM_TAG: ${{ inputs.from || 'v0.1.0-rc.4' }}
+      TO_TAG: ${{ inputs.to || 'v0.1.0' }}
+      RUNNER_NAME_SHORT: ${{ matrix.name }}
+      EXPECT_ARCH: ${{ matrix.arch }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Self-update
+        # No `-e`: a failed check is a line, and the run goes on to the summary.
+        shell: bash {0}
+        run: |
+          # `ck <name> $? "<detail>"`: the shell expands `$?` before the detail's command
+          # substitutions run, so it is the status of the check on the line above.
+          # shellcheck disable=SC2319
+          OUT="$RUNNER_TEMP/mac-selfupdate"
+          DL="$OUT/download"
+          mkdir -p "$DL" "$OUT/app-logs"
+          LOG="$OUT/mac-selfupdate.log"
+          : > "$LOG"
+          FAILS=0
+          WAIT_MINUTES=60
+          POLL_SECONDS=30
+
+          # res PASS|FAIL|INFO|SKIP <name> <detail>
+          res() {
+            local detail
+            detail="$(printf '%s' "$3" | tr '\r\n' '  ' | cut -c1-600)"
+            printf '%s %s %s\n' "$1" "$2" "$detail" | tee -a "$LOG"
+            if [ "$1" = FAIL ]; then FAILS=$((FAILS + 1)); fi
+          }
+          # ck <name> <rc> <detail>: PASS when rc is 0
+          ck() {
+            if [ "$2" -eq 0 ]; then res PASS "$1" "$3"; else res FAIL "$1" "$3"; fi
+          }
+
+          finish() {
+            cp "$DATA"/logs/* "$OUT/app-logs/" 2> /dev/null
+            echo "---- $FAILS FAIL" | tee -a "$LOG"
+            {
+              echo "### Mac self-update $FROM_TAG -> $TO_TAG, $RUNNER_NAME_SHORT ($(uname -m))"
+              echo
+              echo '```'
+              cat "$LOG"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            pkill -f "OpenNCALayer.app/Contents/" 2> /dev/null
+            [ "$FAILS" -eq 0 ]
+            exit $?
+          }
+
+          DATA="$HOME/Library/Application Support/OpenNCALayer"
+          for t in "$FROM_TAG" "$TO_TAG"; do
+            case "$t" in
+              v[0-9]*) ;;
+              *) res FAIL tag "not a release tag: $t"; finish ;;
+            esac
+          done
+          FROM="${FROM_TAG#v}"
+          TO="${TO_TAG#v}"
+          PKG="openncalayer-$FROM-osx.pkg"
+
+          res INFO host "$(sw_vers -productName) $(sw_vers -productVersion) $(uname -m), runner image ${ImageVersion:-unknown}"
+          [ "$(uname -m)" = "$EXPECT_ARCH" ]
+          ck runner-arch $? "uname -m $(uname -m), expected $EXPECT_ARCH"
+
+          # version_of <exe>: the version `--version` prints, its first x.y.z[-suffix] token
+          version_of() {
+            "$1" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?' | head -n 1
+          }
+          # newest_log: the newest daily log of the daemon
+          newest_log() {
+            local f newest=""
+            for f in "$DATA"/logs/openncalayer.*.log; do
+              if [ -e "$f" ] && { [ -z "$newest" ] || [ "$f" -nt "$newest" ]; }; then newest="$f"; fi
+            done
+            printf '%s' "$newest"
+          }
+          # all_logs: every daily log, oldest first
+          all_logs() { cat "$DATA"/logs/openncalayer.*.log 2> /dev/null; }
+          # listener_pid: the process that listens on 127.0.0.1:13579
+          listener_pid() { lsof -nP -iTCP:13579 -sTCP:LISTEN -t 2> /dev/null | head -n 1; }
+
+          # ---- the published index offers `to` -----------------------------------------------
+          # Informational: the client reads the TUF repository, the legacy index is published
+          # with it and lists the same versions.
+          if curl -fsS --max-time 30 "https://arynyklas.github.io/OpenNCALayer/updates/v1/beta.json" -o "$OUT/beta.json" 2> "$OUT/beta-curl.txt"; then
+            if grep -q "\"version\": \"$TO\"" "$OUT/beta.json"; then
+              res PASS index-lists-to "updates/v1/beta.json lists $TO"
+            else
+              res FAIL index-lists-to "updates/v1/beta.json does not list $TO: $(grep -o '"version": "[^"]*"' "$OUT/beta.json" | sort -u | tr '\n' ' ' | cut -c1-300)"
+              finish
+            fi
+          else
+            res FAIL index-lists-to "cannot read updates/v1/beta.json: $(cat "$OUT/beta-curl.txt")"
+            finish
+          fi
+
+          # ---- the .pkg of `from` ---------------------------------------------------------
+          n=0
+          while [ $n -lt 3 ]; do
+            gh release download "$FROM_TAG" --repo "$GITHUB_REPOSITORY" --dir "$DL" --clobber \
+              -p "$PKG" -p SHA256SUMS > "$OUT/download.log" 2>&1 && break
+            n=$((n + 1))
+            sleep 10
+          done
+          if [ ! -f "$DL/$PKG" ] || [ ! -f "$DL/SHA256SUMS" ]; then
+            res FAIL download "no $PKG for $FROM_TAG: $(cat "$OUT/download.log")"
+            finish
+          fi
+          res PASS download "$PKG, $(wc -c < "$DL/$PKG" | tr -d ' ') bytes"
+          want="$(grep -F "$PKG" "$DL/SHA256SUMS" | tr -d '\r' | sed 's/[[:space:]].*//' | head -n 1)"
+          got="$(shasum -a 256 "$DL/$PKG" | cut -d' ' -f1)"
+          [ -n "$want" ] && [ "$want" = "$got" ]
+          ck sha256-vs-SHA256SUMS $? "SHA256SUMS $want, file $got"
+          [ "$want" = "$got" ] || finish
+
+          # ---- install for the current user ----------------------------------------------
+          [ ! -e "$DATA" ] && [ ! -e /Applications/OpenNCALayer.app ] && [ ! -e "$HOME/Applications/OpenNCALayer.app" ]
+          ck clean-start $? "no data directory and no app before the installation"
+          installer -pkg "$DL/$PKG" -target CurrentUserHomeDirectory -verboseR > "$OUT/installer.log" 2>&1
+          rc=$?
+          ck installer $rc "installer -target CurrentUserHomeDirectory rc=$rc: $(tail -n 3 "$OUT/installer.log")"
+          APP=""
+          for d in "$HOME/Applications" /Applications; do
+            if [ -x "$d/OpenNCALayer.app/Contents/MacOS/openncalayer" ]; then APP="$d/OpenNCALayer.app"; break; fi
+          done
+          if [ -z "$APP" ]; then
+            res FAIL app-installed "OpenNCALayer.app is in neither ~/Applications nor /Applications"
+            grep -i openncalayer /var/log/install.log 2> /dev/null | tail -n 60 > "$OUT/install-log-excerpt.txt"
+            finish
+          fi
+          res PASS app-installed "$APP"
+          EXE="$APP/Contents/MacOS/openncalayer"
+          # `.pkg` ends with `open <app>`: give the app a moment, then stop it; the daemon
+          # below is started the way mac-smoke starts it.
+          sleep 8
+          res INFO app-started-by-pkg "pids: $(pgrep -f "$APP/Contents/MacOS/openncalayer" | tr '\n' ' ')"
+          pkill -f "$APP/Contents/MacOS/" 2> /dev/null
+          sleep 3
+          pkill -9 -f "$APP/Contents/MacOS/" 2> /dev/null
+
+          v="$(version_of "$EXE")"
+          [ "$v" = "$FROM" ]
+          ck version-installed $? "--version -> '$v', expected $FROM"
+          [ "$v" = "$FROM" ] || finish
+          "$EXE" tls init > "$OUT/tls-init.txt" 2>&1
+          ck tls-init $? "$(head -c 300 "$OUT/tls-init.txt")"
+
+          # ---- the daemon ----------------------------------------------------------------
+          # start_daemon <stdout-log>: `run --no-tray` from the installed copy, until it listens
+          start_daemon() {
+            nohup "$EXE" run --no-tray >> "$1" 2>&1 &
+            DPID=$!
+            for _ in $(seq 1 30); do
+              sleep 2
+              lsof -nP -iTCP:13579 -sTCP:LISTEN > /dev/null 2>&1 && return 0
+              kill -0 "$DPID" 2> /dev/null || return 1
+            done
+            return 1
+          }
+          start_daemon "$OUT/daemon-stdout.log"
+          ck daemon-running $? "pid $DPID listens on 13579: $(head -c 300 "$OUT/daemon-stdout.log")"
+          START_PID="$(listener_pid)"
+          res INFO daemon-started "listener pid ${START_PID:-none}, running $FROM"
+          RESTARTS=0
+          SEEN_FAILS=0
+          SEEN_STATES=""
+          T0=$SECONDS
+
+          # ---- watch: the daemon updates itself -------------------------------------------
+          cur="$FROM"
+          while [ $((SECONDS - T0)) -lt $((WAIT_MINUTES * 60)) ]; do
+            sleep "$POLL_SECONDS"
+            cur="$(version_of "$EXE")"
+            # The update lines of the log, only what is new since the last poll.
+            lines="$(all_logs | grep -E 'openncalayer::(update|repository)|cannot read the update|cannot download the update' | cut -c1-260)"
+            new="$(printf '%s\n' "$lines" | grep -vxF -f <(printf '%s\n' "$SEEN_STATES") | grep .)"
+            SEEN_STATES="$lines"
+            [ -n "$new" ] && printf '%s\n' "$new" | while IFS= read -r l; do res INFO "log t+$((SECONDS - T0))s" "$l"; done
+            res INFO "poll t+$((SECONDS - T0))s" "version $cur, listener pid $(listener_pid), restarts $RESTARTS"
+            if [ "$cur" = "$TO" ]; then break; fi
+            fails="$(printf '%s\n' "$lines" | grep -cE 'cannot read the update repository|cannot download the update')"
+            if [ "$fails" -gt "$SEEN_FAILS" ] && [ "$cur" = "$FROM" ]; then
+              SEEN_FAILS="$fails"
+              RESTARTS=$((RESTARTS + 1))
+              old="$(listener_pid)"
+              [ -n "$old" ] && kill "$old" 2> /dev/null
+              for _ in 1 2 3 4 5 6 7 8 9 10; do kill -0 "$old" 2> /dev/null || break; sleep 1; done
+              kill -9 "$old" 2> /dev/null
+              start_daemon "$OUT/daemon-stdout.log"
+              res INFO daemon-restart "#$RESTARTS after a failed check ($fails failure lines so far), rc=$?, listener pid $(listener_pid)"
+            fi
+          done
+          [ "$cur" = "$TO" ]
+          ck updated-to $? "installed --version $cur after $((SECONDS - T0)) s and $RESTARTS daemon restart(s); expected $TO"
+          if [ "$cur" != "$TO" ]; then
+            res INFO log-tail "$(all_logs | tail -n 12 | cut -c1-200)"
+            finish
+          fi
+
+          # ---- the new version ------------------------------------------------------------
+          # The updater starts the new version with the same arguments; it proves itself
+          # healthy after 5 seconds of running. Wait for the line.
+          HEALTHY="the update is healthy from=$FROM to=$TO"
+          for _ in $(seq 1 60); do
+            all_logs | grep -qF "$HEALTHY" && break
+            sleep 5
+          done
+          all_logs | grep -F "$HEALTHY" | head -n 1 > "$OUT/healthy-line.txt"
+          [ -s "$OUT/healthy-line.txt" ]
+          ck healthy-line $? "$(cut -c1-200 "$OUT/healthy-line.txt")"
+          all_logs | grep -F 'applying the update; exiting' | tail -n 1 > "$OUT/applying-line.txt"
+          [ -s "$OUT/applying-line.txt" ]
+          ck applying-line $? "$(cut -c1-200 "$OUT/applying-line.txt")"
+
+          pid="$(listener_pid)"
+          if [ -z "$pid" ]; then
+            res FAIL daemon-after-update "nothing listens on 13579 after the update; starting the new version by hand"
+            start_daemon "$OUT/daemon-stdout.log"
+            pid="$(listener_pid)"
+          else
+            res PASS daemon-after-update "pid $pid listens on 13579"
+          fi
+          [ -n "$pid" ] && [ "$pid" != "$START_PID" ]
+          ck daemon-is-a-new-process $? "listener pid ${pid:-none}, the first daemon's was ${START_PID:-none}"
+          cmd="$(ps -p "${pid:-0}" -o command= 2> /dev/null)"
+          case "$cmd" in "$APP"/Contents/MacOS/openncalayer*) rc=0 ;; *) rc=1 ;; esac
+          ck daemon-runs-installed-app $rc "process command: $cmd"
+          case "$cmd" in *--no-tray*) rc=0 ;; *) rc=1 ;; esac
+          ck daemon-restarted-with-same-args $rc "process command: $cmd"
+          lsof -nP -iTCP:13579 -sTCP:LISTEN -Fn 2> /dev/null | grep '^n' > "$OUT/listen-13579.txt"
+          [ -s "$OUT/listen-13579.txt" ] && ! grep -v -E '^n(127\.0\.0\.1|\[::1\]):13579$' "$OUT/listen-13579.txt" > /dev/null
+          ck port-13579-loopback-only $? "$(tr '\n' ' ' < "$OUT/listen-13579.txt")"
+          log="$(newest_log)"
+          grep -q 'listening on 127.0.0.1:13579' "$log" 2> /dev/null
+          ck log-listening $? "log line 'listening on 127.0.0.1:13579' in ${log:-no log}"
+          if all_logs | grep -q -i 'panicked' || grep -q -i 'panicked' "$OUT/daemon-stdout.log" 2> /dev/null; then rc=1; else rc=0; fi
+          ck no-panic $rc "no 'panicked' in the logs"
+          if all_logs | grep -qE 'rolling back|did not prove healthy|did not install|the rollback'; then rc=1; else rc=0; fi
+          ck no-rollback $rc "no rollback line in the logs"
+          [ "$(version_of "$EXE")" = "$TO" ]
+          ck version-final $? "--version -> $(version_of "$EXE"), expected $TO"
+          res INFO log-warnings "$(all_logs | grep -E ' (WARN|ERROR) ' | cut -c1-200 | head -n 8)"
+          res INFO app-layout "$(find "$APP/.." -maxdepth 2 -name '*OpenNCALayer*' 2> /dev/null | tr '\n' ' ') $(find "$DATA" -mindepth 1 -maxdepth 1 -exec basename {} \; | sort | tr '\n' ' ')"
+          grep -i openncalayer /var/log/install.log 2> /dev/null | tail -n 80 > "$OUT/install-log-excerpt.txt"
+          finish
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mac-selfupdate-${{ matrix.name }}-${{ env.FROM_TAG }}-to-${{ env.TO_TAG }}
+          path: ${{ runner.temp }}/mac-selfupdate
+          if-no-files-found: warn
