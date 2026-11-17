@@ -5,11 +5,8 @@ use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
 
-fn python() -> Option<String> {
-    python_with("lxml")
-}
 fn inspect(w: &World, signed: &Path) -> serde_json::Value {
-    let python = python().expect("python with lxml is required for the WSSE structural oracle");
+    let python = oncl_testkit::tool::require_python("lxml");
     let script = w.dir.path().join("wsse_inspect.py");
     std::fs::write(&script, include_str!("support/wsse_inspect.py")).unwrap();
     let out = Command::new(python)

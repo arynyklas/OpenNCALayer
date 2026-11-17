@@ -54,42 +54,6 @@ fn oncl() -> PathBuf {
     path
 }
 
-fn openssl() -> String {
-    let mut candidates = Vec::new();
-    if let Ok(explicit) = std::env::var("ONCL_OPENSSL") {
-        candidates.push(explicit);
-    }
-    candidates.push("openssl".to_owned());
-    for var in ["ProgramFiles", "ProgramW6432"] {
-        if let Some(base) = std::env::var_os(var) {
-            candidates.push(
-                Path::new(&base)
-                    .join("Git/usr/bin/openssl.exe")
-                    .to_string_lossy()
-                    .into_owned(),
-            );
-        }
-    }
-    candidates
-        .into_iter()
-        .find(|c| {
-            Command::new(c)
-                .arg("version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        })
-        .expect("OpenSSL is required: set ONCL_OPENSSL or put openssl on the path")
-}
-
-fn python() -> String {
-    let python = std::env::var("ONCL_PYHANKO_PYTHON").unwrap_or_default();
-    assert!(
-        !python.is_empty() && Path::new(&python).exists(),
-        "ONCL_PYHANKO_PYTHON must name a python with pyhanko, lxml and cryptography (got {python:?})"
-    );
-    python
-}
-
 fn text(path: &Path) -> &str {
     path.to_str().unwrap()
 }
@@ -178,7 +142,7 @@ impl Lab {
     }
 
     fn openssl_cms(&self, signature: &Path, content: &Path) -> bool {
-        let openssl = openssl();
+        let openssl = oncl_testkit::tool::openssl();
         let root_pem = self.w.dir.path().join("root.pem");
         let converted = Command::new(&openssl)
             .args([
@@ -225,7 +189,7 @@ impl Lab {
             include_str!("../../../oncl-cli/tests/support/pyhanko_oracle.py"),
         )
         .unwrap();
-        let out: Output = Command::new(python())
+        let out: Output = Command::new(oncl_testkit::tool::pyhanko_python())
             .args([text(&script), text(pdf), text(&self.root), "1793620920"])
             .output()
             .unwrap();
@@ -243,7 +207,7 @@ impl Lab {
         .unwrap();
         let leaf = self.w.dir.path().join("oracle-leaf.der");
         std::fs::write(&leaf, self.w.leaf.cert.to_der().unwrap()).unwrap();
-        let out = Command::new(python())
+        let out = Command::new(oncl_testkit::tool::pyhanko_python())
             .args([text(&script), text(signed), text(&leaf)])
             .output()
             .unwrap();

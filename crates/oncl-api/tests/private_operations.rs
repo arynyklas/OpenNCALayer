@@ -284,7 +284,7 @@ async fn cades_t_create_add_and_keyless_extend_use_actual_tsa_and_openssl_oracle
     assert!(extended.len() > base.len());
     assert!(openssl_cms_verify(extended, Some(payload), dir.path()).is_some());
     // The signature-timestamp attribute (id-aa-signatureTimeStampToken) is present.
-    let print = std::process::Command::new("openssl")
+    let print = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg({
             let p = dir.path().join("ext.der");
@@ -322,7 +322,7 @@ async fn cades_t_create_acquires_a_real_timestamp_during_private_use() {
     );
     let p = dir.path().join("t.der");
     std::fs::write(&p, sig).unwrap();
-    let print = std::process::Command::new("openssl")
+    let print = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&p)
         .output()
@@ -337,7 +337,7 @@ fn count(haystack: &str, needle: &str) -> usize {
 fn cms_print(bytes: &[u8], dir: &std::path::Path) -> String {
     let p = dir.join("print.der");
     std::fs::write(&p, bytes).unwrap();
-    let out = std::process::Command::new("openssl")
+    let out = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&p)
         .output()
@@ -528,7 +528,7 @@ async fn audit_failure_before_use_is_a_not_applied_terminal_failure_without_arti
 fn run_openssl(args: &[&str], input: &[u8], dir: &std::path::Path) -> String {
     let file = dir.join("openssl.in");
     std::fs::write(&file, input).unwrap();
-    let mut command = std::process::Command::new("openssl");
+    let mut command = std::process::Command::new(oncl_testkit::tool::openssl());
     command.args(args).arg(&file);
     let out = command.output().unwrap();
     assert!(
@@ -819,7 +819,7 @@ fn openssl_rs256(token: &str, public_pem: &[u8], dir: &std::path::Path) -> bool 
     std::fs::write(dir.join("jws.pub"), public_pem).unwrap();
     std::fs::write(dir.join("jws.sig"), b64url_decode(s)).unwrap();
     std::fs::write(dir.join("jws.in"), format!("{h}.{p}")).unwrap();
-    std::process::Command::new("openssl")
+    std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["dgst", "-sha256", "-verify"])
         .arg(dir.join("jws.pub"))
         .arg("-signature")
@@ -1422,7 +1422,7 @@ fn xml_oracle(xml: &[u8], dir: &std::path::Path) -> serde_json::Value {
     let file = dir.join("signed.xml");
     std::fs::write(&file, xml).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/xml_verify.py");
-    let out = std::process::Command::new(oracle_python())
+    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
         .arg(script)
         .arg(&file)
         .output()
@@ -1653,7 +1653,7 @@ async fn gost_xmldsig_is_structurally_checked_and_sdk_verified_over_http() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("g.xml");
     std::fs::write(&file, &signed).unwrap();
-    let out = std::process::Command::new(oracle_python())
+    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
         .arg("-c")
         .arg(
             r#"
@@ -1731,7 +1731,7 @@ print(json.dumps({'sig':si.find('{%s}SignatureMethod'%DS).get('Algorithm'),
 }
 
 fn pyhanko(pdf: &[u8], leaf_der: &[u8], dir: &std::path::Path) -> serde_json::Value {
-    let python = oracle_python();
+    let python = oncl_testkit::tool::pyhanko_python();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/pdf_pyhanko.py");
     std::fs::write(dir.join("o.pdf"), pdf).unwrap();
     std::fs::write(dir.join("leaf.der"), leaf_der).unwrap();
@@ -3255,7 +3255,7 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     std::fs::write(tmp.path().join("k.pub"), pem).unwrap();
     std::fs::write(tmp.path().join("s.sig"), &signature).unwrap();
     std::fs::write(tmp.path().join("m.bin"), MESSAGE).unwrap();
-    let verified = std::process::Command::new("openssl")
+    let verified = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["dgst", "-sha256", "-verify"])
         .arg(tmp.path().join("k.pub"))
         .arg("-signature")
@@ -3434,7 +3434,7 @@ content = "param:file"
     service.stop().await;
 }
 fn sha256(bytes: &[u8]) -> Vec<u8> {
-    let out = std::process::Command::new("openssl")
+    let out = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["dgst", "-sha256", "-binary"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

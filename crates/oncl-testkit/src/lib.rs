@@ -10,6 +10,7 @@ pub mod collide;
 #[cfg(windows)]
 pub mod dll;
 pub mod plugin;
+pub mod tool;
 
 /// Root of the Cargo workspace (the directory holding the top-level `Cargo.toml`).
 pub fn workspace_root() -> PathBuf {

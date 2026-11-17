@@ -85,7 +85,7 @@ fn tsa_args(tsa: &str) -> Vec<&str> {
     vec!["--tsa-url", tsa, "--tsa-policy", POLICY]
 }
 fn openssl_verify(w: &World, signature: &Path, content: &Path) -> bool {
-    let openssl = openssl_command();
+    let openssl = oncl_testkit::tool::openssl();
     let root_pem = w.dir.path().join("root.pem");
     assert!(
         Command::new(&openssl)
@@ -388,13 +388,8 @@ fn pdf_fixture() -> PathBuf {
 }
 fn pyhanko(w: &World, pdf: &Path) -> (bool, serde_json::Value, String) {
     // ONCL_PYHANKO_PYTHON must name a Python with pyHanko installed (see
-    // docs/user/cli.md, "Oracle environments"); there is no default.
-    let python = std::env::var("ONCL_PYHANKO_PYTHON").unwrap_or_default();
-    let python = python.as_str();
-    assert!(
-        !python.is_empty() && Path::new(python).exists(),
-        "pyHanko oracle interpreter unavailable (ONCL_PYHANKO_PYTHON={python:?}): create a virtualenv with `python -m venv <dir>` and `<dir>/bin/pip install pyhanko pyhanko-certvalidator` (Scripts/ on Windows), then set ONCL_PYHANKO_PYTHON to its python executable"
-    );
+    // docs/dev/development.md, «Что нужно для тестов»); there is no default.
+    let python = oncl_testkit::tool::pyhanko_python();
     let script = w.dir.path().join("pyhanko_oracle.py");
     std::fs::write(&script, include_str!("support/pyhanko_oracle.py")).unwrap();
     let out = Command::new(python)
