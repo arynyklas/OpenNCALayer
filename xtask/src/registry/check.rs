@@ -31,13 +31,12 @@ pub const REQUIRED: [&str; 13] = [
 ];
 
 /// The external places a page may link to (`<a href>` only): the project's repository
-/// (releases, the `upstream` branch, issues, the README), its AUR package and the project's
+/// (releases, the `upstream` branch, issues, the README) and the project's
 /// Telegram chat. An entry ending in `/` is a prefix; any other entry is that page itself or
 /// something below it (`<entry>/…`), never another name that merely starts with it. Another
 /// one needs a reason here.
-pub const EXTERNAL_ALLOWED: [&str; 3] = [
+pub const EXTERNAL_ALLOWED: [&str; 2] = [
     "https://github.com/arynyklas/OpenNCALayer/",
-    "https://aur.archlinux.org/packages/openncalayer-bin",
     "https://t.me/OpenNCALayer",
 ];
 
@@ -628,10 +627,7 @@ mod tests {
         assert!(problems(&dir).contains("external resources are not allowed"));
         let dir = site(&[(
             "index.html",
-            page(
-                "ru",
-                "<img src=\"https://aur.archlinux.org/packages/openncalayer-bin\">",
-            ),
+            page("ru", "<img src=\"https://example.com/openncalayer.png\">"),
         )]);
         assert!(problems(&dir).contains("external resources are not allowed"));
     }
@@ -639,17 +635,15 @@ mod tests {
     #[test]
     fn external_link_outside_allowlist_is_rejected() {
         let body = "<a href=\"https://github.com/arynyklas/OpenNCALayer/releases\">ok</a>\
-                    <a href=\"https://aur.archlinux.org/packages/openncalayer-bin\">ok</a>\
                     <a href=\"https://t.me/OpenNCALayer\">ok</a>\
                     <a href=\"https://t.me/OpenNCALayer/12\">ok</a>\
                     <a href=\"https://github.com/arynyklas/OpenNCALayer-other/\">no</a>\
-                    <a href=\"https://aur.archlinux.org/packages/openncalayer-bin-evil\">no</a>\
                     <a href=\"https://t.me/OpenNCALayerFake\">no</a>\
                     <a href=\"https://t.me/OpenNCALayer_chat\">no</a>\
                     <a href=\"https://example.com/\">no</a>";
         let dir = site(&[("index.html", page("ru", body))]);
         let errors = problems(&dir);
-        assert_eq!(errors.matches("outside the allowed").count(), 5, "{errors}");
+        assert_eq!(errors.matches("outside the allowed").count(), 4, "{errors}");
     }
 
     #[test]
