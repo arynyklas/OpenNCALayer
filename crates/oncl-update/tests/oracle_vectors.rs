@@ -216,12 +216,14 @@ fn the_valid_repository_is_accepted_and_both_indexes_come_out_byte_for_byte() {
 #[test]
 fn every_attack_is_refused_at_its_step_as_its_error() {
     let table = attacks();
-    // The table covers every attack directory, and nothing else.
+    // The table covers every attack directory of the valid repository, and nothing else (the
+    // delegated repositories and cross-repo are `delegated_vectors.rs`'s).
     let mut names: Vec<String> = std::fs::read_dir(fixtures())
         .unwrap()
         .map(|e| e.unwrap())
         .filter(|e| e.path().is_dir() && e.file_name() != "valid")
         .map(|e| e.file_name().into_string().unwrap())
+        .filter(|name| !name.starts_with("delegated-") && name != "cross-repo")
         .collect();
     names.sort();
     let mut listed: Vec<&str> = table.iter().map(|a| a.name).collect();
