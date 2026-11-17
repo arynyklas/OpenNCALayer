@@ -1,19 +1,7 @@
 # `cargo xtask plugin-version-check`
 
-`cargo xtask plugin pending` compares a port's version with the beta index and nothing else: a
-port whose `plugin.toml`, `Cargo.toml` or `src/` changed but whose version did not would be
-skipped by the release, or its package would differ from the one the index describes. This check
-closes that gap.
+`cargo xtask plugin pending` сравнивает версию порта только с индексом `beta`. Если у порта изменились `plugin.toml`, `Cargo.toml` или `src/`, а версию не подняли, выпуск его пропустит или выпустит пакет, который не совпадает с описанным в индексе. Эта проверка ловит такой случай.
 
-It compares the working tree with the last `plugins-*` tag reachable from `HEAD`
-(`git describe --tags --match 'plugins-*'`). For every port that exists at that tag, if
-`plugin.toml` still has the tag's `version` and any of `plugins/<port>/plugin.toml`,
-`plugins/<port>/Cargo.toml` or `plugins/<port>/src/` differs from the tag, the port is reported
-and the exit status is 1. Everything else (a changed `registry.toml`, a port that is new since
-the tag, the shared crates) is not an error. Whether `Cargo.toml` and `plugin.toml` versions
-agree is a `plugin pack` rule, not this check's.
+Команда сравнивает рабочее дерево с последним тегом `plugins-*`, достижимым из `HEAD` (`git describe --tags --match 'plugins-*'`). Порт, который есть в этом теге, попадает в отчёт, если в `plugin.toml` осталась версия из тега, а хотя бы один из файлов `plugins/<порт>/plugin.toml`, `plugins/<порт>/Cargo.toml` или каталог `plugins/<порт>/src/` отличается от тега. Тогда код выхода 1. Изменённый `registry.toml`, порт, появившийся после тега, и общие крейты ошибкой не считаются. Совпадение версий в `Cargo.toml` и `plugin.toml` проверяет `plugin pack`, а не эта команда.
 
-Without a tag in the checkout the command prints `NOTICE: no tag matching plugins-* ...` and
-exits 0: a shallow clone without tags checks nothing. CI therefore fetches the tags: the `test`
-job of `.github/workflows/ci.yml` checks out with `fetch-depth: 0` and runs the check on Linux
-(after the plugin operations lint). Run it locally before bumping versions for a release.
+Если в checkout нет ни одного такого тега, команда печатает `NOTICE: no tag matching plugins-* ...` и завершается с кодом 0, так что неглубокий клон без тегов ничего не проверяет. Поэтому CI забирает теги: задание `test` в `.github/workflows/ci.yml` делает checkout с `fetch-depth: 0` и запускает проверку на Linux после проверки операций плагинов. Локально её стоит запускать перед тем, как поднимать версии к выпуску.

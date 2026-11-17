@@ -1,57 +1,56 @@
-# MP0 — инвентаризация портов: что из 34 плагинов может работать в окне ручных инструментов
+# Инвентаризация портов: что из 34 плагинов может работать в окне ручных инструментов
 
-**Статус:** результат стадии MP0 (`docs/design/manual-plugins.md` §9.3). База: ветка `feat/platform-sdk-apps`, tip `ea0af85e`. Кода продукта не менялось. Язык документа — русский, как у дизайна; идентификаторы и имена файлов — как в репозитории.
+Таблица «порт × метод» показывает, какие методы портов можно запустить в окне ручных инструментов и почему остальные нельзя. Модель разрешений описана в [manual-plugins.md](manual-plugins.md), руководство пользователя в [docs/user/manual-plugins.md](../user/manual-plugins.md). Порт `onaidocs` появился позже и в инвентаризацию не входит.
 
-Таблица **порт × метод → supported | unsupported(причина)** построена по реальным данным: секция импортов 34 собранных wasm-модулей (уровень доказательства **W**, самый сильный), чтение исходников пути каждого метода (**S**), существующие тесты портов, которые при сборке этого коммита проходят (**T**), и вызов-граф-скрипт по именам функций (**G**, слабый; только для строк «не подписывает», помеченных `G`). Прогон реального headless-пути `oncl-core` с синтетическим ключом **не выполнялся** (см. §2.3): вместо него — существующие тесты `oncl-port-tests` на интерактивной среде (`Harness::call` — свежий экземпляр на вызов, диалоги по сценарию, `origin = None`), они зелёные на этом коммите.
+Вердикты получены из четырёх источников. Самый надёжный (**W**) это секция импортов 34 собранных wasm-модулей. Затем чтение исходников пути каждого метода (**S**), существующие тесты портов (**T**) и граф вызовов по именам функций (**G**, слабый, используется только в строках «не подписывает»). Для объявленных операций вердикты затем подтверждены прогоном настоящего wasm через `plugin_call_approved` (`crates/oncl-core/tests/plugin_ports_manual/`, см. §6).
 
 ## 0. Итог в цифрах
 
-- Портов (wasm-пакетов): **34** (35 имён `modules`: у `documentolog` два). Методов (операций, видимых WSS-вызывающему, включая диспетчерские ветки): **166**.
-- **supported** (полностью или с условиями шаблона): **15** метод(ов) в **9** портах: `dogovor24`, `efactoring`, `energy`, `eproc`, `esf-osdkz`, `fhs`, `market`, `qiwi`, `rating1c`.
-- **unsupported:** **59** метод(ов). **Не подписывают** (нет применения ключа; в окне не предлагаются, показаны для полноты): **92**.
-- Портов без единого supported-метода: **25** из 34 (см. §4.3).
+- Портов (wasm-пакетов) 34, имён `modules` 35 (у `documentolog` два). Методов, видимых вызывающему через WSS, включая ветки диспетчера, 166.
+- Пригодны (полностью или при условиях шаблона) 15 методов в 9 портах: `dogovor24`, `efactoring`, `energy`, `eproc`, `esf-osdkz`, `fhs`, `market`, `qiwi`, `rating1c`.
+- Непригодны 59 методов. Ещё 92 метода не подписывают: они не применяют ключ, в окне не предлагаются и перечислены для полноты.
+- Портов без единого пригодного метода 25 из 34 (§4.2).
 
-## 1. Метод и уровни доказательства
+## 1. Уровни доказательства
 
 | Уровень | Что означает |
 |---|---|
-| **W** | Факт есть в секции импортов wasm (импорт `oncl::<имя>`): прямой разбор бинарника скриптом `scripts/mp0_wasm_imports.py`. Показывает, что порт *может* вызвать эту функцию хоста; не показывает, *на каком методе*. |
-| **S** | Прочитан исходник пути метода (диспетчер → функция → вызываемые хост-функции). Номера строк указаны. |
-| **T** | Есть существующий тест порта (`crates/oncl-port-tests/tests/*`), подтверждающий поведение; тесты `clones`, `ecc`, `medium` выполнены на этом коммите (97 ок). |
-| **G** | Только имена в вызов-графе (грубое приближение, завышает набор вызовов). Используется лишь в строках «не подписывает». |
+| **W** | Импорт `oncl::<имя>` есть в секции импортов wasm; бинарник разбирает скрипт `scripts/mp0_wasm_imports.py`. Показывает, что порт может вызвать функцию хоста, но не показывает, в каком методе. |
+| **S** | Прочитан исходник пути метода: диспетчер, функция, вызываемые функции хоста. Номера строк указаны. |
+| **T** | Поведение подтверждает существующий тест порта (`crates/oncl-port-tests/tests/*`). |
+| **G** | Только имена в графе вызовов; приближение грубое и завышает набор вызовов. Используется лишь в строках «не подписывает». |
 
-**Как собраны wasm.** `cd plugins && cargo build --release --locked --target wasm32-unknown-unknown --workspace` (цель `wasm32-unknown-unknown` установлена; сеть не потребовалась, `Cargo.lock` есть, зависимости уже в кэше cargo): 34 `oncl_port_*.wasm`, 30 с лишним секунд. Это сборка без `--remap-path-prefix` из `cargo xtask plugin pack` (xtask/src/plugin.rs:117-139); набор импортов от этого не зависит. Импорты читает `python scripts/mp0_wasm_imports.py <каталог>/wasm32-unknown-unknown/release`: то, что возвращает `Compiled::imports()` (`crates/oncl-plugin/src/runtime.rs:350`: «in the order of its import section»; модуль `oncl`, имена — `Import::name()` в `crates/oncl-pdk/src/abi.rs`). Все 34 модуля импортируют только из `oncl`; все имена известны ABI.
+Модули собираются командой `cd plugins && cargo build --release --locked --target wasm32-unknown-unknown --workspace` (34 файла `oncl_port_*.wasm`). Это сборка без `--remap-path-prefix`, который добавляет `cargo xtask plugin pack`; на набор импортов это не влияет. Импорты читает `python scripts/mp0_wasm_imports.py <каталог>/wasm32-unknown-unknown/release`; результат совпадает с `Compiled::imports()` (модуль `oncl`, имена из `Import::name()` в `crates/oncl-pdk/src/abi.rs`). Все 34 модуля импортируют только из `oncl`, и все имена известны ABI.
 
-## 2. Факты рантайма, от которых зависит вердикт
+## 2. Поведение хоста, от которого зависит вердикт
 
-Это то, что реально делает хост, а не то, что предполагает дизайн. Все номера строк — этого worktree.
-
-| # | Факт | Где | Следствие для окна ручных инструментов |
+| # | Факт | Где | Следствие для ручного окна |
 |---|---|---|---|
-| F1 | `call_headless` создаёт **новый экземпляр** модуля на каждый вызов (`Guest::new(self, state)`), «ничего не переживает вызов» | `crates/oncl-plugin/src/headless.rs:132-156` (комментарий `:132-133`, `Guest::new` — `:156`) | Любое состояние плагина в памяти wasm (`thread_local!`, `static Mutex`) между двумя вызовами теряется. В WSS экземпляр живёт на сессию (`crates/oncl-plugin/src/modules.rs:1-18`), поэтому порты вида «`selectKey` → `sign`» работают по WSS и **не работают** вызов за вызовом. Дизайн упоминает только `shared_get/put` и `settings`; **in-instance state — отдельная и главная причина** (порты: arta, buhta, devart, doodocs, skf, taxtech и др.). |
-| F2 | `requires_interaction`: `Dialog*`, `KeysChoose/Select/FlowOpen/FlowPick`, `File*`, `CoreOpenWindow`, `Keystore*` → `InteractionRequired` до диспетча | `headless.rs:105-131`, проверка в `dispatch` — `:88-104` | Как C6. Ключевые `select/choose` получат ответ Core (MP4); `Dialog*`/`File*` остаются запретом. |
-| F3 | Backend Core обслуживает только: Hash, KeysSignRaw (`plugins.rs:346-410`), Shared, Now, Log, Settings, PageFile, Http, KeysSign{Cms,CmsEx,Xml,XmlEx,Xades}, CmsVerify, Ca*/Ocsp/Crl/Tsp*, KeysDescribe/Chain/Release, плюс «публичные» Random/CertInfo/CertDetails/XmlVerify/Platform/LocalTime (`headless.rs:194-209`). **Всё прочее — `PermissionDenied`** (`crates/oncl-core/src/plugins/capabilities.rs:203`): `keys_open`, `keys_terminals`, `reply_drop`, `call_locale`, `core_*`, `tokens_*`. | `capabilities.rs:38-205` | `reply_drop` (его линкуют **33 из 34** портов; вызывается только на нечитаемый запрос) и `call_locale` в дизайне §3.5 не упомянуты; `keys_terminals` дизайн отвечает `[]` (MP4). Для supported-портов `reply_drop` достижим только при нечитаемом `request`, который строит хост. |
-| F4 | `page_file_read` отдаёт только **заранее привязанный вход** с именем = точному пути; `page_file_write` принимает `dir`/`name` **без** `/ \ : NUL` и расширение из `page_files_ext`, и только заранее привязанный выход | `capabilities.rs:206-285` (`safe` — `:243-250`) | Порты, требующие «диска страницы» (`arta.signFilePath`, `ezsigner.signFilePath`), зовут `page_file_write` с путём на диске страницы (с буквой диска), который отвергается **после** применения ключа: честный отказ до ключа невозможен. |
-| F5 | У ручного вызова нет Origin: `encode_input(request, caller.browser_origin(), "ru", None)`; `LocalOperator` даёт `None` | `headless.rs:144-145` | Порты, читающие `request.origin`: ровно **7 из 34** (см. §3, колонка Origin). Остальные 27 Origin не читают (`grep -E '\.origin\b|origin:'` по `plugins/*/src`). |
-| F6 | Язык окна для плагина в headless фиксирован `"ru"` | `headless.rs:144-145` | Влияет только на тексты диалогов/ответов; для supported-методов не критично. |
+| F1 | `call_headless` создаёт новый экземпляр модуля на каждый вызов (`Guest::new(self, state)`), ничего не переживает вызов | `crates/oncl-plugin/src/headless.rs` | Состояние плагина в памяти wasm (`thread_local!`, `static Mutex`) между вызовами теряется. Через WSS экземпляр живёт всю сессию (`crates/oncl-plugin/src/modules.rs`), поэтому порты вида «`selectKey`, затем `sign`» работают через WSS и не работают вызов за вызовом. Это одна из главных причин непригодности (arta, buhta, devart, doodocs, skf, taxtech и другие). |
+| F2 | `requires_interaction`: `Dialog*`, `KeysChoose/Select/FlowOpen/FlowPick`, `File*`, `CoreOpenWindow`, `Keystore*` дают `InteractionRequired` до диспетчеризации | `headless.rs` | На `select/choose` в ручном окне отвечает Core; `Dialog*` и `File*` остаются запрещены. |
+| F3 | Бэкенд Core обслуживает только Hash, KeysSignRaw, Shared, Now, Log, Settings, PageFile, Http, KeysSign{Cms,CmsEx,Xml,XmlEx,Xades}, CmsVerify, Ca*/Ocsp/Crl/Tsp*, KeysDescribe/Chain/Release и общедоступные Random/CertInfo/CertDetails/XmlVerify/Platform/LocalTime. Остальное даёт `PermissionDenied`: `keys_open`, `keys_terminals`, `reply_drop`, `call_locale`, `core_*`, `tokens_*` | `crates/oncl-core/src/plugins/capabilities.rs` | `reply_drop` импортируют 33 из 34 портов, но вызывается он только на нечитаемый запрос, а запрос строит хост. В ручном окне `reply_drop` разрешён, `keys_terminals` отвечает `[]`. |
+| F4 | `page_file_read` отдаёт только заранее привязанный вход с именем, равным точному пути; `page_file_write` принимает `dir`/`name` без `/ \ : NUL`, с расширением из `page_files_ext`, и только заранее привязанный выход | `capabilities.rs` | Порты, которым нужен диск страницы (`arta.signFilePath`, `ezsigner.signFilePath`), вызывают `page_file_write` с путём, содержащим букву диска. Запись отвергается уже после применения ключа, поэтому отказать заранее нельзя. |
+| F5 | У ручного вызова нет Origin: `encode_input(request, caller.browser_origin(), "ru", None)`, `LocalOperator` даёт `None` | `headless.rs` | `request.origin` читают 7 портов из 34: buhta, k2sign, knp, nursign, qoltanba, taxtech, xdox. Только taxtech терпит `None` (подставляет `UNDEFINED`). `qoltanba` отвечает `INVALID_ORIGIN`, `xdox` отвечает `That module can be used only on https://xdox.kz`, buhta, k2sign, knp и nursign обрывают соединение. |
+| F6 | Язык для плагина в headless-вызове всегда `"ru"` | `headless.rs` | Влияет только на тексты ответов; для пригодных методов не важен. |
 
-### 2.1 Классы импортов (применяются к секции импортов каждого порта)
+Ворота `keys::terminals` стоят перед выбором ключа в ветке токенов общего `select` (`plugins/common/legacy/src/guest.rs`): пустой список даёт `STORAGE_EMPTY`. Поэтому шаблоны пригодных портов с `keys_terminals` (rating1c, eproc, esf-osdkz) подставляют `storageName=PKCS12`.
 
-| Класс | Импорты | Политика окна ручных инструментов (дизайн §3.5) |
+### 2.1 Классы импортов
+
+| Класс | Импорты | Политика ручного окна |
 |---|---|---|
-| A | `keys_select`, `keys_choose`, `keys_release`, `keys_describe`, `keys_chain` | разрешены; выбор отвечает Core для единственного привязанного ключа |
-| T | `keys_terminals` | `[]`; порт, у которого **успех** требует непустого списка считывателей, — unsupported (TERMINALS) |
-| SIGN | `keys_sign_raw`, `keys_sign_cms`, `keys_sign_cms_ex`, `keys_sign_xml`, `keys_sign_xml_ex`, `keys_sign_xades` | по одному применению ключа; профиль принуждает Core |
-| F | `dialog_*`, `file_*`, `keys_open`, `page_file_*` | запрещены; если нужны на успешном пути — unsupported |
-| NET | `ocsp_fetch`, `tsp_stamp`, `tsp_request`, `crl_fetch`, `ca_*`, `pkix_path` (PKI); `http_request_ex` (произвольный http(s)) | в согласии показывается сеть; произвольный `http_request_ex` — отдельное решение |
-| ST | `shared_*`, `settings_*` | состояние между вызовами: в headless недоступно |
-| V | `cms_verify`, `xml_verify` | локальная проверка (`xml_verify` разрешён; `cms_verify` в плане запрещён) |
-| нейтральные | `log`, `now`, `random`, `cert_info`, `cert_details`, `hash`, `local_time`, `platform`, `reply_drop` | см. F3 про `reply_drop` |
+| A | `keys_select`, `keys_choose`, `keys_release`, `keys_describe`, `keys_chain` | разрешены; на выбор отвечает Core для единственного привязанного ключа |
+| T | `keys_terminals` | ответ `[]`; порт, которому для успеха нужен непустой список считывателей, непригоден (TERMINALS) |
+| SIGN | `keys_sign_raw`, `keys_sign_cms`, `keys_sign_cms_ex`, `keys_sign_xml`, `keys_sign_xml_ex`, `keys_sign_xades` | одно применение ключа; профиль принуждает Core |
+| F | `dialog_*`, `file_*`, `keys_open`, `page_file_*` | запрещены; если нужны на успешном пути, порт непригоден |
+| NET | `ocsp_fetch`, `tsp_stamp`, `tsp_request`, `crl_fetch`, `ca_*`, `pkix_path` (PKI); `http_request_ex` (произвольный http(s)) | сеть показана в согласии; разрешены только серверы PKI |
+| ST | `shared_*`, `settings_*` | состояние между вызовами в headless недоступно |
+| V | `cms_verify`, `xml_verify` | локальная проверка |
+| нейтральные | `log`, `now`, `random`, `cert_info`, `cert_details`, `hash`, `local_time`, `platform`, `reply_drop` | разрешены (см. F3 про `reply_drop`) |
 
-### 2.2 Матрица импортов портов (уровень **W**)
+### 2.2 Импорты портов (уровень **W**)
 
-Колонки: выбор ключа (sel), терминалы (term), виды подписи (sign), диалоги (dlg), файлы/page-file (file), `keys_open` (open), сеть (net), состояние (state), читает ли порт `request.origin` (origin: **yes** — читает). «Supported / всего» — число методов из §3.
-
+Колонки: выбор ключа (sel), терминалы (term), виды подписи (sign), диалоги (dlg), файлы и файлы страницы (file), `keys_open` (open), сеть (net), состояние (state), читает ли порт `request.origin` (origin, **yes** если читает). Последняя колонка: пригодных методов из подписывающих (по §3).
 | Порт | modules | sel | term | sign | dlg | file | open | net | state | origin | supported / sign-методов |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | `acbank` | `kz.acbank.business.api.ncalayer.module` | keys_select |  | raw | choice message |  |  |  | shared_get shared_put |  | 0 / 2 |
@@ -91,19 +90,32 @@
 
 Число портов с импортом (из 34): `keys_release` 34, `log` 34, `random` 34, `reply_drop` 33, `keys_sign_cms_ex` 27, `keys_select` 24, `cert_info` 23, `cert_details` 22, `keys_terminals` 17, `now` 15, `ocsp_fetch` 15, `keys_open` 11, `keys_sign_xml_ex` 11, `local_time` 8, `dialog_choice` 7, `file_choose` 7, `http_request_ex` 7, `keys_sign_raw` 7, `ca_issuer` 6, `cms_verify` 6, `tsp_stamp` 6, `dialog_message` 5, `dialog_password` 5, `keys_sign_xml` 5, `keys_choose` 4, `platform` 4, `file_open_ex` 3, `hash` 3, `page_file_read` 3, `page_file_write` 3, `ca_list` 2, `keys_chain` 2, `xml_verify` 2, `crl_fetch` 1, `keys_sign_xades` 1, `pkix_path` 1, `settings_get` 1, `settings_put` 1, `shared_get` 1, `shared_put` 1, `tsp_request` 1.
 
-### 2.3 Что не выполнялось
+## 3. Таблица «порт × метод»
 
-- **Headless-прогон реального `oncl-core` с синтетическим ключом не выполнен.** Путь `plugin_call_approved` (MP2/MP3a) и `PluginInteraction` (MP4) ещё не существуют; сегодняшний `call_headless` отвергает `keys::select` как `InteractionRequired` (F2), поэтому прогон портов через него невозможен без кода MP4. Это не обход требования, а нереализованная предпосылка.
-- Вместо него выполнены существующие тесты `oncl-port-tests` (`cargo test -p oncl-port-tests --test clones --test ecc --test medium`: 97 passed) и прицельно `xdox_origin_substring_check`, `nursign_missing_origin_drops`, `k2_missing_origin_drops`. `heavy.rs` не запускался; на него ссылки уровня **T** указывают как на существующие тесты (`buhta_missing_origin_drops`, `qoltanba_origin_check`), а не как на выполненные мной.
-- Все вердикты для supported-портов — это вердикт «по коду пути метода»; ни один не подтверждён подписью через будущий ручной путь.
+Вердикты:
 
-## 3. Таблица «порт × метод → вердикт»
+- **supported**: вызов работает как есть на привязанном ключе, без `Dialog*`, `File*` и `keys::open`, без Origin, без состояния между вызовами, с одной подписью, и подписывается аргумент запроса.
+- **supported\***: то же при условиях из колонки «Причина / условия». Это значения параметров шаблона, которые задаёт хост; замена `cosign=Auto` на `Never`; диалог, достижимый только при ошибке, где трап `InteractionRequired` просто завершает вызов ошибкой.
+- **unsupported**: есть причина из списка ниже.
+- **no-sign**: метод не применяет ключ для подписи и в окне не предлагается.
 
-Обозначения вердиктов: **supported** — вызов работает как есть на привязанном ключе без `Dialog*/File*/keys::open`, без Origin, без состояния между вызовами, одна подпись, содержимое = аргумент; **supported\*** — то же, но при условиях (в колонке «Условия»: значения параметров шаблона, которые выбирает хост; `cosign=Auto` приводится к `Never`; диалог достижим только на пути ошибки, где трап `InteractionRequired` просто завершает вызов ошибкой); **unsupported** — причина(ы) из списка ниже; **no-sign** — метод не применяет ключ для подписи (информационный; в окне не предлагается).
+Коды причин:
 
-Коды причин: `ORIGIN` — needs a page Origin (absent under LocalOperator; never faked); `DIALOG` — Dialog* import on the success path; `KEYS_OPEN` — keys::open with a path/bytes + password from the request (design 3.5: PermissionDenied); `STATE` — needs in-instance state left by an earlier call of the same session (fresh instance per manual call); `OPTIONS` — signing options outside the whitelist profile (attrs.extra/ESEDO, econtent_type, Custom TSA); `MULTI` — more than one signature per call (max_uses = 1); `FILE` — File*/page_file_* needed; `DERIVED` — signed bytes computed or fetched by the plugin (not an argument); `COSIGN` — cosign = Into(cms) (co-signing a CMS from the request); `HTTP` — arbitrary http(s) call outside the PKI allow-list that the success path needs (vendor licence server); `TERMINALS` — token-storage gate on keys::terminals, which the design answers [].
+| Код | Значение |
+|---|---|
+| `ORIGIN` | нужен Origin страницы; у ручного вызова его нет, и он не подставляется |
+| `DIALOG` | импорт `Dialog*` на успешном пути |
+| `KEYS_OPEN` | `keys::open` с путём или байтами хранилища и паролем из запроса |
+| `STATE` | нужно состояние экземпляра, оставленное предыдущим вызовом той же сессии; ручной вызов всегда получает новый экземпляр |
+| `OPTIONS` | опции подписи вне допустимого профиля (`attrs.extra` ЭСЭДО, `econtent_type`, своя TSA) |
+| `MULTI` | больше одной подписи за вызов (`max_uses = 1`) |
+| `FILE` | нужны `File*` или `page_file_*` |
+| `DERIVED` | подписываются байты, которые плагин вычисляет или скачивает сам, а не аргумент |
+| `COSIGN` | `cosign = Into(cms)`: соподпись CMS из запроса |
+| `HTTP` | успешному пути нужен произвольный http(s)-сервер вне PKI (лицензионный сервер поставщика) |
+| `TERMINALS` | успех зависит от `keys::terminals`, а в окне список пуст |
 
-Колонки: `Импорты` — host-функции на пути метода (по чтению исходника); `Вид/опции` — вид ключевого применения и опции, **выбираемые плагином**; `Подписей` — число применений ключа за вызов; `Origin`; `State` — состояние между вызовами; `Содержимое` — bound (аргумент) или derived (вычислено/получено плагином); `Док-во` — уровень и якоря `файл:строка` (пути относительно `plugins/` или `crates/`).
+Колонки: «Импорты метода» это функции хоста на пути метода по исходнику; «Вид / опции» это вид применения ключа и опции, которые выбирает плагин; «Подписей» это число применений ключа за вызов; «State» это состояние между вызовами; «Содержимое» это bound (аргумент) или derived (вычислено или получено плагином); «Док-во» это уровень и ссылки `файл:строка` относительно `plugins/` или `crates/`. Ячейки таблицы оставлены на английском, как в исходных заметках к коду.
 
 | Порт | Метод | Вердикт | Причина / условия | Импорты метода | Вид / опции | Подписей | Origin | State | Содержимое | Док-во |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -222,7 +234,7 @@
 | `nursign` | `xml` | **unsupported** | `ORIGIN`; every error path also calls dialog_message | keys_choose, keys_sign_cms_ex\|keys_sign_xml_ex, http_request_ex, file_open_ex (file), dialog_message (every error) | xml_ex; cms: cosign=Auto, ts=Kalkan (text) / none (binary,file), encapsulate=true(text)/false; xml: whole document | 1 | YES (presence; host allow-list and relative URLs) | no | data arg, or file at upload_url (download), or picked file | W+S+T: nursign/src/lib.rs:70, nursign/src/lib.rs:183, oncl-port-tests/tests/ecc.rs:648 |
 | `nursign` | `multixml` | **unsupported** | `ORIGIN`, `MULTI`; every error path also calls dialog_message | keys_choose, keys_sign_cms_ex\|keys_sign_xml_ex, http_request_ex, file_open_ex (file), dialog_message (every error) | xml_ex; cms: cosign=Auto, ts=Kalkan (text) / none (binary,file), encapsulate=true(text)/false; xml: whole document | N | YES (presence; host allow-list and relative URLs) | no | data arg, or file at upload_url (download), or picked file | W+S+T: nursign/src/lib.rs:70, nursign/src/lib.rs:200, oncl-port-tests/tests/ecc.rs:648 |
 | `nursign` | `file` | **unsupported** | `ORIGIN`, `FILE`, `DERIVED`; every error path also calls dialog_message | keys_choose, keys_sign_cms_ex\|keys_sign_xml_ex, http_request_ex, file_open_ex (file), dialog_message (every error) | cms_ex; cms: cosign=Auto, ts=Kalkan (text) / none (binary,file), encapsulate=true(text)/false; xml: whole document | 1 | YES (presence; host allow-list and relative URLs) | no | data arg, or file at upload_url (download), or picked file | W+S+T: nursign/src/lib.rs:70, nursign/src/lib.rs:221, oncl-port-tests/tests/ecc.rs:648 |
-| `qiwi` | `signXml [callID, xml]` | **supported*** (declared as two operations, one per key algorithm, once profile `xml_ex` gained `transforms`; see W3-1 below) | algorithm URIs depend on the key: the profile must accept Kalkan's URIs of the key (default) — for GOST 2015 keys the plugin asks GOST 2004 URIs, which the core's `known URIs fitting the key` rule may refuse (abi.rs SignXmlExArgs.signature_method) | keys_select, keys_sign_xml_ex, xml_verify, now | xml_ex; placement=FirstChildOfDocument, c14n Inclusive, transforms Enveloped+C14N-with-comments, signature/digest URIs by cert signature alg (RSA-SHA1, RSA-SHA256, else GOST 2004 URIs, GOST 2015 included), strip_whitespace=false, declaration+standalone=no | 1 | no | SESSION (static) is only a 20-minute key cache; first call selects | bound (xml arg 1) | W+S+T: qiwi/src/lib.rs:104, qiwi/src/lib.rs:145, oncl-port-tests/tests/medium.rs:1342 |
+| `qiwi` | `signXml [callID, xml]` | **supported*** (declared as two operations, one per key algorithm; see §6) | algorithm URIs depend on the key: the profile must accept Kalkan's URIs of the key (default) — for GOST 2015 keys the plugin asks GOST 2004 URIs, which the core's `known URIs fitting the key` rule may refuse (abi.rs SignXmlExArgs.signature_method) | keys_select, keys_sign_xml_ex, xml_verify, now | xml_ex; placement=FirstChildOfDocument, c14n Inclusive, transforms Enveloped+C14N-with-comments, signature/digest URIs by cert signature alg (RSA-SHA1, RSA-SHA256, else GOST 2004 URIs, GOST 2015 included), strip_whitespace=false, declaration+standalone=no | 1 | no | SESSION (static) is only a 20-minute key cache; first call selects | bound (xml arg 1) | W+S+T: qiwi/src/lib.rs:104, qiwi/src/lib.rs:145, oncl-port-tests/tests/medium.rs:1342 |
 | `qiwi` | `logOut` | **no-sign** |  | - | - | 0 | no | clears SESSION | - | S: qiwi/src/lib.rs:84 |
 | `qoltanba` | `signFileBytes(data,storage)` | **unsupported** | `ORIGIN`; any request that names a method gets INVALID_ORIGIN under an absent Origin | keys_select, keys_terminals, ca_issuer, ocsp_fetch, keys_sign_cms_ex, cms_verify | cms_ex; encapsulate=true?, cosign=Auto, ts=Kalkan, std attrs | 1 | YES: https://qoltanba.kz or a subdomain (site-specific check) | LANG thread_local | bound (base64 arg 0) | W+S+T: qoltanba/src/lib.rs:171, qoltanba/src/lib.rs:201, oncl-port-tests/tests/heavy.rs:2690 |
 | `qoltanba` | `checkCMSBytes` | **no-sign** | `ORIGIN`; any request that names a method gets INVALID_ORIGIN under an absent Origin | - | - | 0 | YES: https://qoltanba.kz or a subdomain (site-specific check) | LANG thread_local | - | W+S+T: qoltanba/src/lib.rs:171, qoltanba/src/lib.rs:201, oncl-port-tests/tests/heavy.rs:2690 |
@@ -261,7 +273,7 @@
 | `uchet` | `getFilePath` | **no-sign** | `FILE` | file_choose | - | 0 | no | no | - | W+S: uchet/src/port.rs:183 |
 | `uchet` | `checkCMS` | **no-sign** | `FILE` | page_file_read, cms_verify | - | 0 | no | no | - | W+S: uchet/src/port.rs:217 |
 | `uchet` | `checkCMSFromWeb` | **no-sign** |  | http_request_ex, cms_verify | - | 0 | relative_to_origin when the URL is relative | no | - | W+S: uchet/src/port.rs:227 |
-| `uchet` | `signXml(storage,keyType,xml,tbs,parent)` | **unsupported** | `TERMINALS`; storage 'PKCS12' throws (Outcome::Thrown); any token storage hits keys::terminals -> [] -> STORAGE_EMPTY; only a 'JKS' storage name could pass, which depends on how MP4 matches `storages` against the bound key | keys_select, keys_terminals, keys_sign_xml_ex | xml_ex; as rating1c legacy::sign_xml | 1 | no | no | bound (xml arg 2) | W+S: uchet/src/port.rs:149, common/legacy/src/guest.rs:208 |
+| `uchet` | `signXml(storage,keyType,xml,tbs,parent)` | **unsupported** | `TERMINALS`; storage 'PKCS12' throws (Outcome::Thrown); any token storage hits keys::terminals -> [] -> STORAGE_EMPTY; only a 'JKS' storage name could pass, which depends on how the core matches `storages` against the bound key | keys_select, keys_terminals, keys_sign_xml_ex | xml_ex; as rating1c legacy::sign_xml | 1 | no | no | bound (xml arg 2) | W+S: uchet/src/port.rs:149, common/legacy/src/guest.rs:208 |
 | `uchet` | `signXmlApi(keyPath,password,xml)` | **unsupported** | `KEYS_OPEN` | keys_open, keys_sign_xml_ex | xml_ex; whole document (declaration prepended by the plugin) | 1 | no | no | bound (xml arg 2) | W+S: uchet/src/port.rs:412, uchet/src/port.rs:429 |
 | `uchet` | `signFile(4)` | **unsupported** | `KEYS_OPEN`, `DIALOG`, `FILE`, `DERIVED` | page_file_read, file_open_ex, dialog_password, keys_open, keys_terminals, ocsp_fetch (check_cert), keys_sign_cms_ex, page_file_write | cms_ex; encapsulate=true, cosign=Auto, ts=Kalkan, attrs ct+md+scv2+signingTime(Now,Auto), certs=Signer, digest=cert's, output=DER | 1 | no | no | derived (file read by page path) | W+S: uchet/src/port.rs:461, uchet/src/port.rs:475, uchet/src/port.rs:532 |
 | `uchet` | `signFilePath(3)` | **unsupported** | `KEYS_OPEN`, `DIALOG`, `FILE`, `DERIVED` | page_file_read, file_open_ex, dialog_password, keys_open, keys_terminals, ocsp_fetch (check_cert), keys_sign_cms_ex, page_file_write | cms_ex; encapsulate=true, cosign=Auto, ts=Kalkan, attrs ct+md+scv2+signingTime(Now,Auto), certs=Signer, digest=cert's, output=DER | 1 | no | no | derived (file read by page path) | W+S: uchet/src/port.rs:469, uchet/src/port.rs:475, uchet/src/port.rs:532 |
@@ -276,7 +288,7 @@
 
 ## 4. Сводка
 
-### 4.1 Вердикты
+### 4.1 Вердикты и причины
 
 | Вердикт | Методов |
 |---|---|
@@ -286,25 +298,23 @@
 | no-sign | 92 |
 | всего | 166 |
 
-### 4.2 Гистограмма причин unsupported
+В колонке «первая» учтена первая, самая жёсткая причина строки; «всего» означает, что причина есть среди прочих; «единственная» означает, что метод заблокирован только ею (§4.4).
 
-`primary` — первая (самая жёсткая) причина строки; `в любой` — строка помечена причиной, возможно вместе с другими; `только она` — строка заблокирована только этой причиной (если её снять, метод станет supported*, см. §4.5).
-
-| Причина | primary | в любой | только она |
+| Причина | первая | всего | единственная |
 |---|---|---|---|
-| `ORIGIN` — needs a page Origin (absent under LocalOperator; never faked) | 15 | 15 | 6 |
-| `DIALOG` — Dialog* import on the success path | 9 | 12 | 0 |
-| `KEYS_OPEN` — keys::open with a path/bytes + password from the request (design 3.5: PermissionDenied) | 13 | 21 | 6 |
-| `STATE` — needs in-instance state left by an earlier call of the same session (fresh instance per manual call) | 8 | 10 | 3 |
-| `OPTIONS` — signing options outside the whitelist profile (attrs.extra/ESEDO, econtent_type, Custom TSA) | 6 | 14 | 5 |
-| `MULTI` — more than one signature per call (max_uses = 1) | 5 | 14 | 5 |
-| `FILE` — File*/page_file_* needed | 1 | 7 | 0 |
-| `DERIVED` — signed bytes computed or fetched by the plugin (not an argument) | 1 | 16 | 1 |
-| `COSIGN` — cosign = Into(cms) (co-signing a CMS from the request) | 0 | 1 | 0 |
-| `HTTP` — arbitrary http(s) call outside the PKI allow-list that the success path needs (vendor licence server) | 0 | 2 | 0 |
-| `TERMINALS` — token-storage gate on keys::terminals, which the design answers [] | 1 | 1 | 1 |
+| `ORIGIN` | 15 | 15 | 6 |
+| `DIALOG` | 9 | 12 | 0 |
+| `KEYS_OPEN` | 13 | 21 | 6 |
+| `STATE` | 8 | 10 | 3 |
+| `OPTIONS` | 6 | 14 | 5 |
+| `MULTI` | 5 | 14 | 5 |
+| `FILE` | 1 | 7 | 0 |
+| `DERIVED` | 1 | 16 | 1 |
+| `COSIGN` | 0 | 1 | 0 |
+| `HTTP` | 0 | 2 | 0 |
+| `TERMINALS` | 1 | 1 | 1 |
 
-По портам (порт целиком без supported-метода; главная причина):
+### 4.2 Порты без пригодных методов
 
 | Порт | главная причина | остальные |
 |---|---|---|
@@ -334,39 +344,32 @@
 | `workspace` | `OPTIONS` | `MULTI` |
 | `xdox` | `ORIGIN` | `COSIGN` |
 
-### 4.3 Порты, пригодные для первого релиза
+### 4.3 Порты с операциями
 
-Порт входит, если у него есть хотя бы один **supported/supported\*** метод по таблице §3 (порядок — от простого к сложному):
+Порт получает операции, если у него есть хотя бы один пригодный метод (`supported` или `supported*`).
 
-| Порт | Методы в окне | Подписи / опции | Условия |
+| Порт | Пригодные методы | Виды подписи | Условия |
 |---|---|---|---|
-| `rating1c` | `signXml`, `createCmsFromBase64`, `createRawSignFromBase64` | cms_ex; raw; xml_ex | -; template: storage=PKCS12, keyType=SIGNATURE, BIN=''; bound cert must pass the plugin's validity check (expired -> error) |
-| `dogovor24` | `signCMS` | cms_ex | key is selected before the method name is read; requires cert EKU present and without clientAuth (plugin check) |
-| `efactoring` | `text`, `xml` | cms_ex; xml_ex | XPaths are page text: in the window they must be typed params shown in the consent; the retry dialog (dialog_choice) traps with InteractionRequired: a failed signing ends the call as a host error instead of the plugin's retr **См. W3-2: `xml` с элементом не объявлен** |
-| `energy` | `sign` | cms_ex | dialog_message is reached only on failure (ALIAS_MISMATCH/SIGNING_ERROR/UNKNOWN_ERROR) -> trap |
-| `eproc` | `signXml` | xml (keys_sign_xml, Core defaults) | template: storageName=PKCS12 (no terminals call), keyType=SIGNATURE (bound key must have KNCA type SIGNATURE) |
-| `esf-osdkz` | `signPlainData`, `auth` | raw | Action::Authenticate (a login challenge): the design has no ruling for Authenticate-kind use in the manual window; signs arbitrary text with a raw signature: the consent must show the text (design: raw only bound) |
-| `fhs` | `signXml`, `signText` | cms_ex; xml | dialog_choice only on failure -> trap |
-| `market` | `text`, `xml` | cms_ex; xml_ex | dialog_choice on failure -> trap |
-| `qiwi` | `signXml` | xml_ex | algorithm URIs depend on the key: the profile must accept Kalkan's URIs of the key (default) — for GOST 2015 keys the plugin asks GOST 2004 **Поправка: см. W3-1** (позже объявлен: две операции по алгоритму ключа) |
+| `rating1c` | `signXml`, `createCmsFromBase64`, `createRawSignFromBase64` | cms_ex; raw; xml_ex | шаблон: `storage=PKCS12`, `keyType=SIGNATURE`, `BIN=''`; сертификат должен пройти проверку срока в самом плагине |
+| `dogovor24` | `signCMS` | cms_ex | ключ выбирается до чтения имени метода; плагин требует, чтобы в сертификате было EKU и не было clientAuth |
+| `efactoring` | `text`, `xml` | cms_ex; xml_ex | XPath вводит пользователь, они показаны в согласии; окно повтора при ошибке недоступно |
+| `energy` | `sign` | cms_ex | `dialog_message` только на путях ошибки, там вызов кончается трапом |
+| `eproc` | `signXml` | xml (Core по умолчанию) | шаблон: `storageName=PKCS12` (без вызова терминалов), `keyType=SIGNATURE` (у ключа тип KNCA SIGNATURE) |
+| `esf-osdkz` | `signPlainData` | raw | `raw` над текстом, текст показан в согласии; `auth` не объявлен (это вход, а не подпись документа) |
+| `fhs` | `signXml`, `signText` | cms_ex; xml | `dialog_choice` только при ошибке |
+| `market` | `text`, `xml` | cms_ex; xml_ex | `dialog_choice` только при ошибке |
+| `qiwi` | `signXml` | xml_ex | две операции по алгоритму ключа (RSA-SHA256 и ГОСТ 2004), §6 |
 
-**Критерий полноты первого релиза, по методам.** supported — rating1c (3 метода, без оговорок, но `cosign=Auto` у CMS), eproc, esf-osdkz (2 + `auth` с вопросом про Authenticate), dogovor24, qiwi (только ключи RSA-SHA256/ГОСТ 2004), efactoring/market/fhs/energy (диалог только на ошибке: ошибка подписи = ошибка вызова).
+Условия, общие для всех строк `supported*`:
 
-Условия шаблона, общие для всех supported\* строк: (а) хост строит `request` с фиксированными необязательными параметрами (`alias` у energy не задаётся, `isDigested=false`, число документов 1, `storageName=PKCS12`, `keyType=SIGNATURE`, `BINControl=""`); (б) ключ, привязанный пользователем, должен удовлетворять фильтру плагина (`knca_types`, EKU) — иначе `keys::select` вернёт `None` и порт ответит «отмена»; (в) `cosign=Auto` → `Never` (§4.5, вопрос R-A); (г) в согласии нужно показать **параметры-тексты** (XPath `element/parent` у efactoring/rating1c/eproc, текст для `text`-методов) как параметры, а не как «содержимое».
+- хост строит `request` с фиксированными необязательными параметрами: у energy `alias` не задаётся, `isDigested=false`, документ один; `storageName=PKCS12`, `keyType=SIGNATURE`, `BINControl=""`;
+- привязанный пользователем ключ должен проходить фильтр плагина (`knca_types`, EKU), иначе `keys::select` вернёт `None` и порт ответит отменой;
+- `cosign=Auto` заменяется на `Never`;
+- текстовые параметры (XPath `element/parent` у efactoring, rating1c, eproc и текст у `text`-методов) показываются в согласии как введённые значения.
 
-### 4.4 Рекомендация по MP3b (`derived`)
+### 4.4 Что дало бы снятие отдельных причин
 
-**Не начинать MP3b.** Доказательства по таблице §3:
-
-- Строк с причиной `DERIVED`: **16**; из них заблокированы **только** ею: **1** — `fhs.signFile`.
-- Все остальные derived-методы заблокированы ещё и более жёсткой причиной (`ORIGIN`, `DIALOG`, `KEYS_OPEN`, `STATE`, `FILE`): снятие `DERIVED` без неё ничего не даёт.
-- Единственный «чисто derived» метод `fhs.signFile{url}` (V1) подписывает **скачанный по URL страницы документ** (`http_request_ex`), то есть двоичные данные произвольного размера; MP3b по правилам дизайна допускает только текстовое содержимое с полным превью ≤ 64 КиБ, и `max_uses = 1`. Пользователь в ручном окне уже владеет файлом: тот же результат даёт `fhs.signText{base64data}` (supported\*) с самим файлом как bound-аргументом.
-- derived-**raw** (`acbank` JWS: подписывается собранная плагином строка `header.payload`) заблокирован ещё `DIALOG` и `MULTI`; для него дизайн и так указывает MP13.
-- Цена MP3b (план-прогон, allow-list, заморозка часов/`random`, 2× fuel, превью) несоразмерна одному методу. **Рекомендация: исключить MP3b из плана до появления порта с derived-методом, не заблокированным другими причинами; MP6 (объявления портов) выполнять только в режиме `bound`.**
-
-### 4.5 «Что если»: какие причины стоит снять и сколько это даёт
-
-Метод считается разблокированным, если его причины ⊆ снимаемому набору. Подсчёт — по строкам `unsupported` таблицы §3. Это **не предложение изменить дизайн**, а информация для решения родителя; текущий дизайн (R5, R6, §3.5, R10) эти причины не снимает.
+Метод разблокируется, если все его причины входят в снимаемый набор. Подсчёт по строкам `unsupported` таблицы §3. Текущая модель эти причины не снимает.
 
 | Сценарий | Разблокируется методов | Какие |
 |---|---|---|
@@ -374,42 +377,15 @@
 | `keys::open` отвечает привязанным ключом (путь/пароль игнорируются) | 6 | `fhs.signTextV2`, `fhs.signXmlV2`, `metadoc.signXml`, `motiw.sign`, `uchet.signXmlApi`, `uchet-esf.signXml` |
 | держать экземпляр между вызовами сессии ручного окна (снять `STATE`) | 3 | `arta.signBase64File`, `arta.signDocument`, `arta.signXML` |
 | разрешить `MULTI` (несколько подписей, одно согласие) | 5 | `dogovor24.batchSignCMS`, `esf-osdkz.signPlainDataMap`, `rating1c.signXmls`, `rating1c.createCmsesFromBase64`, `rating1c.createRawsSignFromBase64` |
-| `ORIGIN`: невозможно по R5 (Origin не подставляется) | 6 | `buhta.call#2`, `nursign.text`, `nursign.binary`, `nursign.xml`, `qoltanba.signFileBytes`, `xdox.CREATECMS` |
-| снять `DERIVED` (MP3b) | 1 | `fhs.signFile` |
+| `ORIGIN`: невозможно, Origin не подставляется | 6 | `buhta.call#2`, `nursign.text`, `nursign.binary`, `nursign.xml`, `qoltanba.signFileBytes`, `xdox.CREATECMS` |
 | `keys::open` + `OPTIONS` | 11 | `bas.sign`, `dogovor24.signEsedo`, `eot.signCmsWithSignedAttrs`, `eup.sign`, `fhs.signTextV2`, `fhs.signXmlV2`, `idocs.sign`, `metadoc.signXml`, `motiw.sign`, `uchet.signXmlApi`, `uchet-esf.signXml` |
 | `STATE` + `MULTI` | 9 | `arta.signBase64File`, `arta.signDocument`, `arta.signXML`, `dogovor24.batchSignCMS`, `esf-osdkz.signPlainDataMap`, `rating1c.signXmls`, `rating1c.createCmsesFromBase64`, `rating1c.createRawsSignFromBase64`, `taxtech.sign` |
 
-Замечания: (1) `OPTIONS` разблокирует методы с **разными** ESEDO-вариантами (разные формы времени, DN, OCSP, `econtent_type`, `Digest`) — это набор разных профилей, а не один; (2) `keys::open` «привязанным ключом» меняет смысл ввода пароля и пути страницы — это ослабляет R2/инвариант «секрет не уходит плагину» только если пароль берётся из запроса, но порт получит пароль от страницы, которой в ручном окне нет; (3) сохранение экземпляра (`STATE`) противоречит свойству F1 «ничего не переживает вызов» и модели «согласие не переживает вызов»; (4) `MULTI` даёт только списочные варианты уже поддерживаемых методов.
+Сценарий с `OPTIONS` объединяет разные варианты ЭСЭДО (разные формы времени, DN, OCSP, `econtent_type`, `Digest`), то есть набор профилей, а не один. Подмена `keys::open` привязанным ключом меняет смысл пароля и пути, которые присылает страница, а в ручном окне страницы нет. Сохранение экземпляра (`STATE`) противоречит F1 и правилу, что согласие не переживает вызов. `MULTI` даёт только списочные варианты уже пригодных методов.
 
-## 5. Поправки к `docs/design/manual-plugins.md` §1 и смежным местам
+Содержимое, которое плагин вычисляет сам (`DERIVED`), есть у 16 методов, и только `fhs.signFile` заблокирован одной этой причиной. Он подписывает документ, скачанный по адресу страницы через `http_request_ex`, а тот же результат даёт `fhs.signText` с файлом пользователя. Подпись вычисленной плагином строки JWS у `acbank` заблокирована ещё `DIALOG` и `MULTI`. Поэтому `derived` в ручном окне не поддерживается, а операции портов объявлены только для `bound`.
 
-Сверка утверждений ревизии 2 с реальным анализом (`design/manual-plugins` @ `6bdea19b`). Номера — как в документе дизайна.
-
-| # | Утверждение дизайна | Что показал анализ | Поправка |
-|---|---|---|---|
-| D1 | §1 «Инвентаризация…»: `sign_cms_ex` — 25, `sign_xml` — 18, `sign_xml_ex` — 9, `sign_cms` — 4, `sign_xades` — 1, `sign_raw` — 7 | Секция импортов wasm: `keys_sign_cms_ex` — **27**, `keys_sign_xml` — **5**, `keys_sign_xml_ex` — **11**, `keys_sign_cms` — **0** (ни один порт не линкует), `keys_sign_xades` — 1 (`skf`), `keys_sign_raw` — 7 (тот же список: acbank, arta, devart, esf-osdkz, rating1c, taxtech, uchet-esf). | Заменить на wasm-счёт; убрать `sign_cms` как вид у портов. Следствие: «простого `KeysSignCms` с `cosign: Auto`» (§4.1, §6) в портах нет — вопрос `Auto→Never` относится к `keys_sign_cms_ex` (27 портов), см. D6. |
-| D2 | §1 и §3.5: `keys::select` — 18, `keys::choose` — 4 | `keys_select` — **24** порта, `keys_choose` — 4 (efactoring, k2sign, market, nursign). | Обновить числа. |
-| D3 | §1: «Упоминание `origin` в `src` есть почти у каждого порта; доля пригодных … заметно меньше половины» | `request.origin` читают **7** портов из 34 (buhta, k2sign, knp, nursign, qoltanba, taxtech, xdox); остальные упоминают слово лишь в `relative_to_origin`/комментариях. Из 7 только taxtech терпит `None` (`UNDEFINED`). Доля пригодных (**9 из 34**) мала **не из-за Origin**: главные причины — `STATE`, `KEYS_OPEN`, `DIALOG`, `OPTIONS` (§4.2). | Исправить формулировку; убрать «Origin» как главную причину. |
-| D4 | §1 (C9) и §3.5: порты «без Origin» отвечают `INVALID_ORIGIN` | Верно только для `qoltanba`; `buhta`, `k2sign`, `knp`, `nursign` **обрывают соединение** (`reply_drop`) на отсутствии Origin (до разбора), `xdox` отвечает `That module can be used only on https://xdox.kz`, `taxtech` Origin не требует. | Перечислить поведение по портам (таблица §3, колонка Origin). |
-| D5 | §1/§3.5: остальные причины unsupported — `Dialog*/File*`, `keys::open/terminals`, несколько подписей, `raw`-derived, `shared/settings` | Не названа **главная** причина: состояние **в памяти экземпляра** между вызовами сессии (F1). Она одна блокирует `arta.sign*`, `taxtech.sign`, `devart.signDevart`, `doodocs.createCAdES`, `skf.signXades`. `shared/settings` (acbank, energy.getKeyInfo) почти не влияют. Не названы также: ESEDO-опции (`attrs.extra` + `econtent_type` + Custom TSA) как причина у 11 портов (12 с `arta.signDocument`), и `keys::terminals`-ворота (uchet.signXml). | Добавить в список причин §4.6 и в таблицу §6: `STATE`, `OPTIONS(ESEDO)`, `TERMINALS`. |
-| D6 | §4.1: «`cosign` в профиле только `never`; Core подставляет `Never` вместо `Auto`» (фраза про простой `KeysSignCms`); общее правило «значения опций в реальном `args` обязаны совпасть с профилем, иначе `OptionsMismatch`» | Плагины передают `CoSign::Auto` в **`keys_sign_cms_ex`** (dogovor24, efactoring, market, energy, fhs, rating1c) — то есть формально `Auto ≠ never`. Если правило совпадения применить буквально, **все** supported CMS-методы получат `OptionsMismatch`. | Дизайн должен прямо сказать: для `cms_ex` значение `Auto` приводится к `Never` (как для `cms`), либо профиль допускает `Auto` как «`Never` по построению». Нужен ruling (R-A). |
-| D7 | §3.5: `KeysTerminals → []` без оговорок | Ворота `keys::terminals` стоят **перед** выбором ключа у token-ветки legacy-`select` (`plugins/common/legacy/src/guest.rs`): пустой список → `STORAGE_EMPTY`. `uchet.signXml` бросает исключение для `PKCS12`, поэтому его token-ветка недостижима. Остальные порты с `keys_terminals` в supported (rating1c, eproc, esf-osdkz) обходятся шаблоном `storageName=PKCS12`. | Зафиксировать, что шаблон обязан подставлять `PKCS12` (или `JKS`), и описать, как Core сопоставляет `SelectArgs.storages` с привязанным ключом (Q-B). |
-| D8 | §3.5: «`KeysOpen` и прочее, что в Core headless даёт `PermissionDenied`» | Подтверждено (`capabilities.rs:203`), но «прочее» включает **`reply_drop`** (линкуют 33 порта) и **`call_locale`**; дизайн их не называет. Для supported-портов `reply_drop` достижим только на нечитаемом запросе. | Добавить `reply_drop` в список «нейтральных» (Core трапит или игнорирует) и в `uses.imports`. |
-| D9 | §4.1: пример с `qoltanba`, «метод `signFileBytes` арность 2, читает хранилище, `lib.rs:103-106, 270`» | Ссылки верны (`qoltanba/src/lib.rs:103-106`, `:270`), вывод верен; уточнение: недоступен весь `qoltanba` (любой метод с именем → `INVALID_ORIGIN`). | Без правки; можно уточнить. |
-| D10 | §6/§9.1: порты правятся «34 `plugin.toml`» | Объявления нужны только для **9** портов с supported-методами; остальные 25 в окне показываются как unsupported с причиной (R7) и `plugin.toml` не меняют. | Уточнить MP6/MP11: 9 портов, не 34; «выпуск 34 версий» → выпуск версий только для портов с объявлениями (остальные — только если нужно показать причину; тогда причина — в реестре хоста, а не в манифесте). |
-| D11 | §4.1: `Digest` — «для bound Core сам считает дайджест … и требует побайтового равенства с `args`» | `eot.signCmsWithSignedAttrs` — `ContentMode::Digest`: аргумент и есть дайджест, посчитанный страницей; `energy.sign` при `isDigested=true` и `taxtech.sign cms digested` — то же. | Для `Digest`-операций шаблон должен принимать **документ**, а хост — подставлять в `args` дайджест (параметр `kind=document`, плейсхолдер `{file:digest}`); в §4.1 такой плейсхолдер не описан. |
-
-**Подтверждённые утверждения (без поправок):** `plugin.toml` — 34, у всех `keys = true`, 35 имён `modules`; `sign_xades` — 1; `sign_raw` — те же 7 портов; C6 (`requires_interaction`) и C9 (`encode_input`, `LocalOperator` → `None`); C7 (`KeysSignRaw` — `plugins.rs:368-410`); `qoltanba/src/lib.rs:171-177` (`INVALID_ORIGIN`).
-
-## 6. Решения, нужные от родителя
-
-- **R-A (cosign).** `cosign=Auto` в `keys_sign_cms_ex` у 6 supported-портов: привести к `Never` (документировать отличие) или считать `OptionsMismatch` (тогда supported\* CMS-методов нет). Рекомендация: приводить, как и для простого CMS в §4.1.
-- **R-B (storages).** Как Core сопоставляет `SelectArgs.storages`/`knca_types` с привязанным ключом: достаточно ли `storageName=PKCS12` при привязанном **токен**-ключе (тогда token-ключи работают без `keys::terminals`)?
-- **R-C (Authenticate).** `esf-osdkz.auth` подписывает произвольный текст-вызов (`Action::Authenticate`); допустимо ли это в ручном окне, или `auth` — unsupported по смыслу.
-- **R-D (ESEDO).** 5 методов (bas, dogovor24.signEsedo, eot, eup, idocs) заблокированы только `attrs.extra`-профилем ESEDO; решить, добавлять ли профили «ESEDO» (по варианту на порт) отдельным этапом.
-- **R-E (reply_drop).** Разрешить `reply_drop` как нейтральный (игнор) или трапить; для supported-портов безразлично.
-
-## 7. Воспроизведение
+## 5. Воспроизведение
 
 ```text
 cd plugins
@@ -419,44 +395,43 @@ python ../scripts/mp0_wasm_imports.py <CARGO_TARGET_DIR>/wasm32-unknown-unknown/
 cargo test -p oncl-port-tests --test clones --test ecc --test medium            # существующие тесты портов (корень репозитория)
 ```
 
-Строки таблицы §3 — результат чтения исходников (уровень **S**); якорь `файл:строка` указывает на функцию/константу, определяющую вердикт. Для сверки: открыть якорь и убедиться, что (а) диспетчер приводит к этой функции, (б) перечисленные импорты есть в секции импортов порта (`scripts/mp0_wasm_imports.py`).
+Строки таблицы §3 получены чтением исходников (уровень **S**); ссылка `файл:строка` указывает на функцию или константу, от которой зависит вердикт. Для сверки откройте ссылку и убедитесь, что диспетчер приводит к этой функции, а перечисленные импорты есть в секции импортов порта.
 
-## 8. Request shapes: что читает диспетчер каждого supported-порта (MP6, волна 1)
+## 6. Объявленные операции портов
 
-Источник — исходники `handle` и диспетчеров на `feat/mp6a-impl`; для rating1c, кроме того, запрос прогнан через реальный wasm (`crates/oncl-core/tests/plugin_ports_manual/rating1c.rs`). Шаблон `[[operations]]` MP1 — ровно `{"module","method","args":[…]}` (`operations.rs`, `check_request`: `map.len() == 3`, `args` — массив), поэтому «выражает ли шаблон» — столбец справа. Постоянные значения ниже — то, что страница шлёт для метода из §3.
+### 6.1 Форма запроса
 
-| Порт | Методы §3 | Что читает порт (файл:строка) | Форма запроса | Шаблон MP1 |
-|---|---|---|---|---|
-| `rating1c` | `signXml`, `createCmsFromBase64`, `createRawSignFromBase64` | `legacy::dispatch` — `rating1c/src/port.rs:66-72`, аргументы по `Param` — `:23-28` | `{"module":…,"method":"createCmsFromBase64","args":["PKCS12","SIGNATURE","<b64>",false,true,""]}`: `args` — массив из 6 (4 у raw) элементов, строки и булевы | да (проверено прогоном) |
-| `dogovor24` | `signCMS` | `dogovor24/src/lib.rs:76-81` (корень: `method`), `:131-132` (`args` — массив, `args[0]` — base64), `:104` (`uuid` в корне, только `signEsedo`) | `{"module":…,"method":"signCMS","args":["<b64>"]}` | да (не прогонялось) |
-| `qiwi` | `signXml` | `qiwi/src/lib.rs:39-47` (`method`, `args` — массив, `args[0]` — callId), `:129` (`args[1]` — xml) | `{"module":…,"method":"signXml","args":["<callId>","<xml>",…]}` | да (не прогонялось) |
-| `fhs` | V1 `signXml`, V1 `signText` | `fhs/src/lib.rs:55-66` → `oncl_protocol::invoker::java` `invoke_with` — `crates/oncl-protocol/src/invoker/java.rs:125-141` (`parse_only(["apiVersion","class","method","args"])`, `args` — `optJSONObject`), `:173-176` (нет объекта `args` → «`<method>` demands arguments»), поля — `fhs/src/lib.rs:480-519` | `{"module":…,"method":"signXml","args":{"xml":"<xml>"}}`; `signText`: `"args":{"base64data":"<b64>"}` | **нет**: `args` — ОБЪЕКТ. С массивом порт отвечает «signXml demands arguments», ключ не применяется (`plugin_ports_manual/fhs.rs`) |
-| `energy` | `sign` | `energy/src/lib.rs:29-42` (корень: `method`; `args` — `get_object`), `:160-181` (`alias`, `keyStoreType`, `encapsulate`, `isDigested`, `tsaProfile` — булевы; `data` — массив объектов `{id,name,base64}`) | `{"module":…,"method":"sign","args":{"encapsulate":true,"isDigested":false,"tsaProfile":true,"data":[{"id":"1","name":"f","base64":"<b64>"}]}}` | **нет**: `args` — объект с вложенным массивом объектов |
-| `eproc` | `signXml` | `eproc/src/lib.rs:85-98` (корень: `method`), `:111` (`uid`), `:129-139` (`chain`, `storageName`, `keyType`, `xml`, `tbsElementXPath`, `signatureParentElementXPath`) | `{"module":…,"method":"signXml","uid":"…","storageName":"PKCS12","keyType":"SIGNATURE","xml":"<xml>","tbsElementXPath":"…","signatureParentElementXPath":"…"}`, `args` нет | **нет**: поля в корне |
-| `efactoring` | `text`, `xml` | `efactoring/src/lib.rs:38-52` (корень: `type`, не `method`), `:65-67` (`data`, `attach`, `has_timestamp` — булевы), `:91-102` (`source`, `sign_element`, `signature_parent_element`) | `{"module":…,"type":"text","data":"<text>","attach":false,"has_timestamp":true}`; `{"module":…,"type":"xml","data":"<xml>","sign_element":"…","signature_parent_element":"…"}` | **нет**: ключ `type`, поля в корне, `method` нет |
-| `market` | `text`, `xml` | `market/src/lib.rs:32-46` (корень: `type`), `:60-62` (`data`, `attach`, `has_timestamp`), `:87` | как у `efactoring` | **нет** (то же) |
-| `esf-osdkz` | `signPlainData` | `esf-osdkz/src/lib.rs:37-61` (корень: `method`, `storageName`, `data`; `args` нет) | `{"module":…,"method":"signPlainData","storageName":"PKCS12","data":"<text>"}` | **нет**: поля в корне; к тому же `data` — ТЕКСТ, подписываемый как `raw`, а схема допускает текстовый параметр содержимым только для xml-видов (`operations.rs`, `RawKeyUse::check`) (`plugin_ports_manual/esf_osdkz.rs`: порт отбрасывает запрос, ключ не применяется) |
+Что читает диспетчер каждого порта с операциями. Шаблон `[[operations]]` выражает все эти формы: `args` массивом, объектом или поля в корне.
 
-Что нужно схеме, чтобы выразить остальных (по этим данным): (а) `request` — JSON-объект с `module` и произвольными ключами верхнего уровня, плейсхолдеры целой строкой в ЗНАЧЕНИЯХ на любой глубине (вложенные объекты и массивы объектов у `energy`); (б) `method` или `type` — фиксированные строки (у `efactoring`/`market` ключ `type`); `args` — массив, объект или отсутствует; (в) булевы и строки в одном объекте (`attach`, `has_timestamp`, `encapsulate`); (г) текстовый параметр как содержимое `raw` (`esf-osdkz`).
-
-## 9. Поправки MP6 (волна 1)
-
-| # | Что утверждал MP0 | Что показал прогон | Поправка |
+| Порт | Методы | Что читает порт (файл:строка) | Форма запроса |
 |---|---|---|---|
-| E1 | `esf-osdkz.signPlainData`: supported\* | шаблон MP1 не выражал форму запроса (§8) и текст как содержимое `raw` | **Закрыто в MP6 (волна 2).** Объявлена операция `sign-plain-data` (корневой запрос `{"method","storageName":"PKCS12","data"}`, `raw` над текстовым параметром): настоящий wasm подписывает UTF-8-байты текста, подпись проверена RSA-оракулом (`plugin_ports_manual/esf_osdkz.rs`). Первая операция «raw над текстом»: Core отказывает (`InvalidValue`) на управляющих, bidi и невидимых символах (кроме `\n`, `\t`), тест это фиксирует; согласие показывает набранный текст. Ключ харнесса удовлетворяет фильтру `KNCA=SIGNATURE` порта. У `raw` нет опций: негатива «подмена профиля» нет. `auth` по-прежнему исключён (R17). |
-| E2 | `fhs.signXml` / `fhs.signText` (V1): supported\* | `args` — объект (§8); шаблон был массивом | **Закрыто в MP6 (волна 2).** Объявлены `sign-xml` (`xml`, профиль по умолчанию) и `sign-text` (`cms_ex`, отсоединённая подпись, `timestamp = "kalkan"`; `cosign` Auto → `never`) с `"args":{...}`; доказаны настоящим wasm и оракулами (`plugin_ports_manual/fhs.rs`). Окно повтора (`dialog_choice`) у порта только при ошибке; в ручном окне диалогов нет, поэтому при ошибке окно повтора недоступно (записано в `label` и комментарии манифеста). |
-| E3 | `rating1c`: «без оговорок» | (а) документ для XML — ТЕКСТОВЫЙ параметр (`xml`, ≤ 65536 знаков): `document` в шаблоне всегда base64, а порт ждёт текст; (б) подпись элемента требует атрибут `Id` у подписываемого элемента (Kalkan: «Указанный для подписи элемент не содержит атрибут 'Id'»); (в) CMS: `attached` и `withTSA` — поля профиля, а не параметры, поэтому объявлено 4 операции (`create-cms`, `-attached`, `-timestamp`, `-attached-timestamp`); (г) `signXml` — 2 операции: целиком (`sign-xml`) и элемент в родителя (`sign-xml-element`, XPath — текстовые параметры); (д) операции читают `keys_select`, `keys_release`, `random`, `cert_info`, `now` (+ `cert_details` у raw): без любого из них вызов отказывается (`Denied`), а без `keys_release` — ПОСЛЕ применения ключа | Операции объявлены (7); все импорты нужны (проверено удалением каждого). |
-| E4 | `network = "none"` годится для операции без сети | Любое применение ключа в окне идёт через онлайн-проверку подписанта (GET к OCSP-ответчику из сертификата) и, для TSA, через GET/POST к `tsp.pki.gov.kz`: при `network = "none"` вызов отказывает `PermissionDenied` ДО применения ключа, без запросов и без типизированного отказа (`plugin_ports_manual/network.rs`: cms, raw, xml) | Операция с `uses.key` ДОЛЖНА объявлять `network = "pki"`; сочетание `none` + `uses.key` не может подписать никогда (проверено для всех трёх видов) — парсер MP1 вправе его отвергать. |
-| E5 | — | Kalkan-TSA (`TsaChoice::Kalkan`) ходит методом GET (`http://tsp.pki.gov.kz/<base64-запрос>`), а не POST | Эндпоинты PKI: GET+POST для OCSP и TSA (как в MP5a). |
-| W3-1 | `qiwi.signXml`: supported\* (с условием по URI) | Порт передаёт в `keys_sign_xml_ex` `transforms = [Enveloped, C14N-with-comments]` и берёт адреса алгоритмов из сертификата ключа. Пока профиль `xml_ex` не выражал `transforms`, Core отказывал до ключа при любой декларации. Позже профиль получил поле `transforms` (поле 12 канонической кодировки, пишется только когда задано: хеши прежних операций не изменились) | Объявлен: `sign-xml-rsa` и `sign-xml-gost2004` (по одной на алгоритм ключа). Ключ другого алгоритма — `options-mismatch` до применения ключа. Ключ ГОСТ 2015 (порт шлёт адреса ГОСТ 2004) и RSA-SHA1 (`SIGNATURE_METHODS` его не содержит) не поддерживаются. Тесты `plugin_ports_manual/qiwi.rs`. |
-| W3-2 | `efactoring.xml` с `sign_element`: supported\* | То же `transforms` с элементом; XPath элемента и родителя — тексты страницы | Объявлена: `sign-xml-element` (оба XPath — введённые пользователем параметры, видны на странице подтверждения). `parent` пустой или не абсолютный: отказ хоста до запуска плагина; `parent` равен элементу: отказ порта до применения ключа (вызов заканчивается `Denied`, окна повтора нет). Тесты `plugin_ports_manual/efactoring.rs`. |
-| W3-3 | `energy`, `efactoring`, `market`, `dogovor24`, `eproc`: «один метод» | `attach`/`encapsulate` и `has_timestamp`/`tsaProfile` — поля профиля, а не параметры: 4 операции CMS (`…-attached-timestamp`, `-attached`, `-detached-timestamp`, `-detached`) у energy (`sign-cms-*`), efactoring и market (`sign-text-*`); у `dogovor24.signCMS` одна форма (attached + Kalkan); `eproc.signXml` — 2 операции (целиком, элемент). `eproc` объявляет `keys_release`: при успехе ключ уходит в `CHAIN` и не отпускается, но любой отказ порта после выбора ключа (например, `tbs` равен `parent`) отпускает его в `Drop`, и без импорта ответ порта 500 терялся бы в `Denied` (тест `a_failure_after_the_key_is_the_ports_error_reply`). Объявлены только реально вызываемые импорты (`now`, `cert_info` не нужны, кроме `dogovor24.cert_info` — проверка EKU) | `uid` у `eproc` фиксирован `manual`, `chain` не задан; `energy`: `id=1`, `name=document`, `alias`/`keyStoreType` не заданы. Ключи ГОСТ не проверялись (оракулы RSA). |
+| `rating1c` | `signXml`, `createCmsFromBase64`, `createRawSignFromBase64` | `legacy::dispatch` — `rating1c/src/port.rs:66-72`, аргументы по `Param` — `:23-28` | `{"module":…,"method":"createCmsFromBase64","args":["PKCS12","SIGNATURE","<b64>",false,true,""]}`: `args` — массив из 6 (4 у raw) элементов, строки и булевы |
+| `dogovor24` | `signCMS` | `dogovor24/src/lib.rs:76-81` (корень: `method`), `:131-132` (`args` — массив, `args[0]` — base64), `:104` (`uuid` в корне, только `signEsedo`) | `{"module":…,"method":"signCMS","args":["<b64>"]}` |
+| `qiwi` | `signXml` | `qiwi/src/lib.rs:39-47` (`method`, `args` — массив, `args[0]` — callId), `:129` (`args[1]` — xml) | `{"module":…,"method":"signXml","args":["<callId>","<xml>",…]}` |
+| `fhs` | V1 `signXml`, V1 `signText` | `fhs/src/lib.rs:55-66` → `oncl_protocol::invoker::java` `invoke_with` — `crates/oncl-protocol/src/invoker/java.rs:125-141` (`parse_only(["apiVersion","class","method","args"])`, `args` — `optJSONObject`), `:173-176` (нет объекта `args` → «`<method>` demands arguments»), поля — `fhs/src/lib.rs:480-519` | `{"module":…,"method":"signXml","args":{"xml":"<xml>"}}`; `signText`: `"args":{"base64data":"<b64>"}` |
+| `energy` | `sign` | `energy/src/lib.rs:29-42` (корень: `method`; `args` — `get_object`), `:160-181` (`alias`, `keyStoreType`, `encapsulate`, `isDigested`, `tsaProfile` — булевы; `data` — массив объектов `{id,name,base64}`) | `{"module":…,"method":"sign","args":{"encapsulate":true,"isDigested":false,"tsaProfile":true,"data":[{"id":"1","name":"f","base64":"<b64>"}]}}` |
+| `eproc` | `signXml` | `eproc/src/lib.rs:85-98` (корень: `method`), `:111` (`uid`), `:129-139` (`chain`, `storageName`, `keyType`, `xml`, `tbsElementXPath`, `signatureParentElementXPath`) | `{"module":…,"method":"signXml","uid":"…","storageName":"PKCS12","keyType":"SIGNATURE","xml":"<xml>","tbsElementXPath":"…","signatureParentElementXPath":"…"}`, `args` нет |
+| `efactoring` | `text`, `xml` | `efactoring/src/lib.rs:38-52` (корень: `type`, не `method`), `:65-67` (`data`, `attach`, `has_timestamp` — булевы), `:91-102` (`source`, `sign_element`, `signature_parent_element`) | `{"module":…,"type":"text","data":"<text>","attach":false,"has_timestamp":true}`; `{"module":…,"type":"xml","data":"<xml>","sign_element":"…","signature_parent_element":"…"}` |
+| `market` | `text`, `xml` | `market/src/lib.rs:32-46` (корень: `type`), `:60-62` (`data`, `attach`, `has_timestamp`), `:87` | как у `efactoring` |
+| `esf-osdkz` | `signPlainData` | `esf-osdkz/src/lib.rs:37-61` (корень: `method`, `storageName`, `data`; `args` нет) | `{"module":…,"method":"signPlainData","storageName":"PKCS12","data":"<text>"}` |
 
-## 10. Находки в хосте (MP6, волна 1)
+### 6.2 Особенности операций
 
-Прогон реального wasm через `plugin_call_approved` выявил три настройки, без которых вызов портов не работает; они исправлены/зафиксированы в харнессе и должны быть повторены в проводке рабочего стола (MP7/MP5a):
+- `rating1c`: 7 операций. Документ для XML передаётся текстовым параметром (`xml`, не больше 65 536 знаков), потому что `document` в шаблоне всегда base64, а порт ждёт текст. Подпись элемента требует атрибута `Id` у подписываемого элемента (Kalkan: «Указанный для подписи элемент не содержит атрибут 'Id'»). У CMS `attached` и `withTSA` это поля профиля, поэтому операций четыре: `create-cms`, `create-cms-attached`, `create-cms-timestamp`, `create-cms-attached-timestamp`. `signXml` разбит на `sign-xml` (весь документ) и `sign-xml-element` (элемент в родителе, XPath текстовыми параметрами). Операции используют `keys_select`, `keys_release`, `random`, `cert_info`, `now` (у raw ещё `cert_details`); без любого из них вызов отказывает (`Denied`), а без `keys_release` уже после применения ключа. Проверено удалением каждого импорта.
+- `energy`, `efactoring`, `market`: `attach`/`encapsulate` и `has_timestamp`/`tsaProfile` это поля профиля, поэтому у каждого порта четыре CMS-операции (`sign-cms-*` у energy, `sign-text-*` у efactoring и market): с данными внутри или отсоединённая, с меткой времени или без. У energy фиксированы `id=1` и `name=document`, `alias` и `keyStoreType` не задаются.
+- `dogovor24`: одна операция `sign-cms` (данные внутри, метка времени Kalkan); из импортов кроме ключевых нужен `cert_info` для проверки EKU.
+- `eproc`: две операции (весь документ и элемент); `uid` фиксирован как `manual`, `chain` не задан. Порт объявляет `keys_release`: при успехе ключ остаётся в `CHAIN`, но любой отказ порта после выбора ключа (например, `tbs` равен `parent`) отпускает ключ в `Drop`, и без импорта ответ порта с кодом 500 терялся бы в `Denied` (тест `a_failure_after_the_key_is_the_ports_error_reply`).
+- `esf-osdkz`: операция `sign-plain-data`, запрос `{"method","storageName":"PKCS12","data"}` в корне, `raw` над UTF-8-байтами текстового параметра. Core отказывает (`InvalidValue`) на управляющих, bidi и невидимых символах, кроме `\n` и `\t`. Ключ должен проходить фильтр порта `KNCA=SIGNATURE`. Опций у `raw` нет.
+- `fhs`: `sign-xml` (профиль по умолчанию) и `sign-text` (`cms_ex`, отсоединённая, `timestamp = "kalkan"`, `cosign` `Auto` заменяется на `never`), `args` объектом. Окно повтора (`dialog_choice`) у порта появляется только при ошибке; в ручном окне диалогов нет, поэтому при ошибке повтора не будет, что записано в `label` и комментарии манифеста.
+- `qiwi`: порт передаёт в `keys_sign_xml_ex` `transforms = [Enveloped, C14N-with-comments]` и берёт адреса алгоритмов из сертификата ключа. XML-профиль задаёт `transforms` (поле 12 канонической кодировки пишется только когда задано, поэтому хеши остальных операций от него не зависят). Объявлены `sign-xml-rsa` и `sign-xml-gost2004`, по одной на алгоритм ключа; ключ другого алгоритма даёт `options-mismatch` до применения. Ключи ГОСТ 2015 (порт шлёт им адреса ГОСТ 2004) и RSA-SHA1 (его нет в `SIGNATURE_METHODS`) не поддерживаются. Тесты `plugin_ports_manual/qiwi.rs`.
+- `efactoring.sign-xml-element`: XPath элемента и родителя вводит пользователь, оба видны на странице подтверждения. Пустой или не абсолютный `parent` хост отклоняет до запуска плагина; `parent`, равный элементу, порт отклоняет до применения ключа, и вызов кончается `Denied`, потому что окна повтора нет. Тесты `plugin_ports_manual/efactoring.rs`.
+- Сеть: любая подпись в окне проверяет подписанта по OCSP (GET к ответчику из сертификата), а метка времени идёт к `tsp.pki.gov.kz`. При `network = "none"` вызов отказывает `PermissionDenied` до применения ключа, поэтому операция с `uses.key` обязана объявлять `network = "pki"`, и парсер отвергает сочетание `none` с `uses.key` (`plugin_ports_manual/network.rs`). TSA Kalkan (`TsaChoice::Kalkan`) ходит методом GET (`http://tsp.pki.gov.kz/<base64-запрос>`), поэтому эндпоинты PKI разрешают GET и POST и для OCSP, и для TSA.
 
-1. `InstanceLimits::default()` (память 1 ГиБ, передача 256 МиБ) не может работать с `ResourceLimits::default()`: вызов резервирует `8 × max_transfer + max_memory` из бюджета памяти 1 ГиБ → `Processing(MemoryLimit)` у любого порта. Харнесс: `max_memory = 128 МиБ`, `max_transfer = 16 МиБ`.
-2. XML-подпись Kalkan резервирует ≈ 61 МиБ бюджета METADATA; бюджет по умолчанию 64 МиБ. Харнесс: `metadata_bytes = 256 МиБ`; без этого — `AfterKeyUse(MetadataLimit)`, ключ применён, ответа нет. Нужно также `EngineServices::with_temporary_store` (иначе `MissingTemporaryStore` до ключа).
-3. Ошибка в `oncl-plugin`/`oncl-core`: headless- и manual-вызовы подают топливо кусочками по 100 000 (`host.rs`, `call_guest`), а Wasmi переводит функцию при первом вызове и списывает перевод с топлива этого вызова; нехватка топлива на таком переводе — НЕ возобновляемая ошибка (`ResumableOutOfFuel` из `call_resumable`, вызов прерван посреди выполнения). `oncl_process` любого реального порта переводится дороже 100 000, поэтому вызов любого порта через `plugin_call_approved` падал с `OutOfFuel` (ни один реальный wasm до MP6 этим путём не прогонялся). Исправлено: `oncl_plugin::Engine::eager()` (перевод всех функций при компиляции модуля, топливо вызова от порядка вызовов не зависит), его использует `PluginRegistry::install`; интерактивный `Engine::new()` не менялся. Тест: `headless::tests::an_entry_function_costing_more_than_a_slice_to_translate_runs_in_an_eager_engine`.
-4. (MP7b) Все три настройки теперь одно определение — `oncl_core::plugins::ManualLimits::desktop()` (64-бит: документ ≤ 4 МиБ, передача 9 МиБ, память гостя 112 МиБ, бюджеты 704/896 МиБ; обоснование и измерения — `docs/dev/plugins-manual-tests.md`), которым пользуются проводка и харнесс; недобор бюджета отказывает до ключа подкодом `resource-budget`, отсутствие временного хранилища у XML — `no-temporary-store`. Проводка выдавала эндпоинтам OCSP/TSA только POST: теперь `NCA_PKI_ENDPOINTS` (GET и POST). Ошибка `memory.grow` на границе топливного кусочка исправлена (`GuestLimits`).
+Ключи ГОСТ проверены только в `qiwi.sign-xml-gost2004`; остальные операции проверены ключами RSA.
+
+## 7. Настройки хоста для вызова портов
+
+- Пределы ручного окна задаёт одно определение `oncl_core::plugins::ManualLimits::desktop()`; им пользуются и рабочий стол, и тесты. На 64-разрядной системе: документ до 4 МиБ, передача 9 МиБ, память гостя 112 МиБ, бюджеты 704 и 896 МиБ. Обоснование и измерения в `docs/dev/plugins-manual-tests.md`. Нехватка бюджета отказывает до ключа подкодом `resource-budget`, отсутствие временного хранилища у XML-операции подкодом `no-temporary-store`.
+- Значения по умолчанию для этого не годятся. `InstanceLimits::default()` (память 1 ГиБ, передача 256 МиБ) вместе с `ResourceLimits::default()` даёт `Processing(MemoryLimit)` у любого порта: вызов резервирует `8 × max_transfer + max_memory` из бюджета памяти 1 ГиБ. XML-подпись Kalkan резервирует около 61 МиБ бюджета METADATA при бюджете по умолчанию 64 МиБ, и без увеличения вызов кончается `AfterKeyUse(MetadataLimit)`: ключ применён, ответа нет. XML-операциям также нужен `EngineServices::with_temporary_store`.
+- `PluginRegistry::install` компилирует модуль через `oncl_plugin::Engine::eager()`: все функции переводятся при компиляции. Headless- и ручные вызовы подают топливо кусками по 100 000, а Wasmi при ленивом переводе списывает перевод функции с топлива первого вызова; нехватка топлива на переводе не возобновляется. `oncl_process` любого реального порта переводится дороже 100 000, поэтому с ленивым движком вызов падал бы с `OutOfFuel`. Интерактивный `Engine::new()` остаётся ленивым. Тест: `headless::tests::an_entry_function_costing_more_than_a_slice_to_translate_runs_in_an_eager_engine`.
+- Эндпоинты OCSP и TSA в `NCA_PKI_ENDPOINTS` разрешают GET и POST.
