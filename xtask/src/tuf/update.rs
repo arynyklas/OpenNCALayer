@@ -41,7 +41,7 @@ use super::check::{self, Expiry, TimestampMode};
 use super::check_v2::{self, Stage};
 use super::keystore::{self, Unlock};
 use super::repo::{self, Layout, Listing};
-use super::{PassphraseSource, SNAPSHOT_DAYS, TARGETS_DAYS, expiry};
+use super::{PassphraseSource, SNAPSHOT_DAYS, TARGETS_DAYS, expiry, next_version, remove_created};
 use crate::publishers::{self, Registry};
 
 /// What [`update`] does.
@@ -248,8 +248,8 @@ fn update_with(options: &Options, unlock: &mut Unlock) -> anyhow::Result<Outcome
     let targets_keys = signers(options.keys, &root, Role::Targets, unlock)?;
     let snapshot_keys = signers(options.keys, &root, Role::Snapshot, unlock)?;
 
-    let targets_version = last_targets + 1;
-    let snapshot_version = last_snapshot + 1;
+    let targets_version = next_version("targets", last_targets)?;
+    let snapshot_version = next_version("snapshot", last_snapshot)?;
     let expires = expiry(options.now, TARGETS_DAYS.min(SNAPSHOT_DAYS));
     let refs: Vec<(&str, &[u8])> = indexes
         .iter()
@@ -317,10 +317,8 @@ fn update_with(options: &Options, unlock: &mut Unlock) -> anyhow::Result<Outcome
         }
     });
     if let Err(e) = verdict {
-        for path in &created {
-            let _ = fs::remove_file(path);
-        }
-        return Err(e.context("nothing was left written"));
+        let cleanup = remove_created(&created);
+        return Err(e.context(format!("nothing was left written{cleanup}")));
     }
     Ok(Outcome::Written(Written {
         reason: reasons.join("; "),
@@ -423,13 +421,21 @@ pub fn update_v2(options: &V2Options) -> anyhow::Result<V2Outcome> {
     update_v2_with(options, &mut unlock)
 }
 
-fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2Outcome> {
+/// What `tuf/v2`'s next targets are made of, every input checked: the root in force, the
+/// target files (the indexes and `publishers.json`) and the delegations.
+struct V2Inputs {
+    root: Root,
+    files: Vec<(String, Vec<u8>)>,
+    delegations: serde_json::Value,
+}
+
+/// Reads and checks what `tuf/v2`'s next targets are made of: its chain of roots, the
+/// indexes, the registry of the publishers against the indexes and against every root of
+/// both chains. Nothing is written.
+fn v2_inputs(options: &V2Options) -> anyhow::Result<V2Inputs> {
     let anchor = repo::read(options.out, &layout::root_path(1))
         .context("tuf/v2 has no root version 1: run `cargo xtask tuf init --repo v2` first")?;
     let root = check::final_root(options.out, &anchor, options.now)?;
-    let listing = Listing::read_layout(options.out, Layout::V2)?;
-    let (_, last_targets, _) = listing.highest();
-
     let indexes = read_indexes(options.index)?;
     if indexes.is_empty() {
         bail!("there is no update index in {}", options.index.display());
@@ -439,19 +445,36 @@ fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2
         .map(|(_, bytes)| Index::from_json(bytes))
         .collect::<Result<Vec<_>, _>>()?;
     let registry = Registry::read(options.publishers)?;
-    let v1_root = match options.v1 {
-        Some(v1) if v1.join(layout::root_path(1)).is_file() => Some(check::committed_root(v1)?),
-        _ => None,
+    let v2_chain = check::committed_chain(options.out)?;
+    let v1_chain = match options.v1 {
+        Some(v1) if v1.join(layout::root_path(1)).is_file() => check::committed_chain(v1)?,
+        _ => Vec::new(),
     };
-    let mut roots = vec![("tuf/v2", &root)];
-    if let Some(v1_root) = &v1_root {
-        roots.push(("tuf/v1", v1_root));
-    }
+    let roots: Vec<(&str, &Root)> = v2_chain
+        .iter()
+        .map(|r| ("tuf/v2", r))
+        .chain(v1_chain.iter().map(|r| ("tuf/v1", r)))
+        .collect();
     registry.check_roots(&roots)?;
     registry.check_indexes(&parsed)?;
     let delegations = registry.delegations();
     let mut files = indexes;
     files.push((publishers::TARGET.to_owned(), registry.publishers_json()?));
+    Ok(V2Inputs {
+        root,
+        files,
+        delegations,
+    })
+}
+
+fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2Outcome> {
+    let V2Inputs {
+        root,
+        files,
+        delegations,
+    } = v2_inputs(options)?;
+    let listing = Listing::read_layout(options.out, Layout::V2)?;
+    let (_, last_targets, _) = listing.highest();
     let wanted: BTreeMap<&str, (u64, Digest)> = files
         .iter()
         .map(|(path, bytes)| (path.as_str(), (bytes.len() as u64, Digest::of(bytes))))
@@ -511,7 +534,7 @@ fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2
     }
 
     let targets_keys = signers(options.keys, &root, Role::Targets, unlock)?;
-    let version = last_targets + 1;
+    let version = next_version("targets of tuf/v2", last_targets)?;
     let expires = expiry(options.now, TARGETS_DAYS);
     let refs: Vec<(&str, &[u8])> = files
         .iter()
@@ -577,10 +600,8 @@ fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2
         }
     });
     if let Err(e) = verdict {
-        for path in &created {
-            let _ = fs::remove_file(path);
-        }
-        return Err(e.context("nothing was left written in tuf/v2"));
+        let cleanup = remove_created(&created);
+        return Err(e.context(format!("nothing was left written in tuf/v2{cleanup}")));
     }
     Ok(V2Outcome::Written(V2Written {
         reason: reasons.join("; "),
@@ -627,6 +648,21 @@ pub struct Both {
 ///
 /// The errors of [`update`] and [`update_v2`], and the problems [`check_v2::cross`] finds.
 pub fn update_both(options: &BothOptions) -> anyhow::Result<Both> {
+    let v2_options = V2Options {
+        keys: options.keys,
+        index: options.index,
+        out: options.v2,
+        v1: Some(options.v1),
+        publishers: options.publishers,
+        refresh: options.refresh,
+        now: options.now,
+        passphrase: options.passphrase,
+    };
+    let has_v2 = options.v2.join(layout::root_path(1)).is_file();
+    // What tuf/v2 is made of is checked before anything is written in tuf/v1.
+    if has_v2 {
+        v2_inputs(&v2_options).context("tuf/v2 cannot be updated: nothing was written")?;
+    }
     let mut unlock = Unlock::new(options.passphrase.clone(), "Passphrase of the TUF keys: ");
     let v1 = update_with(
         &Options {
@@ -639,26 +675,14 @@ pub fn update_both(options: &BothOptions) -> anyhow::Result<Both> {
         },
         &mut unlock,
     )?;
-    if !options.v2.join(layout::root_path(1)).is_file() {
+    if !has_v2 {
         return Ok(Both { v1, v2: None });
     }
     let mut created: Vec<PathBuf> = match &v1 {
         Outcome::Written(w) => w.files.clone(),
         Outcome::UpToDate { .. } => Vec::new(),
     };
-    let v2 = update_v2_with(
-        &V2Options {
-            keys: options.keys,
-            index: options.index,
-            out: options.v2,
-            v1: Some(options.v1),
-            publishers: options.publishers,
-            refresh: options.refresh,
-            now: options.now,
-            passphrase: options.passphrase,
-        },
-        &mut unlock,
-    );
+    let v2 = update_v2_with(&v2_options, &mut unlock);
     let together = v2.and_then(|v2| {
         if let V2Outcome::Written(w) = &v2 {
             created.extend(w.files.iter().cloned());
@@ -675,10 +699,10 @@ pub fn update_both(options: &BothOptions) -> anyhow::Result<Both> {
     match together {
         Ok(v2) => Ok(Both { v1, v2: Some(v2) }),
         Err(e) => {
-            for path in &created {
-                let _ = fs::remove_file(path);
-            }
-            Err(e.context("nothing this run wrote was left in tuf/v1 or tuf/v2"))
+            let cleanup = remove_created(&created);
+            Err(e.context(format!(
+                "nothing this run wrote was left in tuf/v1 or tuf/v2{cleanup}"
+            )))
         }
     }
 }
@@ -718,7 +742,8 @@ fn cross_check(options: &BothOptions) -> anyhow::Result<Vec<super::Problem>> {
     let mut problems = v1.problems;
     problems.extend(v2.problems);
     if let (Some(a), Some(b)) = (&v1.verified, &v2.verified) {
-        problems.extend(check_v2::cross(a, b).0);
+        let v1_roots = check::committed_chain(options.v1)?;
+        problems.extend(check_v2::cross(a, &v1_roots, b).0);
     }
     Ok(problems)
 }

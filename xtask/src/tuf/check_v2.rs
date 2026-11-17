@@ -342,6 +342,17 @@ pub fn expiry_findings(
     (top, roles)
 }
 
+/// The file `path`, or `None` if it is larger than `limit` bytes (no more than one byte
+/// past the limit is read).
+fn read_capped(path: &Path, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut body = Vec::new();
+    fs::File::open(path)?
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut body)?;
+    Ok((body.len() as u64 <= limit).then_some(body))
+}
+
 /// The newest file of each role in `listing`, with its expiry as written (not verified).
 fn role_files(
     dir: &Path,
@@ -352,8 +363,14 @@ fn role_files(
     let mut roles = BTreeMap::new();
     for (name, version) in listing.newest_roles() {
         let path = layout::delegated_path(version, &name);
-        let file = fs::read(dir.join(&path))
-            .map_err(|e| problem("unreadable", format!("reading {path}: {e}")))?;
+        let file = read_capped(&dir.join(&path), limit)
+            .map_err(|e| problem("unreadable", format!("reading {path}: {e}")))?
+            .ok_or_else(|| {
+                problem(
+                    "too-large",
+                    format!("{path} is larger than the {limit} bytes a client reads of a role"),
+                )
+            })?;
         let expires = Envelope::parse(&file, limit, &path)
             .ok()
             .and_then(|env| Targets::from_signed(&env.signed, Profile::Legacy).ok())
@@ -958,7 +975,8 @@ fn compare_publishers(
             return;
         }
     };
-    if let Err(e) = registry.check_roots(&[("tuf/v2", &verified.root)]) {
+    let roots: Vec<(&str, &Root)> = verified.roots.iter().map(|r| ("tuf/v2", r)).collect();
+    if let Err(e) = registry.check_roots(&roots) {
         problems.push(problem("publishers-invalid", format!("{e:#}")));
     }
     if let Some(index) = index {
@@ -1010,36 +1028,67 @@ fn compare_publishers(
     }
 }
 
-/// `tuf/v1` against `tuf/v2`: no key of one is a key of the other but the shared targets
-/// key, no publisher's key is a key of `tuf/v1`, and the index targets are the same files.
+/// The roles each key of `roots` served, over every root of the chain.
+fn roles_of_keys(roots: &[Root]) -> BTreeMap<KeyId, BTreeSet<Role>> {
+    let mut roles: BTreeMap<KeyId, BTreeSet<Role>> = BTreeMap::new();
+    for root in roots {
+        for role in [Role::Root, Role::Timestamp, Role::Snapshot, Role::Targets] {
+            for id in &root.role(role).keyids {
+                roles.entry(*id).or_default().insert(role);
+            }
+        }
+    }
+    roles
+}
+
+/// The keys the chains of roots `v1` and `v2` share (every root of each, not only the ones
+/// in force): the only key both may have is one that served as a targets key, and as
+/// nothing else, in both. Any other key of both is a `shared-key` problem: a snapshot or
+/// timestamp of one repository would be accepted by the clients of the other.
+pub fn shared_keys(v1: &[Root], v2: &[Root]) -> Vec<Problem> {
+    let v1_roles = roles_of_keys(v1);
+    let v2_roles = roles_of_keys(v2);
+    let targets_only = BTreeSet::from([Role::Targets]);
+    let names = |roles: &BTreeSet<Role>| {
+        roles
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    v1_roles
+        .iter()
+        .filter_map(|(id, in_v1)| {
+            let in_v2 = v2_roles.get(id)?;
+            (*in_v1 != targets_only || *in_v2 != targets_only).then(|| {
+                problem(
+                    "shared-key",
+                    format!(
+                        "the key {id} is a {} key of tuf/v1 and a {} key of tuf/v2: the two \
+                         chains share only the targets key, as targets in both",
+                        names(in_v1),
+                        names(in_v2)
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
+/// `tuf/v1` against `tuf/v2`: the chains of roots share no key but the targets key
+/// ([`shared_keys`], over `v1_roots`, every root of `tuf/v1`, and `v2.roots`), no
+/// publisher's key is a key of any root of either, and the index targets are the same files.
 /// Returns the problems and the warnings.
-pub fn cross(v1: &check::Verified, v2: &Verified) -> (Vec<Problem>, Vec<Problem>) {
-    let mut problems = Vec::new();
+pub fn cross(
+    v1: &check::Verified,
+    v1_roots: &[Root],
+    v2: &Verified,
+) -> (Vec<Problem>, Vec<Problem>) {
+    let mut problems = shared_keys(v1_roots, &v2.roots);
     let mut warnings = Vec::new();
     let targets_ids = |root: &Root| -> BTreeSet<KeyId> {
         root.role(Role::Targets).keyids.iter().copied().collect()
     };
-    let shared_targets: BTreeSet<KeyId> = targets_ids(&v1.root)
-        .intersection(&targets_ids(&v2.root))
-        .copied()
-        .collect();
-    for id in v1
-        .root
-        .keys
-        .keys()
-        .filter(|id| v2.root.keys.contains_key(id))
-    {
-        if !shared_targets.contains(id) {
-            problems.push(problem(
-                "shared-key",
-                format!(
-                    "the key {id} is in root {} of tuf/v1 and root {} of tuf/v2 other than as \
-                     their shared targets key: the two chains must not share keys",
-                    v1.root.version, v2.root.version
-                ),
-            ));
-        }
-    }
     if targets_ids(&v1.root) != targets_ids(&v2.root) {
         warnings.push(problem(
             "targets-key-differs",
@@ -1051,15 +1100,16 @@ pub fn cross(v1: &check::Verified, v2: &Verified) -> (Vec<Problem>, Vec<Problem>
         ));
     }
     if let Some(Value::Object(keys)) = v2.delegations.get("keys") {
+        let root_keys = roles_of_keys(v1_roots);
+        let v2_keys = roles_of_keys(&v2.roots);
         for id in keys.keys().filter_map(|id| KeyId::from_hex(id)) {
-            if v1.root.keys.contains_key(&id) {
-                problems.push(problem(
-                    "shared-key",
-                    format!(
-                        "the publishers' key {id} is a key of root {} of tuf/v1",
-                        v1.root.version
-                    ),
-                ));
+            for (repo, of) in [("tuf/v1", &root_keys), ("tuf/v2", &v2_keys)] {
+                if of.contains_key(&id) {
+                    problems.push(problem(
+                        "shared-key",
+                        format!("the publishers' key {id} is a key of a root of {repo}"),
+                    ));
+                }
             }
         }
     }

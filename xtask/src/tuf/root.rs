@@ -23,7 +23,6 @@
 //! roots is verified with the client's code, and the root and the new keys are removed
 //! again if it does not hold.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
@@ -34,7 +33,7 @@ use time::{Duration, OffsetDateTime};
 use super::check;
 use super::keystore::{self, Unlock};
 use super::repo::{self, Layout};
-use super::{PassphraseSource, ROOT_DAYS, expiry};
+use super::{PassphraseSource, ROOT_DAYS, expiry, next_version, remove_created};
 
 /// What [`root`] does.
 pub struct Options<'a> {
@@ -114,11 +113,7 @@ pub fn root(options: &Options) -> anyhow::Result<Rotated> {
 pub fn root_v2(options: &V2Options) -> anyhow::Result<Rotated> {
     let v1 = check::committed_root(options.v1)
         .context("tuf/v2 shares the targets key of tuf/v1: tuf/v1 must be there")?;
-    let targets = v1.role(Role::Targets);
-    let targets = RoleDef {
-        keys: targets.keyids.iter().map(|id| v1.keys[id]).collect(),
-        threshold: targets.threshold,
-    };
+    let targets = check::role_def(&v1, Role::Targets)?;
     next_root(
         &Options {
             keys: options.keys,
@@ -153,7 +148,7 @@ fn next_root(
         &anchor,
         OffsetDateTime::UNIX_EPOCH + Duration::seconds(1),
     )?;
-    let version = old.version + 1;
+    let version = next_version("root", old.version)?;
 
     let rotated = [
         (Role::Root, options.rotate_root),
@@ -206,27 +201,23 @@ fn next_root(
         };
         fresh.push((role, key, text));
     }
-    let role_def = |role: Role| -> RoleDef {
+    let role_def = |role: Role| -> anyhow::Result<RoleDef> {
         if let (Role::Targets, Some(targets)) = (role, &targets) {
-            return targets.clone();
+            return Ok(targets.clone());
         }
         if let Some((_, key, _)) = fresh.iter().find(|(r, _, _)| *r == role) {
-            return RoleDef {
+            return Ok(RoleDef {
                 keys: vec![key.public()],
                 threshold: 1,
-            };
+            });
         }
-        let keys = old.role(role);
-        RoleDef {
-            keys: keys.keyids.iter().map(|id| old.keys[id]).collect(),
-            threshold: keys.threshold,
-        }
+        check::role_def(&old, role)
     };
     let def = RootDef {
-        root: role_def(Role::Root),
-        timestamp: role_def(Role::Timestamp),
-        snapshot: role_def(Role::Snapshot),
-        targets: role_def(Role::Targets),
+        root: role_def(Role::Root)?,
+        timestamp: role_def(Role::Timestamp)?,
+        snapshot: role_def(Role::Snapshot)?,
+        targets: role_def(Role::Targets)?,
     };
     let targets_changed = {
         let old_targets = old.role(Role::Targets);
@@ -269,17 +260,16 @@ fn next_root(
         Ok(r) if r.version == version => {}
         other => {
             // The new keys go with the root: a retry must not meet them as existing files.
-            let _ = fs::remove_file(&path);
-            for (_, _, file) in &new_keys {
-                let _ = fs::remove_file(file);
-            }
+            let mut made = vec![path.clone()];
+            made.extend(new_keys.iter().map(|(_, _, file)| file.clone()));
+            let cleanup = remove_created(&made);
             let why = match other {
                 Ok(r) => format!("the chain ends at root {}", r.version),
                 Err(e) => format!("{e:#}"),
             };
             bail!(
                 "the chain of roots does not verify with root {version} (the root and the new key \
-                 files were removed): {why}"
+                 files were removed{cleanup}): {why}"
             );
         }
     }

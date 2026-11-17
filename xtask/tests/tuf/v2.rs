@@ -16,7 +16,7 @@ use xtask::tuf::check_v2::{self, Report, Stage};
 use xtask::tuf::published::{self, Published};
 use xtask::tuf::repo::DirFetcher;
 use xtask::tuf::timestamp::{self, KeySource};
-use xtask::tuf::{PassphraseSource, init, root, snapshot, update};
+use xtask::tuf::{PassphraseSource, init, keystore, root, snapshot, update};
 
 use super::{copy_dir, files, git, index, t0, template};
 
@@ -200,11 +200,23 @@ impl V2World {
         out
     }
 
+    /// The snapshot of `out`, extending the published copy `previous`, or the first
+    /// publication.
     fn snapshot(
         &self,
         out: &Path,
         now: OffsetDateTime,
         previous: Option<&Path>,
+    ) -> anyhow::Result<snapshot::Signed> {
+        self.snapshot_with(out, now, previous, "v2-snapshot.key")
+    }
+
+    fn snapshot_with(
+        &self,
+        out: &Path,
+        now: OffsetDateTime,
+        previous: Option<&Path>,
+        key: &str,
     ) -> anyhow::Result<snapshot::Signed> {
         let fetcher = previous.map(DirFetcher::new);
         snapshot::snapshot(
@@ -213,12 +225,13 @@ impl V2World {
                 anchor: &self.v2_anchor(),
                 index: &self.indexes(),
                 publishers: &self.publishers(),
-                key: &KeySource::File(self.keys().join("v2-snapshot.key")),
+                key: &KeySource::File(self.keys().join(key)),
                 now,
             },
-            fetcher
-                .as_ref()
-                .map(|f| f as &dyn oncl_update::tuf::Fetcher),
+            match &fetcher {
+                Some(f) => snapshot::Previous::Published(f),
+                None => snapshot::Previous::FirstPublication,
+            },
         )
     }
 
@@ -375,6 +388,7 @@ fn v2_is_made_beside_v1_and_published_end_to_end() {
     assert!(v1.problems.is_empty(), "{:?}", v1.problems);
     let (problems, warnings) = check_v2::cross(
         v1.verified.as_ref().unwrap(),
+        &check::committed_chain(&w.v1()).unwrap(),
         report.verified.as_ref().unwrap(),
     );
     assert!(
@@ -490,6 +504,10 @@ fn a_registry_that_breaks_a_rule_writes_nothing_in_either_repository() {
     .unwrap();
     let err = w.update(t0() + Duration::days(1), false).unwrap_err();
     assert!(format!("{err:#}").contains("nested"), "{err:#}");
+    assert!(
+        format!("{err:#}").contains("nothing was written"),
+        "tuf/v2's inputs are refused before tuf/v1 is touched: {err:#}"
+    );
     assert_eq!(files(&w.v1()), v1_before);
     assert_eq!(files(&w.v2()), v2_before);
 
@@ -678,8 +696,11 @@ fn both_repositories_must_list_the_same_indexes() {
     };
     let v2 = w.tree(later);
     assert!(codes(&v2).contains(&"index-mismatch"), "{:?}", v2.problems);
-    let (problems, _) =
-        check_v2::cross(v1.verified.as_ref().unwrap(), v2.verified.as_ref().unwrap());
+    let (problems, _) = check_v2::cross(
+        v1.verified.as_ref().unwrap(),
+        &check::committed_chain(&w.v1()).unwrap(),
+        v2.verified.as_ref().unwrap(),
+    );
     assert_eq!(
         problems.iter().map(|p| p.code).collect::<Vec<_>>(),
         ["index-diverged"]
@@ -750,18 +771,8 @@ fn the_v2_root_follows_the_targets_key_of_v1_and_rotates_online_keys() {
     // The old snapshot key is not the one of the root in force any more.
     let err = w.snapshot(&site, now, None).unwrap_err();
     assert!(err.to_string().contains("is not a snapshot key"), "{err:#}");
-    snapshot::snapshot(
-        &snapshot::Options {
-            out: &site,
-            anchor: &w.v2_anchor(),
-            index: &w.indexes(),
-            publishers: &w.publishers(),
-            key: &KeySource::File(w.keys().join("v2-snapshot.v2.key")),
-            now,
-        },
-        None,
-    )
-    .unwrap();
+    w.snapshot_with(&site, now, None, "v2-snapshot.v2.key")
+        .unwrap();
     w.timestamp(&site, now).unwrap();
     let report = w.check(&site, Stage::Published, now, None);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
@@ -815,7 +826,7 @@ fn the_check_command_checks_both_repositories() {
     w.write_publisher(
         "ecc",
         0,
-        "[supersedes]\n\"io.github.arynyklas.openncalayer.port.x\" = \"kz.ecc.x\"\n",
+        "[[revoked_versions]]\nid = \"kz.ecc.market\"\nversion = \"1.0.0\"\ndate = \"2027-02-10\"\n",
     );
     let v1_only = run(&["--repo", "v1"]);
     assert!(v1_only.status.success());
@@ -828,4 +839,174 @@ fn the_check_command_checks_both_repositories() {
         "{}",
         String::from_utf8_lossy(&fail.stderr)
     );
+}
+
+#[test]
+fn a_key_rotated_out_of_v1_is_never_a_key_of_v2() {
+    let w = v2_world();
+    let now = t0() + Duration::days(2);
+    // tuf/v1 rotates its snapshot key: the old one is in no root in force any more.
+    let old_v1_snapshot =
+        keystore::load_encrypted(&w.keys().join("snapshot.key"), super::PASSPHRASE).unwrap();
+    root::root(&root::Options {
+        keys: &w.keys(),
+        out: &w.v1(),
+        rotate_root: false,
+        rotate_targets: false,
+        rotate_snapshot: true,
+        rotate_timestamp: false,
+        now,
+        passphrase: &w.pass(),
+    })
+    .unwrap();
+    update::update(&update::Options {
+        keys: &w.keys(),
+        index: &w.indexes(),
+        out: &w.v1(),
+        refresh: false,
+        now,
+        passphrase: &w.pass(),
+    })
+    .unwrap();
+    // A root of tuf/v2 that takes it as its snapshot key, signed by tuf/v2's root key.
+    let v2_root = check::committed_root(&w.v2()).unwrap();
+    let def = build::RootDef {
+        root: check::role_def(&v2_root, Role::Root).unwrap(),
+        timestamp: check::role_def(&v2_root, Role::Timestamp).unwrap(),
+        snapshot: build::RoleDef {
+            keys: vec![old_v1_snapshot.public()],
+            threshold: 1,
+        },
+        targets: check::role_def(&v2_root, Role::Targets).unwrap(),
+    };
+    let root_key =
+        keystore::load_encrypted(&w.keys().join("v2-root.key"), super::PASSPHRASE).unwrap();
+    let signed = build::root(2, now + Duration::days(365), &def).unwrap();
+    fs::write(
+        w.v2().join("metadata/2.root.json"),
+        build::sign(&signed, &[&root_key]).unwrap(),
+    )
+    .unwrap();
+    let v2 = w.tree(now);
+    let v2_verified = v2.verified.as_ref().unwrap();
+    let v1 = match check::check(&check::Options {
+        dir: &w.v1(),
+        index: Some(&w.indexes()),
+        anchor: Some(&w.anchor()),
+        now,
+        timestamp: TimestampMode::Absent,
+        expiry: Expiry {
+            min_days: 0,
+            min_root_days: 0,
+            fail: false,
+        },
+        base: None,
+    })
+    .unwrap()
+    {
+        check::Outcome::Checked(r) => r,
+        check::Outcome::NoRepository => panic!("tuf/v1"),
+    };
+    let v1_verified = v1.verified.as_ref().unwrap();
+    // The roots in force alone share nothing: only the whole chain shows it.
+    let (in_force, _) = check_v2::cross(
+        v1_verified,
+        std::slice::from_ref(&v1_verified.root),
+        v2_verified,
+    );
+    assert!(in_force.is_empty(), "{in_force:?}");
+    let (problems, _) = check_v2::cross(
+        v1_verified,
+        &check::committed_chain(&w.v1()).unwrap(),
+        v2_verified,
+    );
+    let id = old_v1_snapshot.key_id().to_string();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.code == "shared-key" && p.message.contains(&id)),
+        "{problems:?}"
+    );
+    // `tuf update` refuses it, and the check command too.
+    let err = w.update(now, false).unwrap_err();
+    assert!(format!("{err:#}").contains("shared-key"), "{err:#}");
+}
+
+#[test]
+fn the_snapshot_extends_the_published_one_unless_it_is_the_first_publication() {
+    let w = v2_world();
+    let now = t0() + Duration::hours(1);
+    // A site without a timestamp is not "nothing published yet".
+    let unpublished = w.copy("unpublished");
+    let site = w.copy("site");
+    let err = w.snapshot(&site, now, Some(&unpublished)).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("--first-publication"),
+        "{err:#}"
+    );
+    assert!(!files(&site).iter().any(|f| f.contains("snapshot")));
+    // The command line asks for one or the other.
+    let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    let neither = super::xtask(&["snapshot", "--out", &s(site.clone())]);
+    assert_eq!(neither.status.code(), Some(2));
+    let both = super::xtask(&[
+        "snapshot",
+        "--out",
+        &s(site),
+        "--previous",
+        "https://example.invalid/tuf/v2/",
+        "--first-publication",
+    ]);
+    assert_eq!(both.status.code(), Some(2));
+}
+
+#[test]
+fn a_published_snapshot_of_the_last_version_has_no_next_one() {
+    let w = v2_world();
+    let now = t0() + Duration::hours(1);
+    let published = w.copy("published");
+    let seed = |name: &str| {
+        keystore::parse_seed(&fs::read_to_string(w.keys().join(name)).unwrap()).unwrap()
+    };
+    let targets = fs::read(published.join("metadata/1.targets.json")).unwrap();
+    let role = fs::read(published.join("metadata/1.pub-ecc.json")).unwrap();
+    let mut signed = build::snapshot(u64::MAX, now + Duration::days(7), 1, &targets).unwrap();
+    signed["meta"]["pub-ecc.json"] = serde_json::json!({
+        "version": 1,
+        "length": role.len(),
+        "hashes": {"sha256": oncl_update::tuf::Digest::of(&role).to_hex()},
+    });
+    let snapshot_file = build::sign(&signed, &[&seed("v2-snapshot.key")]).unwrap();
+    fs::write(
+        published.join(format!("metadata/{}.snapshot.json", u64::MAX)),
+        &snapshot_file,
+    )
+    .unwrap();
+    let timestamp = build::timestamp(1, now + Duration::days(7), u64::MAX, &snapshot_file).unwrap();
+    fs::write(
+        published.join("metadata/timestamp.json"),
+        build::sign(&timestamp, &[&seed("v2-timestamp.key")]).unwrap(),
+    )
+    .unwrap();
+    let site = w.copy("site");
+    let err = w.snapshot(&site, now, Some(&published)).unwrap_err();
+    let overflow = err
+        .chain()
+        .find_map(|e| e.downcast_ref::<xtask::tuf::VersionOverflow>())
+        .unwrap_or_else(|| panic!("{err:#}"));
+    assert_eq!(overflow.version, u64::MAX);
+    assert!(!files(&site).iter().any(|f| f.contains("snapshot")));
+}
+
+#[test]
+fn a_role_file_larger_than_a_client_reads_is_refused() {
+    let w = v2_world();
+    let limit = Limits::default().delegated;
+    fs::write(
+        w.v2().join("metadata/2.pub-ecc.json"),
+        vec![b' '; usize::try_from(limit).unwrap() + 1],
+    )
+    .unwrap();
+    let found = codes(&w.tree(t0()));
+    assert!(found.contains(&"too-large"), "{found:?}");
 }

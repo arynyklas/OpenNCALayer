@@ -16,10 +16,10 @@ use anyhow::{Context, bail};
 use oncl_update::tuf::build::{self, RoleDef, RootDef};
 use oncl_update::tuf::{KeyId, Limits, MemoryStore, Role, TufClient, layout};
 
-use super::check;
 use super::keystore;
 use super::repo::{self, DirFetcher, Layout};
 use super::{PassphraseSource, ROOT_DAYS, expiry};
+use super::{check, check_v2};
 
 /// What [`init`] does.
 pub struct Options<'a> {
@@ -180,8 +180,11 @@ pub struct V2Options<'a> {
 /// If `tuf/v1` has no chain of roots, any file to write exists already, a key file would be
 /// committable, or writing fails.
 pub fn init_v2(options: &V2Options) -> anyhow::Result<Initialized> {
-    let v1_root = check::committed_root(options.v1)
+    let v1_chain = check::committed_chain(options.v1)
         .context("tuf/v2 shares the targets key of tuf/v1: tuf/v1 must be there first")?;
+    let Some(v1_root) = v1_chain.last() else {
+        bail!("tuf/v1 has no root");
+    };
     let names = [Role::Root, Role::Snapshot, Role::Timestamp]
         .map(|role| keystore::file_name_in(Layout::V2, role, None));
     for name in &names {
@@ -219,18 +222,24 @@ pub fn init_v2(options: &V2Options) -> anyhow::Result<Initialized> {
             keys: vec![snapshot_key.public()],
             threshold: 1,
         },
-        targets: RoleDef {
-            keys: targets.keyids.iter().map(|id| v1_root.keys[id]).collect(),
-            threshold: targets.threshold,
-        },
+        targets: check::role_def(v1_root, Role::Targets)?,
     };
-    for key in [&root_key, &snapshot_key, &timestamp_key] {
-        if v1_root.keys.contains_key(&key.key_id()) {
-            bail!("a new key is a key of tuf/v1: the random generator is broken");
-        }
-    }
     let signed = build::root(1, expiry(options.now, ROOT_DAYS), &def)
         .map_err(|e| anyhow::anyhow!("making the root: {e}"))?;
+    // No key of any root of tuf/v1 serves tuf/v2, but the targets key, as targets in both.
+    let new_root = oncl_update::tuf::Root::from_signed(&signed)
+        .map_err(|e| anyhow::anyhow!("the root made does not read back: {e}"))?;
+    let shared = check_v2::shared_keys(&v1_chain, std::slice::from_ref(&new_root));
+    if !shared.is_empty() {
+        bail!(
+            "the root of tuf/v2 would share keys with tuf/v1: {}",
+            shared
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
     let file =
         build::sign(&signed, &[&root_key]).map_err(|e| anyhow::anyhow!("signing the root: {e}"))?;
     TufClient::new(

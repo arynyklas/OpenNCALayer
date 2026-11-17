@@ -21,7 +21,8 @@
 //! rollback, and every update of `tuf/v2` would stop). It is also written into the copy, so
 //! that a client whose cached `timestamp.json` still names it finds it. The new snapshot is
 //! verified once more with the previous one beside it ([`Stage::Snapshotted`]); if it does
-//! not hold, what was written is removed again.
+//! not hold, what was written is removed again. A published site without a timestamp is an
+//! error: only the first publication ([`Previous::FirstPublication`]) extends nothing.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,7 +39,7 @@ use time::OffsetDateTime;
 use super::check::Expiry;
 use super::check_v2::{self, Stage};
 use super::timestamp::{KeySource, load_key};
-use super::{Problem, V2_SNAPSHOT_DAYS, expiry, repo, whole_seconds};
+use super::{Problem, V2_SNAPSHOT_DAYS, expiry, next_version, remove_created, repo, whole_seconds};
 
 /// What [`snapshot`] does.
 pub struct Options<'a> {
@@ -93,23 +94,35 @@ fn signed_by_any(file: &Envelope, roots: &[Root], role: Role, what: &str) -> any
     }
 }
 
-/// The snapshot the published `timestamp.json` of `fetcher` names, and its file; `None` if
-/// nothing is published yet.
+/// What the new snapshot extends.
+#[derive(Clone, Copy)]
+pub enum Previous<'a> {
+    /// The published `tuf/v2`, read with this fetcher: its timestamp must be there.
+    Published(&'a dyn Fetcher),
+    /// Nothing: the first publication of `tuf/v2` (`--first-publication`).
+    FirstPublication,
+}
+
+/// The snapshot the published `timestamp.json` of `fetcher` names, and its file.
 ///
 /// # Errors
 ///
-/// If the site cannot be read, or the timestamp or the snapshot is not one of `roots`' keys
-/// or does not match what the timestamp lists.
+/// If the site cannot be read, has no timestamp (a 404: run with `--first-publication` for
+/// the first publication), or the timestamp or the snapshot is not one of `roots`' keys or
+/// does not match what the timestamp lists.
 pub fn previous_snapshot(
     fetcher: &dyn Fetcher,
     roots: &[Root],
-) -> anyhow::Result<Option<(Snapshot, Vec<u8>)>> {
+) -> anyhow::Result<(Snapshot, Vec<u8>)> {
     let limits = Limits::default();
     let body = match fetcher
         .fetch(layout::TIMESTAMP_PATH, limits.timestamp)
         .map_err(|e| anyhow::anyhow!("the published timestamp: {e}"))?
     {
-        Response::NotFound => return Ok(None),
+        Response::NotFound => bail!(
+            "the published tuf/v2 has no timestamp: a snapshot that extends nothing is \
+             signed only for the first publication (`--first-publication`)"
+        ),
         Response::Body(body) => body,
     };
     let file = Envelope::parse(&body, limits.timestamp, "the published timestamp")
@@ -149,7 +162,7 @@ pub fn previous_snapshot(
     if snapshot.version != listed.version {
         bail!("the published {path} is of version {}", snapshot.version);
     }
-    Ok(Some((snapshot, body)))
+    Ok((snapshot, body))
 }
 
 /// What a snapshot lists of a file: version, length and sha256.
@@ -170,7 +183,7 @@ fn meta_entry(version: u64, file: &[u8]) -> Value {
 /// already, the key is missing, malformed or not the snapshot key of the root in force, the
 /// previous snapshot cannot be read or verified, the new one would drop or lower what it
 /// listed, or the result does not verify (then nothing stays written).
-pub fn snapshot(options: &Options, previous: Option<&dyn Fetcher>) -> anyhow::Result<Signed> {
+pub fn snapshot(options: &Options, previous: Previous<'_>) -> anyhow::Result<Signed> {
     let report = check_v2::check(&check_v2::Options {
         dir: options.out,
         index: Some(options.index),
@@ -218,14 +231,14 @@ pub fn snapshot(options: &Options, previous: Option<&dyn Fetcher>) -> anyhow::Re
         );
     }
     let previous = match previous {
-        Some(fetcher) => previous_snapshot(fetcher, &verified.roots)?,
-        None => None,
+        Previous::Published(fetcher) => Some(previous_snapshot(fetcher, &verified.roots)?),
+        Previous::FirstPublication => None,
     };
 
     let now = whole_seconds(options.now);
     let unix = u64::try_from(now.unix_timestamp()).context("the clock is before 1970")?;
     let version = match &previous {
-        Some((p, _)) => unix.max(p.version + 1),
+        Some((p, _)) => unix.max(next_version("published snapshot", p.version)?),
         None => unix,
     };
     let expires = expiry(now, V2_SNAPSHOT_DAYS);
@@ -324,10 +337,8 @@ pub fn snapshot(options: &Options, previous: Option<&dyn Fetcher>) -> anyhow::Re
     let kept = match verdict {
         Ok(kept) => kept,
         Err(e) => {
-            for path in &created {
-                let _ = fs::remove_file(path);
-            }
-            return Err(e);
+            let cleanup = remove_created(&created);
+            return Err(e.context(format!("the files written were removed{cleanup}")));
         }
     };
     Ok(Signed {

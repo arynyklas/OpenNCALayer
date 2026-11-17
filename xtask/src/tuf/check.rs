@@ -31,6 +31,7 @@ use std::path::Path;
 
 use anyhow::{Context, bail};
 use oncl_update::Channel;
+use oncl_update::tuf::build;
 use oncl_update::tuf::ed25519::verify_role;
 use oncl_update::tuf::{
     Digest, Envelope, Limits, MemoryStore, Profile, Role, Root, Snapshot, Targets, Timestamp,
@@ -494,6 +495,57 @@ pub fn committed_root(dir: &Path) -> anyhow::Result<Root> {
         &anchor,
         OffsetDateTime::UNIX_EPOCH + Duration::seconds(1),
     )
+}
+
+/// Every root of the repository `dir`, from its own root version 1 to the root in force,
+/// as the client follows the chain (with a clock at the start of time, as
+/// [`committed_root`]).
+///
+/// # Errors
+///
+/// If `dir` has no root version 1, or its roots are not a chain.
+pub fn committed_chain(dir: &Path) -> anyhow::Result<Vec<Root>> {
+    let limits = Limits::default();
+    let anchor = super::repo::read(dir, &layout::root_path(1))?;
+    let fetcher = DirFetcher::new(dir).without_timestamp();
+    let mut client = TufClient::new(&anchor, &fetcher, MemoryStore::default(), limits)
+        .map_err(|e| anyhow::anyhow!("{}: root version 1 is not usable: {e}", dir.display()))?;
+    match client.refresh(OffsetDateTime::UNIX_EPOCH + Duration::seconds(1)) {
+        Err(TufError::NotFound(path)) if path == layout::TIMESTAMP_PATH => {}
+        Err(e) => bail!("the roots of {} are not a chain: {e}", dir.display()),
+        Ok(_) => bail!("the repository answered a timestamp that was hidden from it"),
+    }
+    let first = Envelope::parse(&anchor, limits.root, "root version 1")
+        .map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
+    std::iter::once(&first)
+        .chain(client.store().state.roots.iter())
+        .map(|file| Root::from_signed(&file.signed).map_err(|e| anyhow::anyhow!("{e}")))
+        .collect()
+}
+
+/// The keys and threshold of `role` in `root`, as a root to build names them.
+///
+/// # Errors
+///
+/// If the root lists a key id of the role without its key (a root the client reads never
+/// does).
+pub fn role_def(root: &Root, role: Role) -> anyhow::Result<build::RoleDef> {
+    let keys = root.role(role);
+    Ok(build::RoleDef {
+        keys: keys
+            .keyids
+            .iter()
+            .map(|id| {
+                root.keys.get(id).copied().with_context(|| {
+                    format!(
+                        "root {} lists the {role} key {id} without the key",
+                        root.version
+                    )
+                })
+            })
+            .collect::<anyhow::Result<_>>()?,
+        threshold: keys.threshold,
+    })
 }
 
 /// The expired and expiring metadata of `verified` at `now`.

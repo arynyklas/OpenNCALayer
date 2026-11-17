@@ -118,9 +118,9 @@ pub enum TufCommand {
     /// Sign the snapshot of a copy of `tuf/v2` for publication, with the online key
     /// (version: Unix seconds, or one more than the published one; valid for 7 days). The
     /// copy is verified first, every delegated role's newest file included; the published
-    /// snapshot (`--previous`) is verified, kept beside the new one, and the new one may drop
-    /// or lower nothing it listed. Run by Pages: the file is never committed. The key is
-    /// never printed.
+    /// snapshot (`--previous`, required unless `--first-publication`) is verified, kept
+    /// beside the new one, and the new one may drop or lower nothing it listed. Run by Pages:
+    /// the file is never committed. The key is never printed.
     Snapshot {
         /// The repository directory (a copy of `tuf/v2` for publication).
         #[arg(long)]
@@ -135,10 +135,13 @@ pub enum TufCommand {
         /// The registry of the publishers [default: `publishers` of the workspace].
         #[arg(long)]
         publishers: Option<PathBuf>,
-        /// The published `tuf/v2`, `https://…/tuf/v2/`, whose snapshot the new one extends
-        /// (none: nothing is published yet).
-        #[arg(long)]
+        /// The published `tuf/v2`, `https://…/tuf/v2/`, whose snapshot the new one extends;
+        /// its timestamp must be there.
+        #[arg(long, required_unless_present = "first_publication")]
         previous: Option<String>,
+        /// The first publication of `tuf/v2`: there is no published snapshot to extend.
+        #[arg(long, conflicts_with = "previous")]
+        first_publication: bool,
         /// The environment variable that holds the key line [default: TUF_V2_SNAPSHOT_KEY].
         #[arg(long, conflicts_with = "key_file")]
         key_env: Option<String>,
@@ -549,6 +552,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             index,
             publishers,
             previous,
+            first_publication: _,
             key_env,
             key_file,
             now,
@@ -567,9 +571,10 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
                 Some(url) => {
                     let fetcher = HttpFetcher::new(&transport, url)
                         .map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
-                    snapshot::snapshot(&options, Some(&fetcher))?
+                    snapshot::snapshot(&options, snapshot::Previous::Published(&fetcher))?
                 }
-                None => snapshot::snapshot(&options, None)?,
+                // clap allows no `--previous` only with `--first-publication`.
+                None => snapshot::snapshot(&options, snapshot::Previous::FirstPublication)?,
             };
             if let Some((version, path)) = &signed.previous {
                 println!(
@@ -823,7 +828,12 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
                         failed +=
                             print_report(label, &report.notes, &report.warnings, &report.problems);
                         if let (Some(v1), Some(v2)) = (&v1_verified, &report.verified) {
-                            let (problems, warnings) = check_v2::cross(v1, v2);
+                            let (problems, warnings) = match check::committed_chain(&dir) {
+                                Ok(v1_roots) => check_v2::cross(v1, &v1_roots, v2),
+                                Err(e) => {
+                                    (vec![Problem::new("client", format!("{e:#}"))], Vec::new())
+                                }
+                            };
                             failed +=
                                 print_report("tuf/v1 and tuf/v2: ", &[], &warnings, &problems);
                         }

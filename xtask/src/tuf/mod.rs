@@ -75,7 +75,59 @@ pub const MAX_TARGET: u64 = oncl_update::MAX_INDEX_LEN;
 
 /// `now` in whole seconds (the metadata has no sub-seconds).
 pub fn whole_seconds(now: OffsetDateTime) -> OffsetDateTime {
-    now.replace_nanosecond(0).expect("0 is a valid nanosecond")
+    now - Duration::nanoseconds(i64::from(now.nanosecond()))
+}
+
+/// The version after `version` of a file would not fit in a `u64`: the repository cannot
+/// go on (a version is never reused, and never goes back).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VersionOverflow {
+    /// What the version is of.
+    pub what: &'static str,
+    /// The version that has no next one.
+    pub version: u64,
+}
+
+impl std::fmt::Display for VersionOverflow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the {} is version {}: there is no next version",
+            self.what, self.version
+        )
+    }
+}
+
+impl std::error::Error for VersionOverflow {}
+
+/// The version after `version` of `what`.
+///
+/// # Errors
+///
+/// [`VersionOverflow`] for [`u64::MAX`].
+pub fn next_version(what: &'static str, version: u64) -> Result<u64, VersionOverflow> {
+    version
+        .checked_add(1)
+        .ok_or(VersionOverflow { what, version })
+}
+
+/// Removes `paths` (the files a failed run made). Returns what could not be removed, as
+/// `"; could not remove: <path> (<error>), …"`, or nothing: the caller adds it to its error,
+/// so that a file left behind is never silent.
+pub fn remove_created(paths: &[PathBuf]) -> String {
+    let failed: Vec<String> = paths
+        .iter()
+        .filter_map(|path| match fs::remove_file(path) {
+            Ok(()) => None,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => Some(format!("{} ({e})", path.display())),
+        })
+        .collect();
+    if failed.is_empty() {
+        String::new()
+    } else {
+        format!("; could not remove: {}", failed.join(", "))
+    }
 }
 
 /// The moment `days` days after `now`, in whole seconds.
@@ -180,5 +232,43 @@ impl Problem {
 impl std::fmt::Display for Problem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[{}] {}", self.code, self.message)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_last_version_has_no_next_one() {
+        assert_eq!(next_version("targets", 41), Ok(42));
+        assert_eq!(
+            next_version("targets", u64::MAX),
+            Err(VersionOverflow {
+                what: "targets",
+                version: u64::MAX
+            })
+        );
+    }
+
+    #[test]
+    fn whole_seconds_drops_only_the_sub_seconds() {
+        let t = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        assert_eq!(whole_seconds(t + Duration::milliseconds(999)), t);
+        assert_eq!(whole_seconds(t), t);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_removed_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("made.json");
+        fs::write(&file, b"x").unwrap();
+        let gone = dir.path().join("never-made.json");
+        assert_eq!(remove_created(&[file.clone(), gone]), "");
+        assert!(!file.exists());
+        // A directory is not a file: removing it as one fails, and says so.
+        let stuck = dir.path().join("stuck");
+        fs::create_dir(&stuck).unwrap();
+        assert!(remove_created(&[stuck]).contains("could not remove"));
     }
 }

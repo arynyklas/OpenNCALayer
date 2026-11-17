@@ -30,8 +30,8 @@ use zeroize::Zeroizing;
 use super::check::{self, Expiry, TimestampMode};
 use super::check_v2::{self, Stage};
 use super::{
-    SNAPSHOT_DAYS, TIMESTAMP_DAYS, V2_SNAPSHOT_DAYS, expiry, keystore, repo, show_time,
-    whole_seconds,
+    SNAPSHOT_DAYS, TIMESTAMP_DAYS, V2_SNAPSHOT_DAYS, expiry, keystore, remove_created, repo,
+    show_time, whole_seconds,
 };
 
 /// Where the timestamp key is.
@@ -188,13 +188,13 @@ pub fn timestamp(options: &Options) -> anyhow::Result<Signed> {
     );
     let ok = matches!(&again, Ok(Ok(_))) && after.is_empty();
     if !ok {
-        let _ = fs::remove_file(&path);
+        let cleanup = remove_created(std::slice::from_ref(&path));
         let why = match again {
             Ok(Err(p)) => p.to_string(),
             Ok(Ok(_)) => list(&after),
             Err(e) => format!("{e:#}"),
         };
-        bail!("the repository does not verify with the new timestamp (removed): {why}");
+        bail!("the repository does not verify with the new timestamp (removed{cleanup}): {why}");
     }
     Ok(Signed {
         path,
@@ -304,13 +304,13 @@ pub fn timestamp_v2(options: &V2Options) -> anyhow::Result<Signed> {
     let again = check_v2::verify(options.out, &anchor, now, Stage::Published, &mut after);
     let ok = matches!(&again, Ok(Ok(_))) && after.is_empty();
     if !ok {
-        let _ = fs::remove_file(&path);
+        let cleanup = remove_created(std::slice::from_ref(&path));
         let why = match again {
             Ok(Err(p)) => p.to_string(),
             Ok(Ok(_)) => list(&after),
             Err(e) => format!("{e:#}"),
         };
-        bail!("tuf/v2 does not verify with the new timestamp (removed): {why}");
+        bail!("tuf/v2 does not verify with the new timestamp (removed{cleanup}): {why}");
     }
     Ok(Signed {
         path,
