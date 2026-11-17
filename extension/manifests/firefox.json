@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "OpenNCALayer",
-  "version": "{{VERSION}}",
+  "version": "{{FIREFOX_VERSION}}",
   "description": "Connects sites built for NCALayer to OpenNCALayer through native messaging.",
   "browser_specific_settings": {
     "gecko": {

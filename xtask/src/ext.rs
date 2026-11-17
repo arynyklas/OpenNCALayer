@@ -32,6 +32,50 @@ pub fn browser_version() -> &'static str {
     VERSION.split(['-', '+']).next().unwrap_or(VERSION)
 }
 
+/// The Firefox `version`: [`browser_version`] for a release, and for a pre-release the same
+/// plus a fourth number that names it (see [`firefox_version_of`]), so that every tag gets a
+/// version addons.mozilla.org has not signed yet (AMO refuses to sign a version twice, and
+/// `0.1.1-rc.1` and `0.1.1` would both be `0.1.1` in [`browser_version`]).
+///
+/// # Errors
+///
+/// If the pre-release suffix is not `alpha`, `beta` or `rc` with an optional number below 1000,
+/// or the version already has four numbers.
+pub fn firefox_version() -> anyhow::Result<String> {
+    firefox_version_of(VERSION)
+}
+
+/// [`firefox_version`] of `version`. AMO takes only one to four dot-separated integers
+/// (`^(0|[1-9][0-9]{0,8})([.](0|[1-9][0-9]{0,8})){0,3}$`), so the pre-release becomes the
+/// fourth number, `stage * 1000 + n` with stage 1 for `alpha`, 2 for `beta`, 3 for `rc`:
+/// `0.1.1-alpha.6` → `0.1.1.1006`, `0.1.1-rc.4` → `0.1.1.3004`. Numbers only compare left to
+/// right, so a pre-release sorts after the release it precedes: nothing here relies on the
+/// order (the add-on has no update URL), and a release is installed over a pre-release by
+/// hand.
+fn firefox_version_of(version: &str) -> anyhow::Result<String> {
+    let without_build = version.split('+').next().unwrap_or(version);
+    let Some((base, pre)) = without_build.split_once('-') else {
+        return Ok(without_build.to_owned());
+    };
+    ensure!(
+        base.split('.').count() <= 3,
+        "version {version} leaves no room for a pre-release number in a Firefox version"
+    );
+    let (stage, number) = pre.split_once('.').unwrap_or((pre, "0"));
+    let stage: u16 = match stage {
+        "alpha" => 1,
+        "beta" => 2,
+        "rc" => 3,
+        _ => bail!("pre-release {pre} of {version} is not alpha, beta or rc"),
+    };
+    let number = number
+        .parse::<u16>()
+        .ok()
+        .filter(|n| *n < 1000 && !number.starts_with('+'))
+        .with_context(|| format!("pre-release number of {version} is not below 1000"))?;
+    Ok(format!("{base}.{}", stage * 1000 + number))
+}
+
 /// Browsers and the extension of their archive.
 const BROWSERS: [(&str, &str); 2] = [("chromium", "zip"), ("firefox", "xpi")];
 
@@ -59,6 +103,7 @@ pub struct Package {
 pub fn build(root: &Path, out: &Path) -> anyhow::Result<Vec<Package>> {
     check_chromium_id()?;
     check_version(browser_version())?;
+    check_version(&firefox_version()?)?;
     let extension = root.join("extension");
     let src = extension.join("src");
     refresh(&src.join("host.js"), &host_js())?;
@@ -114,8 +159,9 @@ pub fn host_js() -> String {
     )
 }
 
-/// The manifest template with `{{VERSION}}` ([`browser_version`]), `{{VERSION_NAME}}`
-/// ([`VERSION`]), `{{KEY}}` and `{{FIREFOX_ID}}` filled in.
+/// The manifest template with `{{VERSION}}` ([`browser_version`]), `{{FIREFOX_VERSION}}`
+/// ([`firefox_version`]), `{{VERSION_NAME}}` ([`VERSION`]), `{{KEY}}` and `{{FIREFOX_ID}}`
+/// filled in.
 ///
 /// # Errors
 ///
@@ -123,6 +169,7 @@ pub fn host_js() -> String {
 pub fn render(template: &str) -> anyhow::Result<String> {
     let rendered = template
         .replace("{{VERSION}}", browser_version())
+        .replace("{{FIREFOX_VERSION}}", &firefox_version()?)
         .replace("{{VERSION_NAME}}", VERSION)
         .replace("{{KEY}}", CHROMIUM_EXTENSION_KEY)
         .replace("{{FIREFOX_ID}}", FIREFOX_EXTENSION_ID);
@@ -193,11 +240,12 @@ mod tests {
     #[test]
     fn render_fills_placeholders_and_rejects_unknown_ones() {
         let rendered = render(
-            r#"{"v": "{{VERSION}}", "n": "{{VERSION_NAME}}", "k": "{{KEY}}", "id": "{{FIREFOX_ID}}"}"#,
+            r#"{"v": "{{VERSION}}", "f": "{{FIREFOX_VERSION}}", "n": "{{VERSION_NAME}}", "k": "{{KEY}}", "id": "{{FIREFOX_ID}}"}"#,
         )
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
         assert_eq!(value["v"], browser_version());
+        assert_eq!(value["f"], firefox_version().unwrap());
         assert_eq!(value["n"], VERSION);
         assert_eq!(value["k"], CHROMIUM_EXTENSION_KEY);
         assert_eq!(value["id"], FIREFOX_EXTENSION_ID);
@@ -216,6 +264,35 @@ mod tests {
     fn browser_version_drops_the_pre_release() {
         check_version(browser_version()).unwrap();
         assert!(VERSION.starts_with(browser_version()));
+    }
+
+    #[test]
+    fn firefox_version_is_unique_per_tag_and_valid_for_amo() {
+        for (version, expected) in [
+            ("0.1.1", "0.1.1"),
+            ("0.1.1+build.5", "0.1.1"),
+            ("0.1.1-alpha.6", "0.1.1.1006"),
+            ("0.1.1-beta.1", "0.1.1.2001"),
+            ("0.1.1-rc.4", "0.1.1.3004"),
+            ("0.1.1-rc", "0.1.1.3000"),
+            ("0.1.1-rc.4+build.5", "0.1.1.3004"),
+            ("1.0-rc.1", "1.0.3001"),
+        ] {
+            let got = firefox_version_of(version).unwrap();
+            assert_eq!(got, expected, "{version}");
+            check_version(&got).unwrap();
+        }
+        for bad in [
+            "0.1.1-dev.1",
+            "0.1.1-rc.1000",
+            "0.1.1-rc.x",
+            "0.1.1-rc.+1",
+            "0.1.1-rc.1.2",
+            "1.2.3.4-rc.1",
+        ] {
+            assert!(firefox_version_of(bad).is_err(), "{bad}");
+        }
+        check_version(&firefox_version().unwrap()).unwrap();
     }
 
     #[test]

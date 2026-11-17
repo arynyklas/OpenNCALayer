@@ -41,6 +41,7 @@ cp <каталог>/oncl-index.pub crates/oncl-update/keys/current.pub
 
 - Authenticode через SignPath: секрет `SIGNPATH_API_TOKEN`, переменные `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`;
 - Apple: секреты `APPLE_CERTIFICATE_P12` (base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` подписывают и нотаризуют `.app` (пакет обновления, `.zip`, содержимое `.pkg`); сам `.pkg` подписывается и нотаризуется, только если есть ещё `APPLE_INSTALL_IDENTITY` — идентичность «Developer ID Installer» из того же `APPLE_CERTIFICATE_P12`.
+- Mozilla AMO (unlisted): секреты `AMO_JWT_ISSUER` и `AMO_JWT_SECRET` (ключи API с addons.mozilla.org/developers/addon/api/key/); с ними job `extension` подписывает `.xpi`, и подписанный файл идёт в релиз, `SHA256SUMS`, аттестацию и индекс под прежним именем. AMO подписывает версию один раз: у каждого тега свой номер версии Firefox (`0.1.1-rc.4` → `0.1.1.3004`), а повторный запуск job на уже подписанном теге AMO отвергнет, нужен новый тег.
 
 Необязательно — секрет `PRIVACY_DENYLIST` для шага denylist в `privacy.yml` (раздел 9).
 
