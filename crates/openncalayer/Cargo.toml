@@ -107,7 +107,3 @@ required-features = ["e2e-prompter"]
 [target.'cfg(windows)'.dev-dependencies]
 # Ending the processes the maintenance end-to-end tests start.
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Threading"] }
-
-[target.'cfg(windows)'.dependencies]
-# Console attachment of the windowed build (`src/console.rs`).
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Console"] }

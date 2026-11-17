@@ -1,11 +1,5 @@
 //! `openncalayer`: see [`openncalayer::cli`].
 
-// A windowed program on Windows: no console window for the shortcut, autostart and updater.
-#![cfg_attr(windows, windows_subsystem = "windows")]
-
-#[cfg(windows)]
-mod console;
-
 use std::cell::{Cell, RefCell};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -169,8 +163,6 @@ fn offer_to_stop_original(wss: &Arc<Wss>) {
 }
 
 fn main() -> ExitCode {
-    #[cfg(windows)]
-    console::attach_for_cli();
     velopack_app().run();
     let command = Cli::parse().command.unwrap_or(Command::Run {
         allow_no_wss: false,
