@@ -6,7 +6,7 @@ Rules for coding agents (and humans) working in this repository. Keep this file 
 
 OpenNCALayer is an independent, Apache-2.0 replacement for NCALayer (Kazakhstan e-signature host). Sites talk to it over `wss://127.0.0.1:13579` exactly as to the original. It is not affiliated with НУЦ РК. The same engine is also an SDK (`oncl-core` and friends), a CLI (`oncl`) and an HTTP service (`oncl-server`).
 
-Docs are in Russian and written for simple readers. Code, comments, commit messages, this file and `.omp/skills/` are in English.
+Docs are in Russian and written for simple readers. Code, comments, commit messages, this file and `.agents/skills/` are in English.
 
 ## Crate map
 
@@ -91,9 +91,9 @@ cargo test -p <crate>
 - Commits and tags are signed. Never force-push; never rewrite published history.
 - Do not commit, push, open PRs or post issue comments unless asked.
 - Behavior change visible to users: update `docs/user/` (or `docs/dev/`, `docs/design/`) and add a line to `CHANGELOG.md` under Unreleased.
-- Docs: Russian, simple words, task first. See `.omp/skills/docs-style/SKILL.md`.
+- Docs: Russian, simple words, task first. See `.agents/skills/docs-style/SKILL.md`.
 - Tests name a real failure mode; no tests that grep source text.
 
 ## Skills
 
-`.omp/skills/release`, `.omp/skills/plugin-port`, `.omp/skills/docs-style`.
+`.agents/skills/release`, `.agents/skills/plugin-port`, `.agents/skills/docs-style`.
