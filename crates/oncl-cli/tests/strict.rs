@@ -4,9 +4,6 @@ use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
 
-fn openssl() -> Option<String> {
-    Some(openssl_command())
-}
 fn common(w: &World) -> Vec<&str> {
     vec![
         "--root",
@@ -94,9 +91,7 @@ fn strict_private_sign_then_valid_zero_and_altered_two_for_rsa_and_gost() {
             "{name}: altered data"
         );
         if name == "rsa" {
-            let Some(openssl) = openssl() else {
-                panic!("independent OpenSSL oracle unavailable")
-            };
+            let openssl = oncl_testkit::tool::openssl();
             let root_pem = w.dir.path().join("root.pem");
             let status = Command::new(&openssl)
                 .args([

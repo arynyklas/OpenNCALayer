@@ -8,12 +8,6 @@ use der::Encode;
 use std::{path::PathBuf, process::Command};
 use support::*;
 
-fn python() -> &'static str {
-    ["python", "python3", "py"]
-        .into_iter()
-        .find(|c| Command::new(c).arg("--version").output().is_ok())
-        .expect("python is required for the JKS writer")
-}
 fn trust(w: &World) -> Vec<&str> {
     vec![
         "--root",
@@ -25,10 +19,7 @@ fn trust(w: &World) -> Vec<&str> {
     ]
 }
 fn keytool(args: &[&str]) -> std::process::Output {
-    Command::new("keytool")
-        .args(args)
-        .output()
-        .expect("Java keytool")
+    oncl_testkit::tool::KEYTOOL.spawned(Command::new("keytool").args(args).output())
 }
 fn jks(w: &World, alias: &str) -> PathBuf {
     let script = w.dir.path().join("jks_write.py");
@@ -42,7 +33,7 @@ fn jks(w: &World, alias: &str) -> PathBuf {
     std::fs::write(&leaf, w.pki.rsa.cert.to_der().unwrap()).unwrap();
     std::fs::write(&root, w.pki.root.cert.to_der().unwrap()).unwrap();
     let out = w.dir.path().join("signer.jks");
-    let status = Command::new(python())
+    let status = Command::new(oncl_testkit::tool::python())
         .args([
             path(&script),
             path(&out),
@@ -115,7 +106,7 @@ fn strict_jks_sign_then_valid_zero_with_openssl_and_wrong_password_refused() {
         (Some("Valid"), Some("StrictOnline"))
     );
     // Independent oracle: OpenSSL verifies the produced CMS against the loopback root.
-    let openssl = openssl_command();
+    let openssl = oncl_testkit::tool::openssl();
     let root_pem = w.dir.path().join("root.pem");
     assert!(
         Command::new(&openssl)

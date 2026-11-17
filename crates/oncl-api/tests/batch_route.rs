@@ -758,7 +758,7 @@ async fn progress_names_the_current_item_while_it_is_held_and_the_final_follows(
 fn cms_print(signature: &[u8], dir: &Path) -> String {
     let file = dir.join("print.p7s");
     std::fs::write(&file, signature).unwrap();
-    let out = std::process::Command::new("openssl")
+    let out = std::process::Command::new(oncl_testkit::tool::openssl())
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&file)
         .output()
@@ -1010,7 +1010,7 @@ fn xml_oracle(xml: &[u8], dir: &Path) -> serde_json::Value {
     let file = dir.join("signed.xml");
     std::fs::write(&file, xml).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/xml_verify.py");
-    let out = std::process::Command::new(oracle_python())
+    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
         .arg(script)
         .arg(&file)
         .output()

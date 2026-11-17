@@ -21,7 +21,9 @@ use std::{
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 fn openssl(args: &[&str]) -> Result<std::process::Output> {
-    let output = Command::new("openssl").args(args).output()?;
+    let output = Command::new(oncl_testkit::tool::openssl())
+        .args(args)
+        .output()?;
     if !output.status.success() {
         return Err(format!(
             "openssl {args:?}: exit={} stdout={} stderr={}",
@@ -86,7 +88,7 @@ fn oracle_check(
     let mut changed = input;
     changed.push(b'X');
     std::fs::write(&changed_path, changed)?;
-    let negative = Command::new("openssl")
+    let negative = Command::new(oncl_testkit::tool::openssl())
         .args([
             "dgst",
             "-sha256",
@@ -104,7 +106,7 @@ fn oracle_check(
     let mut badsig = signature;
     badsig[0] ^= 1;
     std::fs::write(&badsig_path, badsig)?;
-    let badsig = Command::new("openssl")
+    let badsig = Command::new(oncl_testkit::tool::openssl())
         .args([
             "dgst",
             "-sha256",

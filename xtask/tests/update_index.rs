@@ -132,26 +132,27 @@ fn options<'a>(keys: &'a index::TrustedKeys, base: Option<&'a str>) -> CheckOpti
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "core.autocrlf=false",
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "-c",
-            "tag.gpgSign=false",
-            "-c",
-            "tag.forceSignAnnotated=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let status = oncl_testkit::tool::GIT.spawned(
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "tag.gpgSign=false",
+                "-c",
+                "tag.forceSignAnnotated=false",
+            ])
+            .args(args)
+            .output(),
+    );
     assert!(
         status.status.success(),
         "git {args:?}: {}",

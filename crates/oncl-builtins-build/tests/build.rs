@@ -14,11 +14,12 @@ fn workspace() -> PathBuf {
 
 /// A copy of the workspace's tracked files in `dir`, as they are now.
 fn copy_workspace(dir: &Path) {
-    let listed = std::process::Command::new("git")
-        .current_dir(workspace())
-        .args(["ls-files", "-z"])
-        .output()
-        .unwrap();
+    let listed = oncl_testkit::tool::GIT.spawned(
+        std::process::Command::new("git")
+            .current_dir(workspace())
+            .args(["ls-files", "-z"])
+            .output(),
+    );
     assert!(listed.status.success());
     for name in listed.stdout.split(|b| *b == 0).filter(|n| !n.is_empty()) {
         let name = std::str::from_utf8(name).unwrap();

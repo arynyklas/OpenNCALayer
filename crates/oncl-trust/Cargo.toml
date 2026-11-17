@@ -29,6 +29,7 @@ tempfile.workspace = true
 rusqlite.workspace = true
 
 [dev-dependencies]
+oncl-testkit.workspace = true
 oncl-tls.workspace = true
 tempfile.workspace = true
 time.workspace = true
