@@ -232,7 +232,7 @@ cargo test --workspace --all-features -- --ignored live_
 - `live_ocsp_nca_test_certificate`: тестовый OCSP НУЦ (нужен `cargo xtask fetch-fixtures`);
 - `live_crl_nca_root_gost_2022`: CRL промышленного `crl.root.gov.kz`.
 
-Они зависят от внешних сервисов, поэтому в CI их запускает только job `live`: по понедельникам (03:00 UTC) и вручную (Actions → CI → Run workflow, `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
+Они зависят от внешних сервисов, поэтому в CI их запускает только job `live` в `scheduled.yml`: по понедельникам (03:00 UTC) и вручную (Actions → Scheduled → Run workflow, `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
 
 #### Встроенные модули без маркеров
 
@@ -312,13 +312,17 @@ cargo xtask tuf check --no-timestamp --base origin/main
 
 Workflow `.github/workflows/ci.yml`. Обязательная проверка репозитория называется `check`: это последнее задание `ci.yml`. Оно падает, если упало или отменено любое задание, которое нужно этому запуску, или если такое задание пропущено. Задание, которое пропущено потому, что изменение его не касается, проверку не валит.
 
-Полный запуск идёт на каждый пуш в `main`, каждую ночь (02:30 UTC), вручную (Actions → CI → Run workflow, `full`) и на PR с меткой `full-ci`. Метку можно повесить на открытый PR: CI сразу начнёт полный запуск заново.
+Полный запуск идёт на каждый пуш в `main`, каждую ночь (02:30 UTC), вручную (Actions → CI → Run workflow) и на PR с меткой `full-ci`. Метку можно повесить на открытый PR: CI сразу начнёт полный запуск заново. Любая другая метка тоже перезапускает CI на PR и отменяет запуск, который шёл. Ручной запуск не на `main` проверяет всё, но `check` в нём красный: обязательным статусом он быть не может.
+
+Если у PR сменили базовую ветку, CI сам не перезапускается: отправьте новый коммит или снимите и снова повесьте метку.
+
+`live` (тесты с настоящими сервисами НУЦ) и `bench` лежат в отдельном workflow `scheduled.yml`: `live` идёт по понедельникам, оба можно запустить вручную. В `check` они не входят.
 
 Обычный PR проверяется так:
 
-- `fmt`, `privacy` (`privacy.yml`), `index` (`index-check.yml`) и `actionlint` идут всегда. Тяжёлые задания ждут `fmt` и `privacy`, поэтому ошибка форматирования не занимает раннеры на час.
+- `fmt`, `privacy` (`privacy.yml`), `index` (`index-check.yml`) и `actionlint` идут в каждом запуске. Тяжёлые задания ждут `fmt` и `privacy`, поэтому ошибка форматирования не занимает раннеры на час.
 - Если PR меняет только документацию (`docs/`, кроме `docs/dev/sdk*.md`, а также `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, `CLAUDE.md`, `.agents/`, шаблоны issue и PR), сборки и тесты не запускаются. Если только `updates/` или `tuf/`, запускаются `index` и `site`.
-- Сборка пакетов (`win7`, `windows-package`, `linux-appimage`) и `builtins-x86` идут, только если PR меняет то, из чего они собираются: `crates/`, `xtask/`, `web/`, `deploy/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.github/workflows/`, `.github/actions/`, `README.md`, `LICENSE`, `NOTICE`.
+- Сборка пакетов (`win7`, `windows-package`, `linux-appimage`) и `builtins-x86` идут, только если PR меняет то, из чего они собираются: `crates/`, `xtask/`, `web/`, `deploy/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.gitattributes`, `.github/workflows/`, `.github/actions/`, `README.md`, `LICENSE`, `NOTICE`.
 - На macOS идёт одно задание `test-macos`: тесты крейтов, где есть свой код для macOS, и `oncl-cli`. Весь набор на macOS и `macos-universal` идут только в полном запуске.
 
 Как идут тесты:
@@ -326,8 +330,8 @@ Workflow `.github/workflows/ci.yml`. Обязательная проверка �
 - `prepare` один раз на Linux собирает встроенные модули (`cargo xtask builtins build`) и скачивает тестовые данные NCANode. Остальные задания берут модули из артефакта через `ONCL_BUILTINS_DIR`, как `release.yml`. Модули принимаются, только если собраны из тех же исходников тем же тулчейном.
 - `test-build` на каждой ОС собирает все тесты один раз (`cargo nextest archive`). Задания `test (<ОС>, N/3)` запускают из архива по трети тестов (`--partition slice:N/3`). В архив не попадают файлы PDB, поэтому у упавшего в CI теста на Windows в backtrace нет номеров строк.
 - Настройки [cargo-nextest](https://nexte.st) лежат в `.config/nextest.toml`, профиль `ci`. Упавший тест перезапускается до двух раз. Если потом он прошёл, nextest помечает его FLAKY, а запуск всё равно красный. Тест дольше 30 минут снимается. Отчёт JUnit сохраняется артефактом `junit-<ОС>-<N>-<попытка>`.
-- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check`, `plugin-version-check`, `interop-openssl`. На Windows и macOS doctest-ы идут только в полном запуске, в задании `doctests`.
-- В `main` и ночью `plugins-release` прогоняет тесты портов с `ONCL_PLUGIN_PROFILE=release`, то есть на модулях, собранных так же, как они выходят.
+- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check` (на модулях профиля `plugin-test`), `plugin-version-check`, `interop-openssl`. На Windows и macOS doctest-ы идут только в полном запуске, в задании `doctests`.
+- В `main` и ночью `plugins-release` прогоняет тесты портов с `ONCL_PORTS_PROFILE=release`, то есть на модулях, собранных так же, как они выходят, и проверяет на этих модулях `plugin-ops-check`.
 - CI задаёт `ONCL_REQUIRE_ORACLES=1`: тест, которому не хватает внешней программы, в CI падает, а не пропускается.
 
 Те же тесты локально через nextest (`cargo install cargo-nextest`):
