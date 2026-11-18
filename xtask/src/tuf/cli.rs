@@ -283,11 +283,15 @@ pub enum TufCommand {
     },
     /// The client over HTTPS against the published site (the smoke check after a
     /// deployment): the whole chain, and every index target. With `--repo v2` also
-    /// `publishers.json` and every delegated role.
+    /// `publishers.json` and every delegated role. With `--dir`: the same over a local copy
+    /// of a published repository (Pages re-publishing the served `tuf/v2` unchanged).
     VerifyPublished {
         /// The base URL of the repository, `https://…/tuf/v1/` (`…/tuf/v2/`).
+        #[arg(long, required_unless_present = "dir", conflicts_with = "dir")]
+        url: Option<String>,
+        /// A local copy of a published repository, instead of `--url`.
         #[arg(long)]
-        url: String,
+        dir: Option<PathBuf>,
         /// The trust anchor [default: `crates/oncl-update/keys/root.json`;
         /// `tuf/v2/metadata/1.root.json` with `--repo v2`].
         #[arg(long)]
@@ -850,6 +854,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
         }
         TufCommand::VerifyPublished {
             url,
+            dir,
             anchor,
             allow_missing,
             now,
@@ -864,20 +869,27 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             );
             let anchor = std::fs::read(&anchor)
                 .with_context(|| format!("reading the trust anchor {}", anchor.display()))?;
-            let transport = oncl_pki::http::UreqTransport::default();
-            let fetcher =
-                HttpFetcher::new(&transport, &url).map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
-            let verdict = match repo {
-                Layout::V1 => {
-                    published::verify_published(fetcher, &anchor, now_or(now), allow_missing)?
+            let now = now_or(now);
+            let (source, verdict) = match (url, dir) {
+                (Some(url), _) => {
+                    let transport = oncl_pki::http::UreqTransport::default();
+                    let fetcher = HttpFetcher::new(&transport, &url)
+                        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
+                    let verdict = verify_published(fetcher, repo, &anchor, now, allow_missing)?;
+                    (url, verdict)
                 }
-                Layout::V2 => {
-                    published::verify_published_v2(fetcher, &anchor, now_or(now), allow_missing)?
+                (None, Some(dir)) => {
+                    let fetcher = super::repo::DirFetcher::new(&dir);
+                    let verdict = verify_published(fetcher, repo, &anchor, now, allow_missing)?;
+                    (dir.display().to_string(), verdict)
                 }
+                // clap requires one of them.
+                (None, None) => bail!("--url or --dir is required"),
             };
             match verdict {
                 Published::NotPublished => println!(
-                    "tuf verify-published: {url} has no timestamp yet (allowed): nothing verified"
+                    "tuf verify-published: {source} has no timestamp yet (allowed): nothing \
+                     verified"
                 ),
                 Published::Verified { lines } => {
                     for line in lines {
@@ -888,5 +900,19 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             }
             Ok(())
         }
+    }
+}
+
+/// The client of `repo` over `fetcher`.
+fn verify_published<F: oncl_update::tuf::Fetcher>(
+    fetcher: F,
+    repo: Layout,
+    anchor: &[u8],
+    now: OffsetDateTime,
+    allow_missing: bool,
+) -> anyhow::Result<Published> {
+    match repo {
+        Layout::V1 => published::verify_published(fetcher, anchor, now, allow_missing),
+        Layout::V2 => published::verify_published_v2(fetcher, anchor, now, allow_missing),
     }
 }

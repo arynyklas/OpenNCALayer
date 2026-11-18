@@ -17,12 +17,15 @@
 //!   its secrets only; every action in such a job is pinned by commit, none restores a cache
 //!   or uploads an artifact; xtask is built by an earlier step; the steps with a secret are
 //!   the last of the job, use no action and no `cargo`, and mask the key;
-//! - `snapshot` runs before `timestamp`, and `timestamp` and `build` do not run when it
-//!   failed; it starts from nothing (`--first-publication`) only when no timestamp is
-//!   published (HTTP 404) and the owner's variable `TUF_V2_FIRST_PUBLICATION` says so;
+//! - `snapshot` runs before `timestamp`, but `tuf/v1` never depends on it: `timestamp` and
+//!   `build` run whatever it did, and the v2 timestamp step cannot fail its job; `snapshot`
+//!   starts from nothing (`--first-publication`) only when no timestamp is published (HTTP
+//!   404) and the owner's variable `TUF_V2_FIRST_PUBLICATION` says so;
 //! - `tuf/v2` is published, checked by the oracle and verified after the deployment only
 //!   when `tuf/v2/metadata/1.root.json` is in the tree; the step that publishes `tuf/v1` does
-//!   not touch `tuf/v2`;
+//!   not touch `tuf/v2`; when `tuf/v2` fails, `build` publishes the served copy again (verified
+//!   by the client) or none, without failing, and `tuf-v2-status` makes the run red after the
+//!   deployment;
 //! - only the `deploy` job may write Pages.
 //!
 //! `pages.yml` is read by a small parser of the block-style YAML the workflows are written in
@@ -55,9 +58,10 @@ const EVENTS: [&str; 5] = [
     "workflow_dispatch",
     "repository_dispatch",
 ];
-/// The parts a condition may have besides the three gates: they only let `timestamp` run
-/// when `snapshot` was skipped (no `tuf/v2`), never on another ref, repository or event.
-const ALLOWED_EXTRA: [&str; 2] = ["!cancelled()", "needs.snapshot.result != 'failure'"];
+/// The part a condition may have besides the three gates: it only lets `timestamp` run
+/// whatever `snapshot` did (`tuf/v1` never waits on `tuf/v2`), never on another ref,
+/// repository or event.
+const ALLOWED_EXTRA: [&str; 1] = ["!cancelled()"];
 
 // ---- a parser for the block-style YAML of the workflows ----
 
@@ -666,16 +670,33 @@ fn check_pages(text: &str) -> Vec<String> {
     if !needs("timestamp").contains(&"snapshot".to_owned()) {
         bad.push("timestamp does not need the snapshot job".to_owned());
     }
-    if !text("timestamp", "if").contains("needs.snapshot.result != 'failure'") {
-        bad.push("timestamp runs although the snapshot job failed".to_owned());
+    // `tuf/v1` never depends on `tuf/v2`: neither `timestamp` nor `build` waits on the
+    // success of `snapshot`, and the v2 timestamp step cannot fail its job.
+    for job in ["timestamp", "build"] {
+        if text(job, "if").contains("needs.snapshot.result") {
+            bad.push(format!(
+                "{job} waits on the snapshot job: tuf/v1 would depend on tuf/v2"
+            ));
+        }
+    }
+    if !text("timestamp", "if").contains("!cancelled()") {
+        bad.push("timestamp does not run when the snapshot job failed".to_owned());
+    }
+    let sign_v2 = step_with_id(jobs.get("timestamp"), "sign_v2");
+    if sign_v2
+        .and_then(|s| s.get("continue-on-error"))
+        .and_then(Value::as_str)
+        != Some("true")
+    {
+        bad.push("the v2 timestamp step can fail the timestamp job of tuf/v1".to_owned());
     }
     for needed in ["snapshot", "timestamp"] {
         if !needs("build").contains(&needed.to_owned()) {
             bad.push(format!("build does not need the {needed} job"));
         }
-        if !text("build", "if").contains(&format!("needs.{needed}.result != 'failure'")) {
-            bad.push(format!("build runs although the {needed} job failed"));
-        }
+    }
+    if !text("build", "if").contains("needs.timestamp.result != 'failure'") {
+        bad.push("build runs although the timestamp job failed".to_owned());
     }
     let deploy_needs = needs("deploy");
     for needed in ["build", "oracle"] {
@@ -793,16 +814,51 @@ fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
             "the publication of tuf/v2 is not gated on tuf/v2/metadata/1.root.json".to_owned(),
         );
     }
-    for (job, what) in [("oracle", "site/tuf/v2"), ("verify", "--repo v2")] {
+    // A v2 failure never stops the publication: the served `tuf/v2` is published again
+    // after the client verified the copy, or the site goes without it; then the run is red.
+    let fallback = publish.contains("verify-published --repo v2 --dir")
+        && publish.contains("state=republished")
+        && publish.contains("state=missing")
+        && publish.matches("exit 1").count() == 1;
+    if !fallback {
+        bad.push(
+            "a failure of tuf/v2 does not fall back to the served tuf/v2 (or none) without failing build"
+                .to_owned(),
+        );
+    }
+    let status = jobs.get("tuf-v2-status");
+    let status_if = status
+        .and_then(|j| j.get("if"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let after_deploy = status
+        .and_then(|j| j.get("needs"))
+        .and_then(Value::as_array)
+        .is_some_and(|n| n.iter().any(|x| x == "deploy"));
+    let status_runs = status.is_some_and(|j| all_text(j).contains("exit 1"));
+    if !(after_deploy && status_if.contains("[\"republished\",\"missing\"]") && status_runs) {
+        bad.push("a tuf/v2 failure does not make the run red after the deployment".to_owned());
+    }
+    for (job, what, gate) in [
+        (
+            "oracle",
+            "site/tuf/v2",
+            "needs.build.outputs.tuf_v2 == 'signed'",
+        ),
+        (
+            "verify",
+            "--repo v2",
+            "contains(fromJSON('[\"signed\",\"republished\"]'), needs.build.outputs.tuf_v2)",
+        ),
+    ] {
         let gated = jobs
             .get(job)
             .and_then(|j| j.get("steps"))
             .and_then(Value::as_array)
             .is_some_and(|steps| {
-                steps.iter().any(|s| {
-                    field(Some(s), "run").contains(what)
-                        && field(Some(s), "if") == "needs.build.outputs.tuf_v2 == 'signed'"
-                })
+                steps
+                    .iter()
+                    .any(|s| field(Some(s), "run").contains(what) && field(Some(s), "if") == gate)
             });
         if !gated {
             bad.push(format!(
@@ -1096,23 +1152,55 @@ fn the_graph_of_jobs_is_pinned() {
     );
     assert_found(
         mutated(
-            "needs.snapshot.result != 'failure' && needs.timestamp",
-            "needs.timestamp",
+            "needs.timestamp.result != 'failure' && github",
+            "needs.snapshot.result != 'failure' && needs.timestamp.result != 'failure' && github",
             &[],
         ),
-        "build runs although the snapshot job failed",
+        "build waits on the snapshot job",
     );
     assert_found(
         mutated("  timestamp:\n    needs: snapshot\n", "  timestamp:\n", &[]),
         "timestamp does not need the snapshot job",
     );
     assert_found(
+        mutated("      !cancelled()\n", "      success()\n", &[]),
+        "timestamp does not run when the snapshot job failed",
+    );
+    assert_found(
         mutated(
-            "      !cancelled() && needs.snapshot.result != 'failure'\n",
             "      !cancelled()\n",
+            "      !cancelled() && needs.snapshot.result != 'failure'\n",
             &[],
         ),
-        "timestamp runs although the snapshot job failed",
+        "timestamp waits on the snapshot job",
+    );
+    assert_found(
+        mutated("        continue-on-error: true\n", "", &[]),
+        "the v2 timestamp step can fail the timestamp job",
+    );
+    assert_found(
+        mutated(
+            "            echo \"state=republished\" >> \"$GITHUB_OUTPUT\"\n",
+            "            echo \"state=republished\" >> \"$GITHUB_OUTPUT\"\n            exit 1\n",
+            &[],
+        ),
+        "does not fall back to the served tuf/v2",
+    );
+    assert_found(
+        mutated(
+            "            cargo xtask tuf verify-published --repo v2 --dir \"$1\"\n",
+            "            true\n",
+            &[],
+        ),
+        "does not fall back to the served tuf/v2",
+    );
+    assert_found(
+        mutated(
+            "  tuf-v2-status:\n    needs: [build, deploy]\n",
+            "  tuf-v2-status:\n    needs: [build]\n",
+            &[],
+        ),
+        "red after the deployment",
     );
     assert_found(
         mutated("needs.timestamp.result != 'failure' && ", "", &[]),
