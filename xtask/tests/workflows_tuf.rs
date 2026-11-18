@@ -744,11 +744,31 @@ fn check_pages(text: &str) -> Vec<String> {
     }
     let deploy_if = text("deploy", "if");
     for part in [
+        "!cancelled()",
         "needs.build.result == 'success'",
-        "contains(fromJSON('[\"success\",\"skipped\"]'), needs.oracle.result)",
+        "(needs.oracle.result == 'success' || (needs.oracle.result == 'skipped' && needs.build.outputs.tuf != 'signed'))",
     ] {
         if !deploy_if.contains(part) {
             bad.push(format!("the condition of deploy lacks {part}"));
+        }
+    }
+    // A failed `snapshot` (tuf/v2) is an ancestor of `oracle` and `verify` through `build`:
+    // without `!cancelled()` the implicit `success()` would skip both for tuf/v1.
+    for (job, parts) in [
+        (
+            "oracle",
+            &["!cancelled()", "needs.build.result == 'success'"][..],
+        ),
+        (
+            "verify",
+            &["!cancelled()", "needs.deploy.result == 'success'"][..],
+        ),
+    ] {
+        let condition = text(job, "if");
+        for part in parts {
+            if !condition.contains(part) {
+                bad.push(format!("the condition of {job} lacks {part}"));
+            }
         }
     }
     match jobs.get("oracle") {
@@ -1393,15 +1413,35 @@ fn the_graph_of_jobs_is_pinned() {
     );
     assert_found(
         mutated(
+            "(needs.oracle.result == 'success' || (needs.oracle.result == 'skipped' && needs.build.outputs.tuf != 'signed'))",
             "contains(fromJSON('[\"success\",\"skipped\"]'), needs.oracle.result)",
-            "needs.oracle.result != 'failure'",
             &[],
         ),
         "the condition of deploy lacks",
     );
     assert_found(
-        mutated("needs.build.result == 'success' && ", "", &[]),
+        mutated(
+            "needs.build.result == 'success' && needs.build.outputs.publish == 'true' && (needs.oracle",
+            "needs.build.outputs.publish == 'true' && (needs.oracle",
+            &[],
+        ),
         "the condition of deploy lacks",
+    );
+    assert_found(
+        mutated(
+            "if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed' }}",
+            "if: needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed'",
+            &[],
+        ),
+        "the condition of oracle lacks",
+    );
+    assert_found(
+        mutated(
+            "if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.build.outputs.tuf == 'signed' }}",
+            "if: needs.build.outputs.tuf == 'signed'",
+            &[],
+        ),
+        "the condition of verify lacks",
     );
     assert_found(
         mutated(

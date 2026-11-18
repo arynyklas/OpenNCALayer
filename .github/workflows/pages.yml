@@ -589,7 +589,9 @@ jobs:
   # write permission, dependencies pinned by hash.
   oracle:
     needs: build
-    if: needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed'
+    # `!cancelled()` replaces the implicit `success()`: a failed `snapshot` (tuf/v2 only) must
+    # not skip the python-tuf check of tuf/v1.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -625,7 +627,8 @@ jobs:
 
   deploy:
     needs: [build, oracle]
-    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.oracle.result) && needs.build.outputs.publish == 'true' }}
+    # A skipped `oracle` is accepted only when there was no signed repository for it to check.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.publish == 'true' && (needs.oracle.result == 'success' || (needs.oracle.result == 'skipped' && needs.build.outputs.tuf != 'signed')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -645,7 +648,7 @@ jobs:
   # failure of a scheduled run).
   verify:
     needs: [build, deploy]
-    if: needs.build.outputs.tuf == 'signed'
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.build.outputs.tuf == 'signed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
