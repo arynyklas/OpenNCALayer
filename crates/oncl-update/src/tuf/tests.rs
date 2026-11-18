@@ -1179,7 +1179,7 @@ fn duplicate_keys_and_floats_are_refused() {
 }
 
 #[test]
-fn delegations_are_refused() {
+fn delegations_are_refused_by_the_legacy_profile_only() {
     let k = keys(1);
     for delegations in [
         json!({"keys": {}, "roles": [{"name": "vendor", "keyids": [], "threshold": 1, "paths": ["plugins/*"]}]}),
@@ -1189,11 +1189,17 @@ fn delegations_are_refused() {
         let mut r = release();
         r.targets_extra = vec![("delegations", delegations)];
         publish(&repo, &k, &r);
-        let e = refresh(&anchor, &repo, &mut MemoryStore::default()).unwrap_err();
+        let mut store = MemoryStore::default();
+        let e = client(&anchor, &repo, &mut store)
+            .with_profile(Profile::Legacy)
+            .refresh(T0)
+            .unwrap_err();
         assert!(
             matches!(&e, TufError::Unsupported(m) if m.contains("delegations")),
             "{e:?}"
         );
+        // The default, delegating, profile keeps the member unread.
+        refresh(&anchor, &repo, &mut MemoryStore::default()).unwrap();
     }
 }
 

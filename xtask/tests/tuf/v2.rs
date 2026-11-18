@@ -1013,3 +1013,80 @@ fn a_role_file_larger_than_a_client_reads_is_refused() {
     let found = codes(&w.tree(t0()));
     assert!(found.contains(&"too-large"), "{found:?}");
 }
+
+/// Writes `metadata/<version>.targets.json` into `dir`: targets 1 of `dir` with `version`,
+/// without its `delegations` member, signed by the targets key. The file written.
+fn targets_without_delegations(w: &V2World, dir: &Path, version: u64) -> Vec<u8> {
+    let key = keystore::load_encrypted(&w.keys().join("targets.key"), super::PASSPHRASE).unwrap();
+    let file = fs::read(dir.join("metadata/1.targets.json")).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&file).unwrap();
+    let signed = value["signed"].as_object_mut().unwrap();
+    assert!(signed.remove("delegations").is_some());
+    signed.insert("version".to_owned(), version.into());
+    let file = build::sign(&value["signed"], &[&key]).unwrap();
+    fs::write(dir.join(format!("metadata/{version}.targets.json")), &file).unwrap();
+    file
+}
+
+#[test]
+fn newest_targets_without_delegations_are_a_finding_of_the_check() {
+    let w = v2_world();
+    targets_without_delegations(&w, &w.v2(), 2);
+    let found = codes(&w.tree(t0()));
+    assert!(found.contains(&"delegations-missing"), "{found:?}");
+}
+
+#[test]
+fn older_targets_without_delegations_are_a_finding_of_the_check() {
+    let w = v2_world();
+    // Version 2 is version 1 as it was; version 1 loses its delegations.
+    let first = fs::read(w.v2().join("metadata/1.targets.json")).unwrap();
+    let key = keystore::load_encrypted(&w.keys().join("targets.key"), super::PASSPHRASE).unwrap();
+    let mut value: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    value["signed"]["version"] = 2.into();
+    fs::write(
+        w.v2().join("metadata/2.targets.json"),
+        build::sign(&value["signed"], &[&key]).unwrap(),
+    )
+    .unwrap();
+    targets_without_delegations(&w, &w.v2(), 1);
+    let report = w.tree(t0());
+    let missing: Vec<&str> = report
+        .problems
+        .iter()
+        .filter(|p| p.code == "delegations-missing")
+        .map(|p| p.message.as_str())
+        .collect();
+    assert_eq!(missing.len(), 1, "{:?}", report.problems);
+    assert!(
+        missing[0].contains("metadata/1.targets.json"),
+        "{missing:?}"
+    );
+}
+
+#[test]
+fn a_published_tuf_v2_without_delegations_does_not_verify() {
+    let w = v2_world();
+    let now = t0() + Duration::hours(1);
+    let site = w.copy("site");
+    let targets = targets_without_delegations(&w, &site, 2);
+    let seed = |name: &str| {
+        keystore::parse_seed(&fs::read_to_string(w.keys().join(name)).unwrap()).unwrap()
+    };
+    let snapshot = build::snapshot(1, now + Duration::days(7), 2, &targets).unwrap();
+    let snapshot = build::sign(&snapshot, &[&seed("v2-snapshot.key")]).unwrap();
+    fs::write(site.join("metadata/1.snapshot.json"), &snapshot).unwrap();
+    let timestamp = build::timestamp(1, now + Duration::days(7), 1, &snapshot).unwrap();
+    fs::write(
+        site.join("metadata/timestamp.json"),
+        build::sign(&timestamp, &[&seed("v2-timestamp.key")]).unwrap(),
+    )
+    .unwrap();
+    let anchor = fs::read(w.v2_anchor()).unwrap();
+    let err =
+        published::verify_published_v2(DirFetcher::new(&site), &anchor, now, false).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("no readable delegations"),
+        "{err:#}"
+    );
+}

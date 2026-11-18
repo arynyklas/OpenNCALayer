@@ -48,8 +48,10 @@ pub fn verify_published<F: Fetcher>(
     now: OffsetDateTime,
     allow_missing: bool,
 ) -> anyhow::Result<Published> {
+    // What the clients released before delegations read: `tuf/v1` must stay readable by them.
     let mut client = TufClient::new(anchor, fetcher, MemoryStore::default(), Limits::default())
-        .map_err(|e| anyhow::anyhow!("the trust anchor is not usable: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("the trust anchor is not usable: {e}"))?
+        .with_profile(Profile::Legacy);
     let trusted = match client.refresh(now) {
         Ok(trusted) => trusted,
         Err(TufError::NotFound(path)) if allow_missing && path == layout::TIMESTAMP_PATH => {
@@ -192,6 +194,10 @@ pub fn verify_published_v2<F: Fetcher>(
     let Some(active) = active else {
         anyhow::bail!("the targets of tuf/v2 do not list {}", publishers::TARGET);
     };
+    // Clients keep the member unread with the targets; `tuf/v2` must have one.
+    if !matches!(trusted.targets().delegations(), Ok(Some(_))) {
+        anyhow::bail!("the targets of tuf/v2 have no readable delegations");
+    }
     let delegated = client
         .delegated(&trusted, now)
         .map_err(|e| anyhow::anyhow!("the delegated roles: {e}"))?;

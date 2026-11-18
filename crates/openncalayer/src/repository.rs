@@ -22,7 +22,7 @@ use std::time::{Duration, Instant};
 
 use oncl_pki::http::HttpTransport;
 use oncl_update::tuf::{
-    Fetcher, FileStore, HttpFetcher, Limits, Response, Store, TufClient, TufError, layout,
+    Fetcher, FileStore, HttpFetcher, Limits, Profile, Response, Store, TufClient, TufError, layout,
     model::TARGETS_META,
 };
 use oncl_update::{Channel, Index, MAX_INDEX_LEN, UpdateError};
@@ -135,10 +135,14 @@ impl Repository {
             deadline: Mutex::new(Instant::now()),
         };
         let store = FileStore::in_data_dir(data_dir);
+        // `delegations` in the top-level targets, whatever it is, is no concern of the
+        // program's updates: the profile keeps it unread.
         let client = TufClient::new(anchor, fetcher, store.clone(), Limits::default())
-            .map_err(UpdateError::Tuf)?;
-        let offline =
-            TufClient::new(anchor, Offline, store, Limits::default()).map_err(UpdateError::Tuf)?;
+            .map_err(UpdateError::Tuf)?
+            .with_profile(Profile::Delegating);
+        let offline = TufClient::new(anchor, Offline, store, Limits::default())
+            .map_err(UpdateError::Tuf)?
+            .with_profile(Profile::Delegating);
         Ok(Repository {
             client: Mutex::new(client),
             offline,

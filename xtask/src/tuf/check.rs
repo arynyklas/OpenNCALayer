@@ -254,8 +254,10 @@ fn verify_inner(
     let client_now = now.min(earliest - Duration::seconds(1));
 
     let fetcher = DirFetcher::new(dir);
+    // What the clients released before delegations read: `tuf/v1` must stay readable by them.
     let mut client = TufClient::new(anchor, &fetcher, MemoryStore::default(), limits)
-        .map_err(|e| problem("anchor", format!("the trust anchor is not usable: {e}")))?;
+        .map_err(|e| problem("anchor", format!("the trust anchor is not usable: {e}")))?
+        .with_profile(Profile::Legacy);
     let verified = match client.refresh(client_now) {
         Ok(trusted) => {
             if trusted.snapshot().version != last_snapshot {

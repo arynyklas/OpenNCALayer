@@ -549,7 +549,10 @@ fn update_v2_with(options: &V2Options, unlock: &mut Unlock) -> anyhow::Result<V2
     // What the client of `tuf/v2` reads, every delegation keeping the profile.
     let made = Targets::from_signed(&signed, Profile::Delegating)
         .map_err(|e| anyhow::anyhow!("the targets made do not read back: {e}"))?;
-    let delegated = match &made.delegations {
+    let delegated = match made
+        .delegations()
+        .map_err(|e| anyhow::anyhow!("the delegations made do not read back: {e}"))?
+    {
         Some(d) => {
             if let Some(Err(refused)) = d.roles().iter().find(|r| r.is_err()) {
                 bail!(

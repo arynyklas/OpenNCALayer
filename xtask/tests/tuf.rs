@@ -1240,5 +1240,94 @@ fn a_timestamp_key_with_the_line_end_of_a_secret_still_signs() {
     }
 }
 
+/// The committed `tuf/v1` of this repository, as every client reads it: those released before
+/// delegations (`Profile::Legacy`) and those from 0.1.2 (`Profile::Delegating`). Its
+/// timestamp is signed online when Pages is published, so the client follows the chain of
+/// roots up to it, and the newest snapshot and targets are then checked against the final
+/// root as the client checks them.
+#[test]
+fn the_committed_tuf_v1_reads_in_both_profiles() {
+    use oncl_update::tuf::ed25519::verify_role;
+    use oncl_update::tuf::model::TARGETS_META;
+    use oncl_update::tuf::{Digest, Envelope, Profile, Root, Snapshot, Targets, layout};
+
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let dir = workspace.join(xtask::tuf::REPO_DIR);
+    let anchor = fs::read(workspace.join("crates/oncl-update/keys/root.json")).unwrap();
+    let limits = Limits::default();
+    let (last_root, last_targets, last_snapshot) =
+        xtask::tuf::repo::Listing::read(&dir).unwrap().highest();
+    let read = |path: &str, limit: u64| {
+        let bytes = fs::read(dir.join(path)).unwrap();
+        let file = Envelope::parse(&bytes, limit, path).unwrap();
+        (bytes, file)
+    };
+    let (_, root_file) = read(&layout::root_path(last_root), limits.root);
+    let (_, snapshot_file) = read(&layout::snapshot_path(last_snapshot), limits.snapshot);
+    let (targets_bytes, targets_file) = read(&layout::targets_path(last_targets), limits.targets);
+    let snapshot = Snapshot::from_signed(&snapshot_file.signed).unwrap();
+    // A clock at which every newest file is still valid.
+    let now = [
+        Root::from_signed(&root_file.signed).unwrap().expires,
+        snapshot.expires,
+        Targets::from_signed(&targets_file.signed, Profile::Delegating)
+            .unwrap()
+            .expires,
+    ]
+    .into_iter()
+    .min()
+    .unwrap()
+        - Duration::seconds(1);
+
+    for profile in [Profile::Legacy, Profile::Delegating] {
+        let fetcher = DirFetcher::new(dir.clone()).without_timestamp();
+        let mut client = TufClient::new(&anchor, &fetcher, MemoryStore::default(), limits)
+            .unwrap()
+            .with_profile(profile);
+        match client.refresh(now) {
+            Err(TufError::NotFound(path)) if path == layout::TIMESTAMP_PATH => {}
+            other => panic!("{profile:?}: the chain of roots: {:?}", other.map(drop)),
+        }
+        let root = match client.store().state.roots.last() {
+            Some(file) => Root::from_signed(&file.signed).unwrap(),
+            None => Root::from_signed(
+                &Envelope::parse(&anchor, limits.root, "the anchor")
+                    .unwrap()
+                    .signed,
+            )
+            .unwrap(),
+        };
+        assert_eq!(root.version, last_root, "{profile:?}");
+        verify_role(&snapshot_file, &root, Role::Snapshot, "the snapshot").unwrap();
+        let listed = snapshot.targets();
+        assert_eq!(listed.version, last_targets, "{profile:?}");
+        assert!(
+            listed
+                .length
+                .is_none_or(|l| l == targets_bytes.len() as u64)
+                && listed
+                    .sha256
+                    .is_none_or(|h| h == Digest::of(&targets_bytes)),
+            "{profile:?}: the snapshot lists other targets"
+        );
+        verify_role(&targets_file, &root, Role::Targets, "the targets").unwrap();
+        let targets = Targets::from_signed(&targets_file.signed, profile)
+            .unwrap_or_else(|e| panic!("{profile:?}: {e}"));
+        assert_eq!(targets.version, last_targets, "{profile:?}");
+        if profile == Profile::Delegating {
+            // What the plugin catalog reads apart: the delegations, if any, and every role's
+            // file listed by its length and sha256.
+            targets.delegations().unwrap();
+            for (name, meta) in &snapshot.meta {
+                assert!(
+                    name.as_str() == TARGETS_META
+                        || (meta.length.is_some() && meta.sha256.is_some()),
+                    "{name} is listed without its length and sha256"
+                );
+            }
+        }
+    }
+}
+
 #[path = "tuf/v2.rs"]
 mod v2;

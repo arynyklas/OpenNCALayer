@@ -2,10 +2,13 @@
 //! README): `valid/` is accepted, byte for byte, and every `<attack>/` is refused, at the
 //! step and as the error the table below says, exactly. Each directory is a served root; the
 //! files are read from disk into a `MemoryFetcher`, the clock is the `now` of the vector.
+//! None of them has delegations: both profiles ([`Profile`]) must give the same outcome.
 
 use std::path::{Path, PathBuf};
 
-use oncl_update::tuf::{Limits, MemoryFetcher, MemoryStore, Role, Store, TufClient, TufError};
+use oncl_update::tuf::{
+    Limits, MemoryFetcher, MemoryStore, Profile, Role, Store, TufClient, TufError,
+};
 use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -69,11 +72,16 @@ fn rank(path: &str) -> u8 {
     }
 }
 
+const PROFILES: [Profile; 2] = [Profile::Legacy, Profile::Delegating];
+
 fn client<'a>(
     repo: &'a MemoryFetcher,
     store: &'a mut MemoryStore,
+    profile: Profile,
 ) -> TufClient<&'a MemoryFetcher, &'a mut MemoryStore> {
-    TufClient::new(&anchor(), repo, store, Limits::default()).unwrap()
+    TufClient::new(&anchor(), repo, store, Limits::default())
+        .unwrap()
+        .with_profile(profile)
 }
 
 type Check = fn(&TufError) -> bool;
@@ -177,40 +185,42 @@ fn attacks() -> Vec<Attack> {
 
 #[test]
 fn the_valid_repository_is_accepted_and_both_indexes_come_out_byte_for_byte() {
-    let vector = expected("valid");
-    let repo = repository("valid");
-    let mut store = MemoryStore::default();
-    let mut c = client(&repo, &mut store);
-    let clock = now(&vector);
-    let trusted = c.refresh(clock).unwrap();
-    assert_eq!(trusted.state_was_reset(), None);
+    for profile in PROFILES {
+        let vector = expected("valid");
+        let repo = repository("valid");
+        let mut store = MemoryStore::default();
+        let mut c = client(&repo, &mut store, profile);
+        let clock = now(&vector);
+        let trusted = c.refresh(clock).unwrap();
+        assert_eq!(trusted.state_was_reset(), None);
 
-    // Root 1 -> 2 -> 3 (a timestamp key rotation, then a root key rotation), snapshot and
-    // targets 2, the timestamp at the time of signing.
-    assert_eq!(trusted.root().version, 3);
-    assert_eq!(trusted.timestamp().version, 1_794_700_800);
-    assert_eq!(
-        (trusted.snapshot().version, trusted.targets().version),
-        (2, 2)
-    );
-    assert!(
-        trusted.snapshot().targets().length.is_none(),
-        "python-tuf lists no length or hashes"
-    );
+        // Root 1 -> 2 -> 3 (a timestamp key rotation, then a root key rotation), snapshot
+        // and targets 2, the timestamp at the time of signing.
+        assert_eq!(trusted.root().version, 3);
+        assert_eq!(trusted.timestamp().version, 1_794_700_800);
+        assert_eq!(
+            (trusted.snapshot().version, trusted.targets().version),
+            (2, 2)
+        );
+        assert!(
+            trusted.snapshot().targets().length.is_none(),
+            "python-tuf lists no length or hashes"
+        );
 
-    let targets = vector["targets"].as_object().unwrap();
-    assert_eq!(targets.len(), 2);
-    for (target, stored) in targets {
-        let fixture =
-            std::fs::read(fixtures().join("valid").join(stored.as_str().unwrap())).unwrap();
-        let downloaded = c
-            .download_target(&trusted, target, MAX_TARGET, clock)
-            .unwrap();
-        assert_eq!(downloaded, fixture, "{target}");
+        let targets = vector["targets"].as_object().unwrap();
+        assert_eq!(targets.len(), 2);
+        for (target, stored) in targets {
+            let fixture =
+                std::fs::read(fixtures().join("valid").join(stored.as_str().unwrap())).unwrap();
+            let downloaded = c
+                .download_target(&trusted, target, MAX_TARGET, clock)
+                .unwrap();
+            assert_eq!(downloaded, fixture, "{profile:?} {target}");
+        }
+        let state = store.load().unwrap();
+        assert_eq!((state.root_version, state.roots.len()), (3, 2));
+        assert_eq!(state.targets, Some(2));
     }
-    let state = store.load().unwrap();
-    assert_eq!((state.root_version, state.roots.len()), (3, 2));
-    assert_eq!(state.targets, Some(2));
 }
 
 #[test]
@@ -232,51 +242,64 @@ fn every_attack_is_refused_at_its_step_as_its_error() {
     assert_eq!(table.len(), 14);
 
     for attack in table {
-        let name = attack.name;
-        let vector = expected(name);
-        assert_eq!(
-            vector["must_fail_at"].as_str().unwrap(),
-            attack.python_tuf,
-            "{name}: python-tuf's step"
-        );
-        let clock = now(&vector);
-        let mut store = MemoryStore::default();
-        if !vector["prior_state"].is_null() {
-            // A client that has already accepted the valid repository on the same clock.
-            let valid = repository("valid");
-            client(&valid, &mut store).refresh(clock).unwrap();
+        for profile in PROFILES {
+            refused_at_its_step(&attack, profile);
         }
-        let repo = repository(name);
-        repo.clear_requests();
-        let mut c = client(&repo, &mut store);
-        let error = match c.refresh(clock) {
-            Err(error) => error,
-            Ok(trusted) => {
-                assert_eq!(attack.ours, 4, "{name}: refresh accepted what must fail");
-                // The metadata is fine; of the two indexes the one in the vector is not, the
-                // other is.
-                let mut failures = Vec::new();
-                for target in ["indexes/stable.json", "indexes/beta.json"] {
-                    match c.download_target(&trusted, target, MAX_TARGET, clock) {
-                        Ok(_) => {}
-                        Err(e) => failures.push((target, e)),
-                    }
-                }
-                assert_eq!(failures.len(), 1, "{name}: {failures:?}");
-                let (target, error) = failures.remove(0);
-                assert_eq!(target, "indexes/stable.json", "{name}");
-                error
-            }
-        };
-        assert!(
-            (attack.error)(&error),
-            "{name}: refused as {error:?}, expected {}",
-            vector["error_class"]
-        );
-        // Exactly the step: the deepest file asked for is the one of that step.
-        let deepest = repo.requests().iter().map(|p| rank(p)).max().unwrap();
-        assert_eq!(deepest, attack.ours, "{name}: the deepest step asked for");
     }
+}
+
+/// `attack` is refused at its step as its error by a client of `profile`.
+fn refused_at_its_step(attack: &Attack, profile: Profile) {
+    let name = attack.name;
+    let vector = expected(name);
+    assert_eq!(
+        vector["must_fail_at"].as_str().unwrap(),
+        attack.python_tuf,
+        "{name}: python-tuf's step"
+    );
+    let clock = now(&vector);
+    let mut store = MemoryStore::default();
+    if !vector["prior_state"].is_null() {
+        // A client that has already accepted the valid repository on the same clock.
+        let valid = repository("valid");
+        client(&valid, &mut store, profile).refresh(clock).unwrap();
+    }
+    let repo = repository(name);
+    repo.clear_requests();
+    let mut c = client(&repo, &mut store, profile);
+    let error = match c.refresh(clock) {
+        Err(error) => error,
+        Ok(trusted) => {
+            assert_eq!(
+                attack.ours, 4,
+                "{profile:?} {name}: refresh accepted what must fail"
+            );
+            // The metadata is fine; of the two indexes the one in the vector is not, the
+            // other is.
+            let mut failures = Vec::new();
+            for target in ["indexes/stable.json", "indexes/beta.json"] {
+                match c.download_target(&trusted, target, MAX_TARGET, clock) {
+                    Ok(_) => {}
+                    Err(e) => failures.push((target, e)),
+                }
+            }
+            assert_eq!(failures.len(), 1, "{profile:?} {name}: {failures:?}");
+            let (target, error) = failures.remove(0);
+            assert_eq!(target, "indexes/stable.json", "{profile:?} {name}");
+            error
+        }
+    };
+    assert!(
+        (attack.error)(&error),
+        "{profile:?} {name}: refused as {error:?}, expected {}",
+        vector["error_class"]
+    );
+    // Exactly the step: the deepest file asked for is the one of that step.
+    let deepest = repo.requests().iter().map(|p| rank(p)).max().unwrap();
+    assert_eq!(
+        deepest, attack.ours,
+        "{profile:?} {name}: the deepest step asked for"
+    );
 }
 
 #[test]

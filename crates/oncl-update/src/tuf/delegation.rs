@@ -1,9 +1,10 @@
-//! The `delegations` member of a top-level targets file in the delegating profile
-//! ([`super::model::Profile::Delegating`]): the publishers' roles, their keys and paths.
+//! The `delegations` member of a top-level targets file, read apart from the targets
+//! ([`super::model::Targets::delegations`]): the publishers' roles, their keys and paths.
 //!
-//! Reading has two levels. What makes the member unreadable as a whole refuses the targets
-//! file ([`TufError`]): a field missing or of the wrong type, a key id that is not the hash
-//! of its key, a role name that is not `pub-<publisher>` ([`RoleName`]), a name listed twice.
+//! Reading has two levels. What makes the member unreadable as a whole is an error of that
+//! reading ([`TufError`]), never of the targets: a field missing or of the wrong type, a key
+//! id that is not the hash of its key, a role name that is not `pub-<publisher>`
+//! ([`RoleName`]), a name listed twice.
 //! What breaks the profile of one role refuses that role alone ([`RefusedRole`], with a
 //! [`DelegationError`]), so a mistake in one publisher's entry never touches another's:
 //!
@@ -332,18 +333,44 @@ mod tests {
                 "{delegations}"
             );
         }
-        assert_eq!(
-            targets(json!({}), Profile::Legacy).unwrap().delegations,
-            None
-        );
+        assert!(matches!(
+            targets(json!({}), Profile::Legacy).unwrap().delegations(),
+            Ok(None)
+        ));
     }
 
     #[test]
-    fn the_delegating_profile_refuses_targets_without_delegations() {
-        assert!(matches!(
-            targets(json!({}), Profile::Delegating),
-            Err(TufError::DelegationsMissing)
-        ));
+    fn the_delegating_profile_reads_targets_without_delegations() {
+        let read = targets(json!({}), Profile::Delegating).unwrap();
+        assert!(matches!(read.delegations(), Ok(None)));
+    }
+
+    #[test]
+    fn the_delegating_profile_keeps_unreadable_delegations_unread() {
+        let rsa = json!({
+            "keytype": "rsa", "scheme": "rsassa-pss-sha256",
+            "keyval": {"public": "-----BEGIN PUBLIC KEY-----"},
+        });
+        let one_key = |keyid: String, public: Value| {
+            let keys: Map<String, Value> = [(keyid, public)].into_iter().collect();
+            json!({"keys": keys, "roles": []})
+        };
+        let unreadable = [
+            json!(5),
+            json!({}),
+            json!({"keys": {}, "roles": 7}),
+            delegations(vec![edited(entry("abc", 1), |e| {
+                e["name"] = json!("not-a-publisher");
+            })]),
+            one_key(id(1), rsa),
+            delegations(vec![entry("abc", 1), entry("abc", 2)]),
+            one_key(id(2), key(1).1),
+        ];
+        for member in unreadable {
+            let read = targets(json!({"delegations": member.clone()}), Profile::Delegating)
+                .unwrap_or_else(|e| panic!("{member}: the targets are refused: {e}"));
+            assert!(read.delegations().is_err(), "{member}");
+        }
     }
 
     #[test]
@@ -353,7 +380,7 @@ mod tests {
             Profile::Delegating,
         )
         .unwrap();
-        let delegations = read.delegations.unwrap();
+        let delegations = read.delegations().unwrap().unwrap();
         assert!(delegations.roles().is_empty());
         assert!(delegations.keys().is_empty());
     }
