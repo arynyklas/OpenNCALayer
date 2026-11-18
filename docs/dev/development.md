@@ -261,12 +261,13 @@ export ONCL_BUILTINS_DIR="$PWD/target/builtins"  # в PowerShell: $env:ONCL_BUIL
 
 Отладочная сборка `openncalayer` пишет в окне «О программе» коммит `dev`. Коммит из git попадает только в сборку с `--release`: иначе после каждого коммита и `git checkout` крейт пересобирался бы вместе со своими тестами.
 
-Тесты плагинов сами собирают пример `crates/oncl-pdk/example` и порты из `plugins/`, один раз на процесс, в `target/plugin-example` и `target/plugin-ports`. Пример собирается в `release`. Порты по умолчанию собираются в профиле `plugin-test`: это `release` без LTO, в 16 единицах компиляции и с `opt-level = 1`. Профиль задаёт `oncl-testkit` через `cargo --config`, в `plugins/Cargo.toml` его нет. Импорты хоста у портов в нём те же, что в `release`. У примера без LTO импортов больше, чем объявлено в его `plugin.toml`, поэтому он остаётся в `release`.
+Тесты плагинов сами собирают пример `crates/oncl-pdk/example` и порты из `plugins/`, один раз на процесс, в `target/plugin-example` и `target/plugin-ports`. Пример собирается в `release`. Порты по умолчанию собираются в профиле `plugin-test`: это `release` без LTO, в 16 единицах компиляции и с `opt-level = 1`. Профиль описан в `plugins/Cargo.toml`, так что тесты, CI и сборка вручную (`cargo build --profile plugin-test --manifest-path plugins/Cargo.toml …`) собирают одно и то же. Импорты хоста у портов в нём те же, что в `release`. У примера без LTO импортов больше, чем объявлено в его `plugin.toml`, поэтому он остаётся в `release`.
 
-Плагины выходят в релизы собранными в `release`, и в CI одна задача гоняет тесты портов на такой сборке. Локально так:
+Плагины выходят в релизы собранными в `release`. В CI тесты портов на такой сборке гоняет задача `plugins-release` (в `main` и ночью). Локально так:
 
 ```sh
 ONCL_PORTS_PROFILE=release cargo test -p oncl-port-tests
+# в PowerShell: $env:ONCL_PORTS_PROFILE = "release"; cargo test -p oncl-port-tests
 ```
 
 Модули портов лежат в `target/plugin-ports/wasm32-unknown-unknown/<профиль>/`. Кроме `release` и `plugin-test`, другие значения `ONCL_PORTS_PROFILE` тесты не принимают.

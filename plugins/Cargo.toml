@@ -60,3 +60,13 @@ codegen-units = 1
 lto = true
 opt-level = "s"
 panic = "abort"
+
+# The profile the tests and CI build the ports in (`ONCL_PORTS_PROFILE`, see
+# `oncl-testkit`): `release` without LTO, in 16 units, at `opt-level` 1, so the ports build
+# much faster and still import the same host functions. Never packaged: `xtask plugin pack`
+# builds `--release`.
+[profile.plugin-test]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 1

@@ -12,19 +12,11 @@ use std::sync::LazyLock;
 pub const PORTS_PROFILE_VAR: &str = "ONCL_PORTS_PROFILE";
 
 /// The profile the tests build the plugin ports in by default: `release` without LTO, in 16
-/// units, at `opt-level` 1, given to Cargo with `--config` (the ports' manifest does not
-/// define it). Built so, every port imports the same host functions as in `release`. The
-/// example does not: without LTO it imports every host function of the SDK, which its
-/// manifest does not declare, so it is built in `release`.
+/// units, at `opt-level` 1, defined in `plugins/Cargo.toml`. Built so, every port imports
+/// the same host functions as in `release`. The example does not: without LTO it imports
+/// every host function of the SDK, which its manifest does not declare, so it is built in
+/// `release`.
 pub const PORTS_TEST_PROFILE: &str = "plugin-test";
-
-/// The definition of [`PORTS_TEST_PROFILE`], as `cargo --config` values.
-const PORTS_TEST_PROFILE_CONFIG: &[&str] = &[
-    "profile.plugin-test.inherits=\"release\"",
-    "profile.plugin-test.lto=false",
-    "profile.plugin-test.codegen-units=16",
-    "profile.plugin-test.opt-level=1",
-];
 
 /// The profile the tests build the plugin ports in: [`PORTS_PROFILE_VAR`], else
 /// [`PORTS_TEST_PROFILE`].
@@ -107,11 +99,6 @@ fn build_wasm(manifest: &Path, target_dir: &Path, profile: &str, extra: &[&str])
         "--profile",
         profile,
     ]);
-    if profile == PORTS_TEST_PROFILE {
-        for value in PORTS_TEST_PROFILE_CONFIG {
-            cargo.args(["--config", value]);
-        }
-    }
     let status = cargo
         .arg("--manifest-path")
         .arg(manifest)
