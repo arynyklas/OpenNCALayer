@@ -55,6 +55,9 @@ fn assert_owner_only_file(path: &std::path::Path) {
         GetSecurityDescriptorControl, GetTokenInformation, OWNER_SECURITY_INFORMATION,
         SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER, TokenUser,
     };
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, READ_CONTROL,
+    };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     struct Local(*mut c_void);
@@ -109,8 +112,8 @@ fn assert_owner_only_file(path: &std::path::Path) {
 
     // READ_CONTROL only; share everything so concurrent holders do not interfere.
     let file = std::fs::OpenOptions::new()
-        .access_mode(0x0002_0000)
-        .share_mode(7)
+        .access_mode(READ_CONTROL)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
         .open(path)
         .unwrap();
     let mut owner = std::ptr::null_mut();
@@ -162,10 +165,19 @@ fn assert_owner_only_file(path: &std::path::Path) {
     for index in 0..u32::from(count) {
         let mut ace: *mut c_void = std::ptr::null_mut();
         // SAFETY: `index` is below AceCount; `ace` is a writable out pointer.
-        assert_ne!(unsafe { GetAce(dacl, index, &mut ace) }, FALSE);
+        assert_ne!(
+            unsafe { GetAce(dacl, index, &mut ace) },
+            FALSE,
+            "GetAce({index}) failed: {}",
+            std::io::Error::last_os_error()
+        );
         // SAFETY: GetAce returned a pointer to an ACE, which starts with an ACE_HEADER.
         let kind = unsafe { (*ace.cast::<ACE_HEADER>()).AceType };
-        assert_eq!(u32::from(kind), ACCESS_ALLOWED_ACE_TYPE, "non-allow ACE");
+        assert_eq!(
+            u32::from(kind),
+            ACCESS_ALLOWED_ACE_TYPE,
+            "non-allow ACE: type {kind}"
+        );
         // SAFETY: an allowed ACE stores its SID inline starting at SidStart.
         let sid = unsafe { (&raw mut (*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart).cast() };
         // SAFETY: both SIDs are valid for the duration of the call.
@@ -249,9 +261,8 @@ fn standalone_multipart_uses_actual_random_private_scratch_and_cleans_it() {
         io::{Read, Write},
         time::{Duration, Instant},
     };
-    // The upload stalls on purpose while the test inspects the staged file (a cold
-    // PowerShell can take tens of seconds on a CI runner): the slow-upload rules must not
-    // end the request and delete that file meanwhile.
+    // The upload stalls on purpose while the test inspects the staged file while the request
+    // is still open: the slow-upload rules must not end the request and delete that file meanwhile.
     let process = support::Process::configured("127.0.0.1:0", |root| {
         format!(
             "scratch_directory = {}\nmax_in_flight = 1\nblocking_workers = 1\nqueue_capacity = 1\nupload_idle_timeout_ms = 120000\nupload_min_bytes_per_second = 0",
