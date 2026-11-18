@@ -8,7 +8,6 @@
 //! copies.
 
 use std::io::Read as _;
-use std::net::{Ipv4Addr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -280,7 +279,9 @@ pub fn smoke(dir: &Path, scratch: &Path) -> anyhow::Result<()> {
     )?;
     expect_success(openncalayer(&["tls", "init"]), "openncalayer tls init")?;
 
-    let port = free_port()?;
+    // Leased until the end of the smoke test, so that no other test of this machine takes it.
+    let lease = oncl_testkit::ports::DaemonPort::lease();
+    let port = lease.port();
     let log = temp.path().join("daemon.log");
     let log_file = std::fs::File::create(&log).with_context(|| format!("{}", log.display()))?;
     let mut run = openncalayer(&["run", "--no-tray"]);
@@ -341,15 +342,6 @@ fn selftest_page(mut daemon: Daemon, port: u16, ca_pem: &[u8]) -> anyhow::Result
             Err(_) => std::thread::sleep(Duration::from_millis(500)),
         }
     }
-}
-
-/// A port in the daemon's range (`NCALAYERPORT`, 13579..=13679) that is free now, from the
-/// top: the default port may be taken by a running NCALayer.
-fn free_port() -> anyhow::Result<u16> {
-    (13579..=13679)
-        .rev()
-        .find(|&port| TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok())
-        .context("no free port in 13579..=13679")
 }
 
 /// Runs `command` and returns its stdout; fails with its output if it does not exit with 0.

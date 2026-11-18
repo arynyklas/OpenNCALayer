@@ -9,6 +9,7 @@
 use futures_util::{SinkExt, StreamExt};
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_plugin::{Package, Source, Store};
+use oncl_testkit::ports::DaemonPort;
 use oncl_tls::TlsFiles;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, ServerName};
 use serde_json::{Value, json};
@@ -64,8 +65,11 @@ impl Client {
     }
 }
 
-/// A daemon on `data`, killed on drop.
-struct Daemon(Child);
+/// A daemon on `data`, killed on drop; it keeps its port leased until then.
+struct Daemon(
+    Child,
+    #[expect(dead_code, reason = "held only to keep the port leased")] DaemonPort,
+);
 
 impl Drop for Daemon {
     fn drop(&mut self) {
@@ -76,13 +80,6 @@ impl Drop for Daemon {
 
 fn example_call(method: &str) -> Value {
     json!({"module": MODULE, "class": "Example", "method": method, "args": {"text": "hi"}})
-}
-
-/// A port of 13580..=13679 free now (never 13579: a real NCALayer may run).
-fn free_port() -> u16 {
-    (13640..13680)
-        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
-        .expect("a free port")
 }
 
 fn install_example(data: &Path) {
@@ -97,19 +94,7 @@ fn install_example(data: &Path) {
 fn an_installed_plugin_serves_the_page() {
     let dir = tempfile::tempdir().unwrap();
     install_example(dir.path());
-    std::fs::write(dir.path().join("steps.json"), "[]").unwrap();
-    let mut daemon = Daemon(
-        Command::new(env!("CARGO_BIN_EXE_openncalayer"))
-            .args(["run", "--allow-no-wss", "--no-tray"])
-            .env("ONCL_DATA_DIR", dir.path())
-            .env("NCALAYERPORT", free_port().to_string())
-            .env("ONCL_E2E_PROMPTER", dir.path().join("steps.json"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
+    let mut daemon = spawn_daemon(dir.path(), DaemonPort::lease(), &[]);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -172,13 +157,13 @@ fn runtime() -> tokio::runtime::Runtime {
 
 /// `run` on `data` with an empty dialog script, the bridge always and wss if TLS is set up,
 /// and the environment `env` (no `ONCL_E2E_EXTRA_CA` otherwise).
-fn spawn_daemon(data: &Path, port: u16, env: &[(&str, &Path)]) -> Daemon {
+fn spawn_daemon(data: &Path, port: DaemonPort, env: &[(&str, &Path)]) -> Daemon {
     std::fs::write(data.join("steps.json"), "[]").unwrap();
     let mut command = Command::new(env!("CARGO_BIN_EXE_openncalayer"));
     command
         .args(["run", "--allow-no-wss", "--no-tray"])
         .env("ONCL_DATA_DIR", data)
-        .env("NCALAYERPORT", port.to_string())
+        .env("NCALAYERPORT", port.port().to_string())
         .env("ONCL_E2E_PROMPTER", data.join("steps.json"))
         .env_remove("ONCL_E2E_EXTRA_CA")
         .stdin(Stdio::null())
@@ -187,7 +172,7 @@ fn spawn_daemon(data: &Path, port: u16, env: &[(&str, &Path)]) -> Daemon {
     for (name, value) in env {
         command.env(name, value);
     }
-    Daemon(command.spawn().unwrap())
+    Daemon(command.spawn().unwrap(), port)
 }
 
 /// The bridge of `daemon` once it says hello.
@@ -285,7 +270,7 @@ fn e2e_extra_ca_reaches_plugin_http() {
         } else {
             &[]
         };
-        let mut daemon = spawn_daemon(dir.path(), free_port(), env);
+        let mut daemon = spawn_daemon(dir.path(), DaemonPort::lease(), env);
         let reply = runtime().block_on(async {
             let mut c = bridge(&mut daemon, dir.path()).await;
             c.open(1).await;
@@ -338,8 +323,9 @@ fn e2e_install_plugin_then_module_routes() {
     )
     .unwrap();
     let ca_der = material.ca_der.unwrap();
-    let port = free_port();
-    let mut daemon = spawn_daemon(&data, port, &[]);
+    let lease = DaemonPort::lease();
+    let port = lease.port();
+    let mut daemon = spawn_daemon(&data, lease, &[]);
     runtime().block_on(async {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(CertificateDer::from(ca_der)).unwrap();

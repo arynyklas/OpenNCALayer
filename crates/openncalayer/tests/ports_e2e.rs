@@ -6,6 +6,7 @@
 
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_plugin::{Package, Source, Store};
+use oncl_testkit::ports::DaemonPort;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -50,21 +51,17 @@ impl Client {
     }
 }
 
-/// A daemon, killed on drop.
-struct Daemon(Child);
+/// A daemon, killed on drop; it keeps its port leased until then.
+struct Daemon(
+    Child,
+    #[expect(dead_code, reason = "held only to keep the port leased")] DaemonPort,
+);
 
 impl Drop for Daemon {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
     }
-}
-
-/// A port of 13580..=13679 free now (never 13579: a real NCALayer may run).
-fn free_port() -> u16 {
-    (13600..13640)
-        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
-        .expect("a free port")
 }
 
 /// The port `short` of `plugins/`, packaged and installed into `data`.
@@ -86,18 +83,18 @@ fn install_port(data: &Path, short: &str) {
 /// `ONCL_E2E_PROMPTER` file).
 fn daemon(data: &Path, steps: &str) -> Daemon {
     std::fs::write(data.join("steps.json"), steps).unwrap();
-    Daemon(
-        Command::new(env!("CARGO_BIN_EXE_openncalayer"))
-            .args(["run", "--allow-no-wss", "--no-tray"])
-            .env("ONCL_DATA_DIR", data)
-            .env("NCALAYERPORT", free_port().to_string())
-            .env("ONCL_E2E_PROMPTER", data.join("steps.json"))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    )
+    let port = DaemonPort::lease();
+    let child = Command::new(env!("CARGO_BIN_EXE_openncalayer"))
+        .args(["run", "--allow-no-wss", "--no-tray"])
+        .env("ONCL_DATA_DIR", data)
+        .env("NCALAYERPORT", port.port().to_string())
+        .env("ONCL_E2E_PROMPTER", data.join("steps.json"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    Daemon(child, port)
 }
 
 /// The bridge client of `daemon`, once its bridge is up.
