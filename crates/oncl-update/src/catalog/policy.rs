@@ -110,8 +110,8 @@ pub enum CatalogError {
     /// An active publisher has no role in the delegations.
     #[error("active publisher {0} has no delegated role")]
     NotDelegated(PublisherName),
-    /// The delegations have a role of a publisher the file does not name active.
-    #[error("the delegations have a role of {0}, which is not an active publisher")]
+    /// The delegations have a role of a publisher the file does not name, or names revoked.
+    #[error("the delegations have a role of {0}, which is unnamed or revoked")]
     NotActive(PublisherName),
     /// A translation of a publisher's display name is empty, longer than 128 characters,
     /// has a control character or names the project.

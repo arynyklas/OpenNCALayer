@@ -322,10 +322,14 @@ fn a_revoked_publisher_hides_its_plugins_and_withdraws_them() {
 }
 
 #[test]
-fn a_publisher_publishers_json_does_not_name_is_revoked() {
+fn a_publisher_publishers_json_does_not_name_is_unavailable_not_revoked() {
     let catalog = build(index(vec![]), vec![], &[]);
     let gone = PublisherName::parse("gone").unwrap();
-    assert_eq!(catalog.publisher_state(&gone), PublisherState::Revoked);
+    assert_eq!(catalog.publisher_state(&gone), PublisherState::Unavailable);
+    assert!(matches!(
+        choose(&catalog, "kz.gone.tool", "1.0.0"),
+        PluginChoice::Keep
+    ));
 }
 
 #[test]

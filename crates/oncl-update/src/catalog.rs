@@ -14,9 +14,9 @@
 //! Each publisher is [`PublisherState::Active`], [`PublisherState::Retired`] (it publishes no
 //! more: no new versions, installed ones stay unless the owner revoked them),
 //! [`PublisherState::Unavailable`] (its role, `publishers.json` or the delegations did not
-//! hold up, or its `state` is unknown to this version: its plugins are neither updated nor
-//! revoked) or [`PublisherState::Revoked`] (the verified `publishers.json` says so, or does
-//! not name it). An error never revokes.
+//! hold up, its `state` is unknown to this version, or `publishers.json` does not name it:
+//! its plugins are neither updated nor revoked) or [`PublisherState::Revoked`] (the verified
+//! `publishers.json` says so). An error or a missing entry never revokes.
 //!
 //! A catalog of the owner's index alone ([`Catalog::owner`]) behaves as the index did:
 //! every publisher is unavailable and only the index's releases are offered.
@@ -55,11 +55,11 @@ pub enum PublisherState {
     /// It publishes no more: none of its releases is offered, its installed plugins stay
     /// unless the owner revoked their versions in `publishers.json`.
     Retired,
-    /// Its role, `publishers.json` or the delegations did not hold up, or its `state` is
-    /// unknown to this version: its installed plugins stay as they are until they do.
+    /// Its role, `publishers.json` or the delegations did not hold up, its `state` is
+    /// unknown to this version, or `publishers.json` does not name it: its installed plugins
+    /// stay as they are until they do.
     Unavailable,
-    /// The verified `publishers.json` names it revoked, or does not name it: its plugins are
-    /// turned off.
+    /// The verified `publishers.json` names it revoked: its plugins are turned off.
     Revoked,
 }
 
@@ -136,16 +136,13 @@ impl Catalog {
         &self.rejected
     }
 
-    /// The state of `publisher`.
+    /// The state of `publisher`; unavailable if `publishers.json` is not used or does not
+    /// name it.
     pub fn publisher_state(&self, publisher: &PublisherName) -> PublisherState {
-        match &self.policy {
-            None => PublisherState::Unavailable,
-            Some(_) => self
-                .states
-                .get(publisher)
-                .copied()
-                .unwrap_or(PublisherState::Revoked),
-        }
+        self.states
+            .get(publisher)
+            .copied()
+            .unwrap_or(PublisherState::Unavailable)
     }
 
     /// The publisher of the plugin `id`, by the prefixes of `publishers.json` (revoked
