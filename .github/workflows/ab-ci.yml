@@ -1,0 +1,308 @@
+name: CI A/B experiment
+
+# Build-time experiment, run by hand, never on a pull request or on main: one variant of the
+# build per run, against `baseline` (ci.yml as it is). Each run builds what ci.yml's slow jobs
+# build, with the same commands plus `--timings`:
+#
+# - `test-build-windows`: `cargo nextest archive` (ci.yml `test-build (windows-2025)`);
+# - `clippy-windows`: `cargo clippy --workspace --all-targets --all-features` (ci.yml
+#   `clippy-windows`);
+# - `test-build-linux` (input `linux`, `baseline` and `deps-nodebug` only): `cargo nextest
+#   archive` (ci.yml `test-build (ubuntu-24.04)`).
+#
+# Every kind runs `reps` times cold (nothing restored) and `reps` times warm. Cold #1 is the
+# seed: after its build it packs what rust-cache would have saved (the dependencies' build
+# output, the registry and the git checkouts; no workspace crate) and uploads it as an artifact
+# of this run; the warm runs start from it. No step reads or writes the Actions cache apart from
+# `ab-prepare`, which restores main's `linux-dev` cache read-only: the repository's caches are
+# at their 10 GB limit, so any cache this experiment saved would evict one of main's.
+#
+# Variants:
+# - `baseline`: ci.yml's configuration;
+# - `rust-lld`: the toolchain's rust-lld as the x86_64-pc-windows-msvc linker;
+# - `dev-drive`: target/ on a trusted ReFS Dev Drive (samypr100/setup-dev-drive) mounted at
+#   the workspace's target/ (windows-2025 has no D: drive; its workspace is on C:);
+# - `win2022-d`: windows-2022, whose workspace (target/ included) is on the runner's D: drive;
+#   the runner image changes with it;
+# - `deps-nodebug`: `[profile.dev.package."*"] debug = false` (in the Cargo home's config, so
+#   the tree and the built-in modules' source digest stay as they are).
+#
+# Launch and report: .github/scripts/ab_ci_report.py (its docstring). The push trigger exists
+# only so GitHub registers this workflow for the branch (dispatch needs a registered workflow);
+# a push runs `ab-register` alone. The jobs are all named `ab …`, none like a required check.
+on:
+  push:
+    branches: [ci/ab-experiment]
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: The build configuration to measure
+        type: choice
+        options: [baseline, rust-lld, dev-drive, win2022-d, deps-nodebug]
+        default: baseline
+      reps:
+        description: Runs per kind and mode (1 to 10); cold run 1 seeds the warm runs
+        type: number
+        default: 5
+      linux:
+        description: Also measure the Linux test build (baseline and deps-nodebug only)
+        type: boolean
+        default: false
+      max_parallel:
+        description: Measured jobs at a time (the account's other workflows share its runners)
+        type: number
+        default: 4
+
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch'
+    && format('A/B {0} reps={1} linux={2}', inputs.variant, inputs.reps, inputs.linux)
+    || 'A/B register' }}
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+# ci.yml's environment. CARGO_INCREMENTAL=0 is what rust-cache sets in ci.yml's build jobs.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  ONCL_REQUIRE_ORACLES: "1"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  ab-register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - run: echo "registered; start the experiment with workflow_dispatch"
+
+  # The matrices: `seed` (cold #1 of each kind) and `measure` (the other cold runs and every
+  # warm run, interleaved by rep so that a slow hour of the runners lands on both modes).
+  ab-plan:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      seed: ${{ steps.plan.outputs.seed }}
+      measure: ${{ steps.plan.outputs.measure }}
+    steps:
+      - name: Plan
+        id: plan
+        env:
+          VARIANT: ${{ inputs.variant }}
+          REPS: ${{ inputs.reps }}
+          LINUX: ${{ inputs.linux }}
+        run: |
+          if ! [[ "$REPS" =~ ^[0-9]+$ ]] || [ "$REPS" -lt 1 ] || [ "$REPS" -gt 10 ]; then
+            echo "::error::reps must be 1 to 10, not $REPS"
+            exit 1
+          fi
+          windows="windows-2025"
+          if [ "$VARIANT" = win2022-d ]; then windows="windows-2022"; fi
+          kinds="$(jq -nc --arg w "$windows" \
+            '[{kind: "test-build-windows", os: $w}, {kind: "clippy-windows", os: $w}]')"
+          if [ "$LINUX" = true ]; then
+            case "$VARIANT" in
+              baseline | deps-nodebug)
+                kinds="$(jq -c '. + [{kind: "test-build-linux", os: "ubuntu-24.04"}]' <<< "$kinds")" ;;
+              *) echo "::notice::$VARIANT changes the Windows build only: no Linux jobs" ;;
+            esac
+          fi
+          seed="$(jq -c '{include: [.[] + {mode: "cold", rep: 1, seed: true}]}' <<< "$kinds")"
+          measure="$(jq -c --argjson n "$REPS" '{include: [
+            range(1; $n + 1) as $r | .[] as $k
+            | (if $r > 1 then $k + {mode: "cold", rep: $r, seed: false} else empty end),
+              $k + {mode: "warm", rep: $r, seed: false}
+          ]}' <<< "$kinds")"
+          {
+            echo "seed=$seed"
+            echo "measure=$measure"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  # ci.yml's `prepare` without the fixtures (nothing here runs a test): the built-in modules'
+  # WebAssembly every build embeds. The same for every variant.
+  ab-prepare:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/pinned-toolchains
+      # Main's xtask build, read only.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: linux-dev
+          save-if: false
+      - name: Built-in modules
+        run: cargo xtask builtins build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: builtins
+          path: target/builtins/
+          if-no-files-found: error
+          retention-days: 1
+
+  ab-seed:
+    needs: [ab-plan, ab-prepare]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.ab-plan.outputs.seed) }}
+    name: "ab ${{ inputs.variant }} ${{ matrix.mode }} ${{ matrix.kind }} #${{ matrix.rep }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env: &measure-env
+      ONCL_BUILTINS_DIR: ${{ github.workspace }}/target/builtins
+      VARIANT: ${{ inputs.variant }}
+      KIND: ${{ matrix.kind }}
+    steps: &measure-steps
+      - uses: actions/checkout@v5
+      # After the checkout, which would try to wipe a mount point in the workspace. Dynamic: the
+      # file grows with what is written, up to the size.
+      - name: Dev Drive at target/
+        if: inputs.variant == 'dev-drive'
+        uses: samypr100/setup-dev-drive@562171fe8df7401fdf582d766cd3b6ab80d5b1a0 # v4.1.0
+        with:
+          drive-size: 80GB
+          drive-format: ReFS
+          drive-type: Dynamic
+          mount-path: ${{ github.workspace }}/target
+          native-dev-drive: true
+          trusted-dev-drive: true
+      - name: Where target/ lives
+        run: |
+          # The warm state is packed with zstd: fail before the build, not after it.
+          command -v zstd > /dev/null || { echo "::error::no zstd on this runner"; exit 1; }
+          echo "workspace: $GITHUB_WORKSPACE"
+          # The image matters: windows-2022's D: turns from NTFS to ReFS with the images rolled
+          # out from 2026-11-30 (actions/runner-images#15315).
+          echo "image: ${ImageOS:-?} ${ImageVersion:-?}"
+          mkdir -p target
+          df -h target || true
+          if [ "$RUNNER_OS" = Windows ]; then
+            powershell -NoProfile -Command \
+              'Get-Volume | Where-Object DriveLetter | Format-Table DriveLetter, FileSystem, Size, SizeRemaining -AutoSize'
+          fi
+          if [ "$VARIANT" = win2022-d ]; then
+            case "$GITHUB_WORKSPACE" in
+              [Dd]:*) ;;
+              *) echo "::error::the workspace is not on D: ($GITHUB_WORKSPACE)"; exit 1 ;;
+            esac
+          fi
+      - name: Install system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - if: startsWith(matrix.kind, 'test-build')
+        uses: ./.github/actions/install-nextest
+      - name: Apply the variant
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          if command -v cygpath > /dev/null; then cargo_home="$(cygpath -u "$cargo_home")"; fi
+          case "$VARIANT" in
+            rust-lld)
+              host="$(rustc -vV | sed -n 's/^host: //p' | tr -d '\r')"
+              sysroot="$(cygpath -u "$(rustc --print sysroot | tr -d '\r')")"
+              lld="$sysroot/lib/rustlib/$host/bin/rust-lld.exe"
+              if [ ! -f "$lld" ]; then echo "::error::no $lld"; exit 1; fi
+              echo "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$(cygpath -m "$lld")" | tee -a "$GITHUB_ENV"
+              ;;
+            deps-nodebug)
+              mkdir -p "$cargo_home"
+              printf '\n[profile.dev.package."*"]\ndebug = false\n' >> "$cargo_home/config.toml"
+              cat "$cargo_home/config.toml"
+              ;;
+            *) echo "nothing to apply for $VARIANT" ;;
+          esac
+      - uses: actions/download-artifact@v5
+        with:
+          name: builtins
+          path: target/builtins
+      - if: matrix.mode == 'warm'
+        uses: actions/download-artifact@v5
+        with:
+          name: ab-warm-${{ matrix.kind }}
+          path: ${{ runner.temp }}/warm-state
+      # What rust-cache's restore would put back (its own timing, outside the measured build).
+      - name: Restore the warm state
+        if: matrix.mode == 'warm'
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          if command -v cygpath > /dev/null; then cargo_home="$(cygpath -u "$cargo_home")"; fi
+          mkdir -p target "$cargo_home"
+          zstd -d -q -c "$RUNNER_TEMP/warm-state/target.tar.zst" | tar -xf - -C target
+          zstd -d -q -c "$RUNNER_TEMP/warm-state/cargo-home.tar.zst" | tar -xf - -C "$cargo_home"
+          rm -rf "$RUNNER_TEMP/warm-state"
+      # The step ab_ci_report.py reads: ci.yml's command plus `--timings`.
+      - name: Measured build
+        run: |
+          case "$KIND" in
+            test-build-*)
+              cargo nextest archive --workspace --all-features --locked --timings \
+                --archive-file "$RUNNER_TEMP/nextest.tar.zst" ;;
+            clippy-windows)
+              cargo clippy --workspace --all-targets --all-features --timings -- -D warnings ;;
+            *) echo "::error::unknown kind $KIND"; exit 1 ;;
+          esac
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: ab-timings-${{ inputs.variant }}-${{ matrix.mode }}-${{ matrix.kind }}-${{ matrix.rep }}
+          path: target/cargo-timings/
+          if-no-files-found: warn
+          retention-days: 14
+      # rust-cache's cleaning, approximately: no workspace crate's output, of target/debug only
+      # build/, .fingerprint/ and deps/; of the Cargo home the registry index and crate files
+      # and the git databases.
+      - name: Pack the warm state
+        if: matrix.seed
+        run: |
+          cargo_home="${CARGO_HOME:-$HOME/.cargo}"
+          if command -v cygpath > /dev/null; then cargo_home="$(cygpath -u "$cargo_home")"; fi
+          args=()
+          while IFS= read -r name; do
+            args+=(-p "$name")
+          done < <(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[].name' | tr -d '\r')
+          cargo clean "${args[@]}"
+          find target/debug -mindepth 1 -maxdepth 1 ! -name build ! -name .fingerprint ! -name deps \
+            -exec rm -rf {} +
+          out="$RUNNER_TEMP/warm-state"
+          mkdir -p "$out"
+          tar -cf - -C target debug | zstd -T0 -3 -q -o "$out/target.tar.zst"
+          parts=()
+          for part in registry/index registry/cache git/db; do
+            if [ -d "$cargo_home/$part" ]; then parts+=("$part"); fi
+          done
+          tar -cf - -C "$cargo_home" "${parts[@]}" | zstd -T0 -3 -q -o "$out/cargo-home.tar.zst"
+          ls -l "$out"
+      - if: matrix.seed
+        uses: actions/upload-artifact@v4
+        with:
+          name: ab-warm-${{ matrix.kind }}
+          path: ${{ runner.temp }}/warm-state/
+          if-no-files-found: error
+          retention-days: 1
+          # zstd already.
+          compression-level: 0
+
+  ab-measure:
+    needs: [ab-plan, ab-prepare, ab-seed]
+    # A failed seed fails only the warm runs of its kind; the cold runs go on.
+    if: ${{ !cancelled() && needs.ab-plan.result == 'success' && needs.ab-prepare.result == 'success' }}
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ inputs.max_parallel }}
+      matrix: ${{ fromJSON(needs.ab-plan.outputs.measure) }}
+    name: "ab ${{ inputs.variant }} ${{ matrix.mode }} ${{ matrix.kind }} #${{ matrix.rep }}"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env: *measure-env
+    steps: *measure-steps
