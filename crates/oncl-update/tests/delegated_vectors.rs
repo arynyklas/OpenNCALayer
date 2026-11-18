@@ -449,7 +449,9 @@ mod client {
         let mut store = MemoryStore::default();
         let anchor =
             std::fs::read(fixtures().join("delegated-valid/metadata/1.root.json")).unwrap();
-        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default()).unwrap();
+        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default())
+            .unwrap()
+            .with_profile(Profile::Legacy);
         let e = c.refresh(now("delegated-valid")).unwrap_err();
         assert!(matches!(e, TufError::Unsupported(_)), "{e:?}");
     }

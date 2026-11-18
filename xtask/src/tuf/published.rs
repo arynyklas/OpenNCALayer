@@ -48,8 +48,10 @@ pub fn verify_published<F: Fetcher>(
     now: OffsetDateTime,
     allow_missing: bool,
 ) -> anyhow::Result<Published> {
+    // What the clients released before delegations read: `tuf/v1` must stay readable by them.
     let mut client = TufClient::new(anchor, fetcher, MemoryStore::default(), Limits::default())
-        .map_err(|e| anyhow::anyhow!("the trust anchor is not usable: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("the trust anchor is not usable: {e}"))?
+        .with_profile(Profile::Legacy);
     let trusted = match client.refresh(now) {
         Ok(trusted) => trusted,
         Err(TufError::NotFound(path)) if allow_missing && path == layout::TIMESTAMP_PATH => {

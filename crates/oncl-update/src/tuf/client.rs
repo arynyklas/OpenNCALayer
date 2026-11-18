@@ -30,11 +30,11 @@
 //!   cannot be compared with those of roots it does not chain from);
 //! - the targets file accepted is saved beside its version, so that a target kept from an
 //!   earlier download can be checked again offline ([`TufClient::verify_cached_target`]);
-//! - the profile ([`Profile`]) only says how the top-level targets are read: in
-//!   [`Profile::Legacy`], the model of the clients released before delegations, a
-//!   `delegations` member refuses them; in [`Profile::Delegating`] the member is kept unread,
-//!   so the program's updates ([`TufClient::refresh`], step 5.6.7 in the top-level targets
-//!   only) never depend on it;
+//! - the profile ([`Profile`], [`Profile::Delegating`] unless set) only says how the
+//!   top-level targets are read: in [`Profile::Legacy`], the model of the clients released
+//!   before delegations, a `delegations` member refuses them; in [`Profile::Delegating`] the
+//!   member is kept unread, so the program's updates ([`TufClient::refresh`], step 5.6.7 in
+//!   the top-level targets only) never depend on it;
 //! - the delegations are read apart, by [`TufClient::delegated`] (the updater of the program
 //!   never needs a publisher's role); a role's file must be listed by the snapshot with its
 //!   length and sha256 ([`DelegationError::Unhashed`]), other entries need not be.
@@ -265,7 +265,8 @@ pub struct TufClient<F, S> {
 impl<F: Fetcher, S: Store> TufClient<F, S> {
     /// A client of the repository `fetcher` reads, trusting `trust_anchor`: the bytes of a
     /// root file (`keys/root.json`, [`crate::embedded_root`]), signed by its own keys. Its
-    /// expiry does not matter: the first refresh looks for a newer one.
+    /// expiry does not matter: the first refresh looks for a newer one. It reads in
+    /// [`Profile::Delegating`], as the program from 0.1.2 does.
     ///
     /// # Errors
     ///
@@ -286,11 +287,12 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             anchor: root,
             limits,
             last_reset: None,
-            profile: Profile::Legacy,
+            profile: Profile::Delegating,
         })
     }
 
-    /// This client with the repository profile `profile` ([`Profile::Legacy`] unless set).
+    /// This client with the repository profile `profile` ([`Profile::Delegating`] unless
+    /// set; [`Profile::Legacy`] tells what the clients released before delegations read).
     #[must_use]
     pub fn with_profile(mut self, profile: Profile) -> TufClient<F, S> {
         self.profile = profile;

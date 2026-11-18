@@ -288,6 +288,15 @@ const INDEX_BODY: &[u8] = b"[]";
 /// A repository whose targets list the index [`INDEX`] and have `delegations`, if any, as
 /// their member, whatever it is; the snapshot lists the targets by version only.
 fn plain_repository(k: &Top, delegations: Option<Value>) -> (MemoryFetcher, Vec<u8>) {
+    plain_repository_listing(k, delegations, |_| json!({"version": 1}))
+}
+
+/// [`plain_repository`], the snapshot listing the targets file as `listing` of its bytes says.
+fn plain_repository_listing(
+    k: &Top,
+    delegations: Option<Value>,
+    listing: impl Fn(&[u8]) -> Value,
+) -> (MemoryFetcher, Vec<u8>) {
     let repo = MemoryFetcher::new();
     let anchor = root_file(1, k, &[&k.root]);
     repo.put(layout::root_path(1), anchor.clone());
@@ -300,7 +309,7 @@ fn plain_repository(k: &Top, delegations: Option<Value>) -> (MemoryFetcher, Vec<
     let snapshot = json!({
         "_type": "snapshot", "spec_version": SPEC_VERSION, "version": 1,
         "expires": format_expires(T0 + Duration::days(30)).unwrap(),
-        "meta": {"targets.json": {"version": 1}},
+        "meta": {"targets.json": listing(&targets)},
     });
     let snapshot = build::sign(&snapshot, &[&k.snapshot]).unwrap();
     let timestamp = build::timestamp(1, T0 + Duration::days(7), 1, &snapshot).unwrap();
@@ -320,11 +329,55 @@ fn plain_repository(k: &Top, delegations: Option<Value>) -> (MemoryFetcher, Vec<
 fn the_legacy_profile_delegates_to_no_role() {
     let k = top(1);
     let (repo, anchor) = plain_repository(&k, None);
-    let mut c = TufClient::new(&anchor, &repo, MemoryStore::default(), Limits::default()).unwrap();
-    assert_eq!(c.profile(), Profile::Legacy);
+    let mut c = TufClient::new(&anchor, &repo, MemoryStore::default(), Limits::default())
+        .unwrap()
+        .with_profile(Profile::Legacy);
     let trusted = c.refresh(T0).unwrap();
     assert_eq!(c.delegated(&trusted, T0).unwrap().roles().count(), 0);
     assert!(c.store().state.delegated.is_empty());
+}
+
+#[test]
+fn the_default_profile_is_the_delegating_one() {
+    let k = top(1);
+    let (repo, anchor) = plain_repository(&k, None);
+    let c = TufClient::new(&anchor, &repo, MemoryStore::default(), Limits::default()).unwrap();
+    assert_eq!(c.profile(), Profile::Delegating);
+}
+
+#[test]
+fn the_delegating_profile_refuses_targets_other_than_the_snapshot_lists() {
+    let k = top(1);
+    let digest = |file: &[u8]| Digest::of(file).to_hex();
+    // One byte more than the file: its length is not the one listed.
+    let (repo, anchor) = plain_repository_listing(
+        &k,
+        Some(json!({})),
+        |file| json!({"version": 1, "length": file.len() + 1, "hashes": {"sha256": digest(file)}}),
+    );
+    let e = client(&anchor, &repo, MemoryStore::default())
+        .refresh(T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Length { .. }), "{e:?}");
+    // The right length, another sha256.
+    let (repo, anchor) = plain_repository_listing(
+        &k,
+        Some(json!({})),
+        |file| json!({"version": 1, "length": file.len(), "hashes": {"sha256": digest(b"other")}}),
+    );
+    let e = client(&anchor, &repo, MemoryStore::default())
+        .refresh(T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Hash { .. }), "{e:?}");
+    // Listed exactly, the same file is trusted.
+    let (repo, anchor) = plain_repository_listing(
+        &k,
+        Some(json!({})),
+        |file| json!({"version": 1, "length": file.len(), "hashes": {"sha256": digest(file)}}),
+    );
+    client(&anchor, &repo, MemoryStore::default())
+        .refresh(T0)
+        .unwrap();
 }
 
 #[test]
