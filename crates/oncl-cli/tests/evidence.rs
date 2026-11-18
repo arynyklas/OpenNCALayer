@@ -148,9 +148,8 @@ fn level_of(
 }
 #[test]
 fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL is the independent check; without it only that check is skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let m = material(&w);
@@ -181,10 +180,12 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
         let (code, report) = level_of(&w, profile, &out, &doc);
         assert_eq!(code, Some(0), "{profile}: {report}");
         assert_eq!(report["ades_level"], level);
-        assert!(
-            openssl_verify(&openssl, &w, &out, &doc),
-            "{profile}: independent OpenSSL verification"
-        );
+        if let Some(openssl) = &openssl {
+            assert!(
+                openssl_verify(openssl, &w, &out, &doc),
+                "{profile}: independent OpenSSL verification"
+            );
+        }
         // The operator's OCSP response is embedded (independent byte oracle).
         let bytes = std::fs::read(&out).unwrap();
         let ocsp = std::fs::read(&m.files[2]).unwrap();
@@ -201,7 +202,9 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
             Some(2),
             "{profile}"
         );
-        assert!(!openssl_verify(&openssl, &w, &out, &altered));
+        if let Some(openssl) = &openssl {
+            assert!(!openssl_verify(openssl, &w, &out, &altered));
+        }
     }
     // Missing required material fails before private use with a typed refusal.
     let out = w.dir.path().join("refused.der");
@@ -248,9 +251,8 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
 }
 #[test]
 fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence_is_rejected() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL is the independent check; without it only that check is skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let m = material(&w);
@@ -307,10 +309,12 @@ fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence
         let (code, report) = level_of(&w, verify_as, &next, &doc);
         assert_eq!(code, Some(0), "{level}: {report}");
         assert_eq!(report["ades_level"], label);
-        assert!(
-            openssl_verify(&openssl, &w, &next, &doc),
-            "{level}: OpenSSL"
-        );
+        if let Some(openssl) = &openssl {
+            assert!(
+                openssl_verify(openssl, &w, &next, &doc),
+                "{level}: OpenSSL"
+            );
+        }
         current = next;
     }
     // A key option on `extend` does not exist at all.

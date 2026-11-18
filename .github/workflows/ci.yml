@@ -129,7 +129,8 @@ jobs:
           cargo fetch --locked
           cargo fetch --locked --manifest-path plugins/Cargo.toml
       # The oracles of the tests that compare the workspace with tools that do not share its
-      # code. Those tests FAIL without them (nothing is skipped): pyHanko, lxml, cryptography
+      # code. With ONCL_REQUIRE_ORACLES=1 (set above for every job) those tests FAIL without
+      # them instead of being skipped: pyHanko, lxml, cryptography
       # and asn1crypto from xtask/assets/oracle/requirements.txt in a virtualenv, and an OpenSSL
       # 3 that has `cms` and `pkcs12 -legacy` (the Linux and Git for Windows ones; macOS ships
       # LibreSSL, so Homebrew's).

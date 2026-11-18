@@ -271,9 +271,6 @@ mod remote {
     /// nothing returns bytes of the canary file, and no key is ever applied.
     #[test]
     fn server_cannot_open_client_path() {
-        let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-            return;
-        };
         let pki = Pki::start();
         let remote = Remote::start(&pki);
         let canary = remote.server_dir.path().join("canary.bin");
@@ -474,11 +471,8 @@ mod remote {
         assert_eq!(exit(&output), 0);
         assert_eq!(
             json(&output)["digest"],
-            openssl_sha256(
-                &openssl,
-                b"client bytes, not the canary",
-                session.dir.path()
-            )
+            // SHA-256 of b"client bytes, not the canary".
+            "9f51aba6bfa52eb8a10a80e8fdea0ab0ee3db88a29ffc480281c6e46a633ab60"
         );
         // A path that exists only on the server is a *client* error before any network use.
         let proxy = Proxy::start(
@@ -1297,9 +1291,8 @@ fn token_sources_and_preflight_refusals_need_no_network() {
 
 #[test]
 fn inline_key_mode_sends_the_container_only_when_explicit_and_never_spools_it() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL checks the signature at the end; without it only that check is skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let pki = Pki::start();
     let remote = Remote::start(&pki);
     let session = Session::new(&remote);
@@ -1374,16 +1367,18 @@ fn inline_key_mode_sends_the_container_only_when_explicit_and_never_spools_it() 
         !hit.load(std::sync::atomic::Ordering::SeqCst),
         "a secret reached the spool"
     );
-    assert_eq!(
-        openssl_cms_verify(
-            &openssl,
-            &std::fs::read(&signature).unwrap(),
-            None,
-            session.dir.path()
-        )
-        .as_deref(),
-        Some(b"inline key payload".as_slice())
-    );
+    if let Some(openssl) = &openssl {
+        assert_eq!(
+            openssl_cms_verify(
+                openssl,
+                &std::fs::read(&signature).unwrap(),
+                None,
+                session.dir.path()
+            )
+            .as_deref(),
+            Some(b"inline key payload".as_slice())
+        );
+    }
     assert_eq!((remote.audit_begins(), remote.audit_finals()), (1, 1));
     assert_clean(&signed, session.dir.path(), &remote);
     // Inspecting the container (also an explicit, secret-bearing mode).
@@ -1438,9 +1433,6 @@ fn inline_key_mode_sends_the_container_only_when_explicit_and_never_spools_it() 
 
 #[test]
 fn https_with_a_private_ca_and_no_way_to_skip_verification() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
     let pki = Pki::start();
     // A private CA that issued the server certificate for 127.0.0.1.
     let ca_key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
@@ -1476,7 +1468,8 @@ fn https_with_a_private_ca_and_no_way_to_skip_verification() {
     assert_eq!(exit(&ok), 0, "{}", text(&ok.stderr));
     assert_eq!(
         json(&ok)["digest"],
-        openssl_sha256(&openssl, b"tls payload", session.dir.path())
+        // SHA-256 of b"tls payload".
+        "1726b13052401e1119646d0af3058d262edf1fa1b5f983aac40218d4cb413fcc"
     );
     // The same CA as DER also works.
     use der::Decode as _;

@@ -84,31 +84,31 @@ const C14N_COMMENTS: &str = "http://www.w3.org/TR/2001/REC-xml-c14n-20010315#Wit
 fn sign_xml_rsa_signs_with_an_rsa_key_and_the_signature_verifies_independently() {
     let run = run_with("sign-xml-rsa", RSA_KEY);
     let signed = signed_of(&run);
-    // lxml + cryptography, not OpenNCALayer's verifier (it runs as well).
-    let Some(facts) = oracle::verify_xml(signed.as_bytes(), &run.cert, 1) else {
-        return;
-    };
-    let signature = &facts.json["signatures"][0];
-    assert_eq!(facts.referenced_nodes(), ["r"], "{:?}", facts.json);
-    assert_eq!(
-        signature["signature_method"],
-        "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
-    );
-    assert_eq!(signature["c14n"], C14N);
-    let reference = &signature["references"][0];
-    assert_eq!(reference["uri"], "");
-    assert_eq!(
-        reference["transforms"],
-        serde_json::json!([ENVELOPED, C14N_COMMENTS])
-    );
-    assert_eq!(
-        reference["digest_method"],
-        "http://www.w3.org/2001/04/xmlenc#sha256"
-    );
     assert_eq!(
         without_signature(&signed).trim_start_matches(DECLARATION),
         XML
     );
+    // lxml + cryptography, not OpenNCALayer's verifier (it runs as well); the oracle part is
+    // skipped (with its line) without the oracle's Python.
+    if let Some(facts) = oracle::verify_xml(signed.as_bytes(), &run.cert, 1) {
+        let signature = &facts.json["signatures"][0];
+        assert_eq!(facts.referenced_nodes(), ["r"], "{:?}", facts.json);
+        assert_eq!(
+            signature["signature_method"],
+            "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"
+        );
+        assert_eq!(signature["c14n"], C14N);
+        let reference = &signature["references"][0];
+        assert_eq!(reference["uri"], "");
+        assert_eq!(
+            reference["transforms"],
+            serde_json::json!([ENVELOPED, C14N_COMMENTS])
+        );
+        assert_eq!(
+            reference["digest_method"],
+            "http://www.w3.org/2001/04/xmlenc#sha256"
+        );
+    }
     oracle::assert_xml_rejected(signed.replace("два", "три").as_bytes(), &run.cert);
 }
 

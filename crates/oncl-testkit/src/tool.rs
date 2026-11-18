@@ -3,7 +3,8 @@
 //!
 //! A test that needs a program which is not installed is skipped: it prints one line to stderr
 //! (`skipped: <test> needs <program> (not found: tried ...); see ...`) and returns early, so it
-//! passes. With [`REQUIRE_ENV`] set to `1` (CI sets it) the same absence fails the test with
+//! passes. With [`REQUIRE_ENV`] set to anything but empty or `0` (CI sets `1`) the same absence
+//! fails the test with
 //! the full [`message`]: which executable names were tried, which environment variable
 //! overrides them, which package provides the program and where the list of everything the
 //! tests need is kept, so a contributor does not have to read test code to learn what to put
@@ -22,17 +23,20 @@
 //! Lookup order, where a program has an override: the override variable, then the executable
 //! names on `PATH` (on Windows the OpenSSL of Git for Windows last).
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
 
 /// Where the dependencies of the tests are listed.
 const DOCS: &str = "docs/dev/development.md, section «Что нужно для тестов»";
 
-/// Environment variable that turns a missing program from a skipped test into a failed one:
-/// `1` fails, anything else (or unset) skips. CI sets it to `1`.
+/// Environment variable that turns a missing program from a skipped test into a failed one.
+/// Unset, empty or `0` skips; any other value fails (fail closed: a typo such as `true` or
+/// `yes` still requires the programs). CI sets it to `1`.
 pub const REQUIRE_ENV: &str = "ONCL_REQUIRE_ORACLES";
 /// Environment variable naming the OpenSSL executable.
 pub const OPENSSL_ENV: &str = "ONCL_OPENSSL";
@@ -46,7 +50,8 @@ const PYTHON_PROVIDES: &str = "Python 3 with the modules the check imports, inst
     pyhanko-certvalidator, lxml, cryptography); its python is `.venv-oracle\\Scripts\\python.exe` \
     on Windows and `.venv-oracle/bin/python` on Linux and macOS";
 
-/// Whether a missing program fails the test instead of skipping it: [`REQUIRE_ENV`] is `1`.
+/// Whether a missing program fails the test instead of skipping it: [`REQUIRE_ENV`] is set to
+/// a value other than empty or `0`.
 #[must_use]
 pub fn oracles_required() -> bool {
     required_by(std::env::var_os(REQUIRE_ENV).as_deref())
@@ -54,7 +59,7 @@ pub fn oracles_required() -> bool {
 
 /// [`oracles_required`] for a given value of [`REQUIRE_ENV`].
 fn required_by(value: Option<&OsStr>) -> bool {
-    value == Some(OsStr::new("1"))
+    value.is_some_and(|value| !value.is_empty() && value != OsStr::new("0"))
 }
 
 /// The executable names, quoted and comma-separated.
@@ -111,6 +116,23 @@ pub struct Missing {
 }
 
 impl Missing {
+    /// A program a lookup outside this module did not find: `program` as the skip line names it,
+    /// the executables `tried`, the override variable `env` and what `provides` it.
+    #[must_use]
+    pub fn new(
+        program: impl Into<String>,
+        tried: Vec<String>,
+        env: Option<&'static str>,
+        provides: impl Into<String>,
+    ) -> Self {
+        Self {
+            program: program.into(),
+            tried,
+            env,
+            provides: provides.into(),
+        }
+    }
+
     /// The full message: see [`message`].
     #[must_use]
     pub fn message(&self) -> String {
@@ -159,9 +181,11 @@ impl std::error::Error for Missing {}
 fn decide<T>(found: Result<T, Missing>, required: bool) -> Result<T, String> {
     match found {
         Ok(value) => Ok(value),
-        Err(missing) if required => {
-            panic!("{missing} The test fails rather than skips because {REQUIRE_ENV} is 1.")
-        }
+        Err(missing) if required => panic!(
+            "{} is missing: {missing} The test fails rather than skips because {REQUIRE_ENV} \
+             is set (unset it, or set it to 0, to skip instead).",
+            missing.program
+        ),
         Err(missing) => Err(missing.skip_line()),
     }
 }
@@ -291,7 +315,24 @@ impl Tool {
     ///
     /// [`Missing`] when no candidate runs.
     pub fn lookup(&self, probe: &[&str]) -> Result<String, Missing> {
-        self.lookup_with(probe, |var| std::env::var(var).ok())
+        // One probe per program and probe per process: every test of a binary asks again.
+        static FOUND: LazyLock<Mutex<HashMap<String, Result<String, Missing>>>> =
+            LazyLock::new(Mutex::default);
+        let key = format!("{:?} {:?} {probe:?}", self.names, self.env);
+        let cache = &*FOUND;
+        if let Some(found) = cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+        {
+            return found.clone();
+        }
+        let found = self.lookup_with(probe, |var| std::env::var(var).ok());
+        cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, found.clone());
+        found
     }
 
     /// [`Tool::lookup`] with `var` giving the override variable's value.
@@ -475,12 +516,13 @@ mod tests {
     }
 
     #[test]
-    fn only_the_value_1_requires_the_programs() {
-        assert!(required_by(Some(OsStr::new("1"))));
+    fn only_unset_empty_or_0_leaves_the_programs_optional() {
         assert!(!required_by(None));
-        assert!(!required_by(Some(OsStr::new("0"))));
         assert!(!required_by(Some(OsStr::new(""))));
-        assert!(!required_by(Some(OsStr::new("true"))));
+        assert!(!required_by(Some(OsStr::new("0"))));
+        assert!(required_by(Some(OsStr::new("1"))));
+        assert!(required_by(Some(OsStr::new("true"))));
+        assert!(required_by(Some(OsStr::new("yes"))));
     }
 
     #[test]
@@ -535,10 +577,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Executables tried: `oncl-no-such-program`. Override: set \
+    #[should_panic(expected = "oncl-no-such-program is missing: a program the tests need is not \
+                    installed. Executables tried: `oncl-no-such-program`. Override: set \
                     ONCL_TOOL_THAT_IS_NEVER_SET to the path of the executable (it is not set). \
                     Provided by: nothing. See docs/dev/development.md, section «Что нужно для \
-                    тестов». The test fails rather than skips because ONCL_REQUIRE_ORACLES is 1.")]
+                    тестов». The test fails rather than skips because ONCL_REQUIRE_ORACLES is set")]
     fn a_missing_program_fails_the_test_with_the_full_message_when_required() {
         let _ = decide(ABSENT.lookup_with(&["--version"], unset), true);
     }

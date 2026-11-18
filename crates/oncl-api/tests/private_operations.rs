@@ -870,9 +870,8 @@ fn openssl_rs256(openssl: &str, token: &str, public_pem: &[u8], dir: &std::path:
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL checks the RS256 signatures; without it only those checks are skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let p12 = container(&leaf, PASSWORD);
@@ -889,15 +888,15 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
         use der::Encode;
         leaf.cert.to_der().unwrap()
     };
-    let pem = {
-        let out = run_openssl(
-            &openssl,
+    let pem = openssl.as_deref().map(|openssl| {
+        run_openssl(
+            openssl,
             &["x509", "-inform", "DER", "-pubkey", "-noout", "-in"],
             &cert_der,
             dir.path(),
-        );
-        out.into_bytes()
-    };
+        )
+        .into_bytes()
+    });
     // JWS compact over the payload.
     let payload = b"jws payload bytes";
     let metadata = r#"{"items":[{"id":"j","operation":{"kind":"jws_sign","serialization":"compact","input":"payload","keys":[{"source":"inline","container":"p12","password":"pw"}]}}],"parts":[{"name":"p12","item_id":"j","role":"secret"},{"name":"pw","item_id":"j","role":"secret"},{"name":"payload","item_id":"j","role":"document"}]}"#;
@@ -925,16 +924,18 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
         "Applied"
     );
     let jws = String::from_utf8(artifact(&mixed_parts, "artifact-0").to_vec()).unwrap();
-    assert!(openssl_rs256(&openssl, &jws, &pem, dir.path()));
     let mut forged = jws.clone().into_bytes();
     let at = jws.rfind('.').unwrap() + 3;
     forged[at] = if forged[at] == b'A' { b'B' } else { b'A' };
-    assert!(!openssl_rs256(
-        &openssl,
-        std::str::from_utf8(&forged).unwrap(),
-        &pem,
-        dir.path()
-    ));
+    if let (Some(openssl), Some(pem)) = (&openssl, &pem) {
+        assert!(openssl_rs256(openssl, &jws, pem, dir.path()));
+        assert!(!openssl_rs256(
+            openssl,
+            std::str::from_utf8(&forged).unwrap(),
+            pem,
+            dir.path()
+        ));
+    }
     // HTTP verify with host trust: valid; forged signature: 200 + Invalid.
     let verify = r#"{"items":[{"id":"v","operation":{"kind":"jws_verify","serialization":"compact","input":"jws"}}],"parts":[{"name":"jws","item_id":"v","role":"document"}]}"#;
     let (status, _, response) = operate(
@@ -994,7 +995,9 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
         let (status, mixed_parts, response) = operate(&service, metadata, &parts).await;
         assert_eq!(status, 200, "{}", String::from_utf8_lossy(&response));
         let token = String::from_utf8(artifact(&mixed_parts, "artifact-0").to_vec()).unwrap();
-        assert!(openssl_rs256(&openssl, &token, &pem, dir.path()));
+        if let (Some(openssl), Some(pem)) = (&openssl, &pem) {
+            assert!(openssl_rs256(openssl, &token, pem, dir.path()));
+        }
         tokens.push(token);
     }
     let verify = r#"{"items":[{"id":"v","operation":{"kind":"jwt_verify","input":"jwt"}}],"parts":[{"name":"jwt","item_id":"v","role":"document"}]}"#;
@@ -3055,9 +3058,8 @@ fn named_sign(name: &str, doc: &str) -> (String, Vec<u8>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn token_key_signs_over_http_serializes_per_device_and_fails_closed_without_a_card() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL checks the signatures; without it only those checks are skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let alias = leaf.alias.clone();
@@ -3121,11 +3123,13 @@ async fn token_key_signs_over_http_serializes_per_device_and_fails_closed_withou
         let (round, parts) = task.await.unwrap();
         assert_eq!(final_event(&parts)["status"], "completed");
         let content = format!("token payload {round}");
-        assert_eq!(
-            openssl_cms_verify(&openssl, artifact(&parts, "artifact-0"), None, dir.path())
-                .as_deref(),
-            Some(content.as_bytes())
-        );
+        if let Some(openssl) = &openssl {
+            assert_eq!(
+                openssl_cms_verify(openssl, artifact(&parts, "artifact-0"), None, dir.path())
+                    .as_deref(),
+                Some(content.as_bytes())
+            );
+        }
     }
     assert_eq!(
         *witness.max.lock().unwrap().get("reader-a").unwrap(),
@@ -3190,9 +3194,6 @@ const MESSAGE: &[u8] = b"plugin raw signing over HTTP";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusals() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
     use oncl_pdk::abi::{self, Import};
     use oncl_server::config::{PluginConfig, PluginGrant};
     let pki = Pki::start();
@@ -3304,7 +3305,15 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     let digest = private_support::plugin::reply_bytes(
         done["results"][0]["result"]["response"].as_str().unwrap(),
     );
-    assert_eq!(digest, hex(&sha256(&openssl, b"abc")));
+    // SHA-256 of b"abc" (FIPS 180-2, appendix B.1).
+    assert_eq!(
+        digest,
+        [
+            0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae,
+            0x22, 0x23, 0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61,
+            0xf2, 0x00, 0x15, 0xad,
+        ]
+    );
     // Granted key plugin signs through the original context + durable audit.
     let (status, _, response) = service
         .post(FORM, multipart(&call("test.sign", key1, "\"{}\""), &[]))
@@ -3316,31 +3325,34 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     let signature = private_support::plugin::reply_bytes(
         done["results"][0]["result"]["response"].as_str().unwrap(),
     );
-    let tmp = tempfile::tempdir().unwrap();
-    let pem = run_openssl(
-        &openssl,
-        &["x509", "-inform", "DER", "-pubkey", "-noout", "-in"],
-        &{
-            use der::Encode;
-            leaf.cert.to_der().unwrap()
-        },
-        tmp.path(),
-    );
-    std::fs::write(tmp.path().join("k.pub"), pem).unwrap();
-    std::fs::write(tmp.path().join("s.sig"), &signature).unwrap();
-    std::fs::write(tmp.path().join("m.bin"), MESSAGE).unwrap();
-    let verified = std::process::Command::new(&openssl)
-        .args(["dgst", "-sha256", "-verify"])
-        .arg(tmp.path().join("k.pub"))
-        .arg("-signature")
-        .arg(tmp.path().join("s.sig"))
-        .arg(tmp.path().join("m.bin"))
-        .output()
-        .unwrap();
-    assert!(
-        verified.status.success(),
-        "OpenSSL verifies the plugin-produced RSA signature"
-    );
+    // OpenSSL checks the plugin's RSA signature; without it only this check is skipped.
+    if let Some(openssl) = oncl_testkit::tool::openssl_or_skip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let pem = run_openssl(
+            &openssl,
+            &["x509", "-inform", "DER", "-pubkey", "-noout", "-in"],
+            &{
+                use der::Encode;
+                leaf.cert.to_der().unwrap()
+            },
+            tmp.path(),
+        );
+        std::fs::write(tmp.path().join("k.pub"), pem).unwrap();
+        std::fs::write(tmp.path().join("s.sig"), &signature).unwrap();
+        std::fs::write(tmp.path().join("m.bin"), MESSAGE).unwrap();
+        let verified = std::process::Command::new(&openssl)
+            .args(["dgst", "-sha256", "-verify"])
+            .arg(tmp.path().join("k.pub"))
+            .arg("-signature")
+            .arg(tmp.path().join("s.sig"))
+            .arg(tmp.path().join("m.bin"))
+            .output()
+            .unwrap();
+        assert!(
+            verified.status.success(),
+            "OpenSSL verifies the plugin-produced RSA signature"
+        );
+    }
     assert_eq!(begins(&service), 1);
     // Payload Origin/caller fields are inert data: authority comes from the token grant.
     let (status, _, _) = service
@@ -3507,21 +3519,6 @@ content = "param:file"
     assert_eq!(service.host.audit.plugin_records().unwrap().len(), 1);
     service.stop().await;
 }
-fn sha256(openssl: &str, bytes: &[u8]) -> Vec<u8> {
-    let out = std::process::Command::new(openssl)
-        .args(["dgst", "-sha256", "-binary"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    use std::io::Write;
-    let mut child = out;
-    child.stdin.take().unwrap().write_all(bytes).unwrap();
-    child.wait_with_output().unwrap().stdout
-}
-fn hex(bytes: &[u8]) -> Vec<u8> {
-    bytes.to_vec()
-}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn xades_timestamp_levels_need_a_host_tsa_policy_refused_before_the_key_opens() {
@@ -3598,9 +3595,8 @@ async fn xades_timestamp_levels_need_a_host_tsa_policy_refused_before_the_key_op
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lt_levels_need_status_material_and_the_pades_memory_profile_before_any_key_use() {
-    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
-        return;
-    };
+    // OpenSSL checks the LT signature; without it only that check is skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let inter = {
@@ -3694,15 +3690,17 @@ async fn lt_levels_need_status_material_and_the_pades_memory_profile_before_any_
     let parts = mixed(&ct, response).await;
     assert_eq!(final_event(&parts)["status"], "completed");
     let dir = tempfile::tempdir().unwrap();
-    assert!(
-        openssl_cms_verify(
-            &openssl,
-            artifact(&parts, "artifact-0"),
-            Some(b"lt payload"),
-            dir.path()
-        )
-        .is_some()
-    );
+    if let Some(openssl) = &openssl {
+        assert!(
+            openssl_cms_verify(
+                openssl,
+                artifact(&parts, "artifact-0"),
+                Some(b"lt payload"),
+                dir.path()
+            )
+            .is_some()
+        );
+    }
     assert_eq!(begins(&service), 1);
     // Extend LT without material is refused up front as well.
     let extend = r#"{"items":[{"id":"e","operation":{"kind":"extend","profile":"cades_lt","input":"sig"}}],"parts":[{"name":"sig","item_id":"e","role":"document"}]}"#;

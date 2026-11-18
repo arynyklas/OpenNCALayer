@@ -6,6 +6,12 @@ use std::process::Command;
 
 use xtask::files;
 
+/// Whether `git` runs; prints the skip line (or fails under `ONCL_REQUIRE_ORACLES`) when not.
+fn has_git() -> bool {
+    oncl_testkit::tool::GIT.or_skip(&["--version"]).is_some()
+}
+
+/// Runs `git`; the test has checked [`has_git`] first.
 fn git(dir: &Path, args: &[&str]) {
     let status = Command::new("git")
         .arg("-C")
@@ -42,6 +48,9 @@ const SECRET: &str = "secret.key";
 
 #[test]
 fn a_tracked_secret_key_counts_as_committable() {
+    if !has_git() {
+        return;
+    }
     let repo = tempfile::tempdir().unwrap();
     git(repo.path(), &["init", "--quiet"]);
     fs::write(repo.path().join(".gitignore"), "/keys/\n").unwrap();
@@ -55,6 +64,9 @@ fn a_tracked_secret_key_counts_as_committable() {
 
 #[test]
 fn a_linked_work_tree_is_a_work_tree() {
+    if !has_git() {
+        return;
+    }
     let base = tempfile::tempdir().unwrap();
     let repo = base.path().join("repo");
     fs::create_dir(&repo).unwrap();
@@ -76,6 +88,9 @@ fn a_linked_work_tree_is_a_work_tree() {
 #[test]
 fn a_directory_inside_dot_git_is_not_committable() {
     // Nothing under `.git` is committed, and git would call a path there not ignored.
+    if !has_git() {
+        return;
+    }
     let repo = tempfile::tempdir().unwrap();
     git(repo.path(), &["init", "--quiet"]);
     let secret = repo.path().join(".git").join("oncl-keys").join(SECRET);
@@ -87,6 +102,9 @@ fn a_work_tree_git_cannot_discover_is_refused() {
     // A linked work tree whose main repository is gone: git's own discovery dies there,
     // but the directory still belongs to a work tree that could commit the key once the
     // repository is back.
+    if !has_git() {
+        return;
+    }
     let base = tempfile::tempdir().unwrap();
     let linked = base.path().join("linked");
     fs::create_dir_all(&linked).unwrap();
@@ -103,6 +121,9 @@ fn a_work_tree_git_cannot_discover_is_refused() {
 
 #[test]
 fn the_directory_is_resolved_before_git_is_asked() {
+    if !has_git() {
+        return;
+    }
     let base = tempfile::tempdir().unwrap();
     let repo = base.path().join("repo");
     fs::create_dir_all(repo.join("inside")).unwrap();
