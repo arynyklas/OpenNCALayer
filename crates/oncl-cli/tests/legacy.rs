@@ -5,8 +5,9 @@ use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
 
+const MODULES: &str = "lxml, cryptography";
 fn python() -> Option<String> {
-    python_with("lxml, cryptography")
+    oncl_testkit::tool::python_with(MODULES)
 }
 /// Independent XML-DSig verification of `signed` against the RSA leaf.
 fn oracle(w: &World, signed: &Path) -> Option<String> {
@@ -18,7 +19,8 @@ fn oracle_mode(w: &World, signed: &Path, mode: Option<&str>) -> Option<String> {
     let python = python().or_else(|| {
         assert!(
             std::env::var_os("ONCL_ALLOW_NO_ORACLE").is_some(),
-            "python with lxml+cryptography is required (set ONCL_ALLOW_NO_ORACLE=1 to skip explicitly)"
+            "{} To skip this check explicitly, set ONCL_ALLOW_NO_ORACLE=1.",
+            oncl_testkit::tool::python_missing_message(MODULES)
         );
         eprintln!("ORACLE SKIPPED (explicit ONCL_ALLOW_NO_ORACLE)");
         None
@@ -792,9 +794,7 @@ fn gost_xml_is_structurally_checked_not_independently_verified_and_legacy_gost_i
 #[test]
 fn the_oracle_rejects_a_signature_without_references() {
     let w = world();
-    let Some(_) = python() else {
-        panic!("python with lxml+cryptography is required");
-    };
+    let python = oncl_testkit::tool::require_python(MODULES);
     let file = w.dir.path().join("empty.xml");
     std::fs::write(
         &file,
@@ -805,7 +805,7 @@ fn the_oracle_rejects_a_signature_without_references() {
     std::fs::write(&script, include_str!("support/xmldsig_oracle.py")).unwrap();
     let leaf = w.dir.path().join("leaf.der");
     std::fs::write(&leaf, w.pki.rsa.cert.to_der().unwrap()).unwrap();
-    let r = Command::new(python().unwrap())
+    let r = Command::new(python)
         .args([path(&script), path(&file), path(&leaf)])
         .output()
         .unwrap();

@@ -670,23 +670,6 @@ pub fn artifact<'a>(parts: &'a [(String, Option<String>, Vec<u8>)], id: &str) ->
         .expect("artifact part")
 }
 
-/// The Python of the independent oracles (pyHanko, lxml, cryptography): the interpreter that
-/// `ONCL_PYHANKO_PYTHON` names, never whichever `python` is first on the PATH (it has no
-/// lxml on a CI runner). Its absence fails the test; nothing is skipped.
-pub fn oracle_python() -> PathBuf {
-    std::env::var_os("ONCL_PYHANKO_PYTHON")
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
-        .expect(
-            "oracle Python unavailable: ONCL_PYHANKO_PYTHON must name the python executable of \
-             a SEPARATE virtual environment (not your global Python). Create one, e.g. \
-             `python -m venv .venv-oracle`, install xtask/assets/oracle/requirements.txt into \
-             it with that environment's own pip, and set ONCL_PYHANKO_PYTHON to its python \
-             (Windows: .venv-oracle\\Scripts\\python.exe, Linux/macOS: .venv-oracle/bin/python). \
-             Commands for every OS: docs/dev/development.md, section \"Что нужно для тестов\"",
-        )
-}
-
 /// Independent oracle: OpenSSL CMS signature verification (embedded signer cert,
 /// no chain: the synthetic chain uses GOST CAs OpenSSL cannot validate).
 pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) -> Option<Vec<u8>> {
@@ -694,7 +677,7 @@ pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) 
     std::fs::write(&sig, signature).unwrap();
     let out = dir.join("oracle.out");
     let _ = std::fs::remove_file(&out);
-    let mut command = std::process::Command::new("openssl");
+    let mut command = std::process::Command::new(oncl_testkit::tool::openssl());
     command
         .args([
             "cms",

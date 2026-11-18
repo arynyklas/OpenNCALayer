@@ -60,7 +60,7 @@ impl Read for Unavailable {
     }
 }
 fn openssl(out: &Path, name: &str, success: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let result = std::process::Command::new("openssl")
+    let result = std::process::Command::new(oncl_testkit::tool::openssl())
         .args([
             "cms",
             "-verify",

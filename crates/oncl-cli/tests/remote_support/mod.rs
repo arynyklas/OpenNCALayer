@@ -958,7 +958,7 @@ pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) 
     std::fs::write(&sig, signature).unwrap();
     let out = dir.join("oracle.out");
     let _ = std::fs::remove_file(&out);
-    let mut command = Command::new(openssl_command());
+    let mut command = Command::new(oncl_testkit::tool::openssl());
     command
         .args([
             "cms",
@@ -987,7 +987,7 @@ pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) 
 pub fn openssl_sha256(bytes: &[u8], dir: &Path) -> String {
     let file = dir.join("oracle.sha");
     std::fs::write(&file, bytes).unwrap();
-    let out = Command::new(openssl_command())
+    let out = Command::new(oncl_testkit::tool::openssl())
         .args(["dgst", "-sha256", "-r"])
         .arg(&file)
         .output()
@@ -998,30 +998,6 @@ pub fn openssl_sha256(bytes: &[u8], dir: &Path) -> String {
         .next()
         .unwrap()
         .to_owned()
-}
-pub fn openssl_command() -> String {
-    let mut candidates: Vec<String> = Vec::new();
-    if let Ok(explicit) = std::env::var("ONCL_OPENSSL") {
-        candidates.push(explicit);
-    }
-    candidates.push("openssl".to_owned());
-    if cfg!(windows) {
-        for var in ["ProgramFiles", "ProgramW6432"] {
-            if let Some(base) = std::env::var_os(var) {
-                let git = Path::new(&base).join("Git/usr/bin/openssl.exe");
-                candidates.push(git.to_string_lossy().into_owned());
-            }
-        }
-    }
-    candidates
-        .into_iter()
-        .find(|c| {
-            Command::new(c)
-                .arg("version")
-                .output()
-                .is_ok_and(|o| o.status.success())
-        })
-        .expect("OpenSSL oracle unavailable: install OpenSSL or set ONCL_OPENSSL to its executable")
 }
 /// Files of a directory tree, for "nothing was left behind" assertions.
 pub fn files(root: &Path) -> Vec<PathBuf> {

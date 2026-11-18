@@ -97,7 +97,7 @@ fn jws_and_jwt_sign_end_to_end_with_independent_rs256_oracle() {
                     &sig,
                 )
                 .unwrap();
-            let openssl = openssl_command();
+            let openssl = oncl_testkit::tool::openssl();
             use der::Encode;
             let cert = w.dir.path().join("leaf.der");
             std::fs::write(&cert, w.pki.rsa.cert.to_der().unwrap()).unwrap();

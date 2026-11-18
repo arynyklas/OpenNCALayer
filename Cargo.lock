@@ -4193,6 +4193,7 @@ name = "oncl-builtins-build"
 version = "0.1.1"
 dependencies = [
  "oncl-plugin",
+ "oncl-testkit",
  "serde",
  "sha2 0.11.1",
  "tempfile",
@@ -4589,6 +4590,7 @@ dependencies = [
 name = "oncl-trust"
 version = "0.1.1"
 dependencies = [
+ "oncl-testkit",
  "oncl-tls",
  "rusqlite",
  "security-framework",

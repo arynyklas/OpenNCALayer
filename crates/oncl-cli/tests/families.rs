@@ -15,15 +15,6 @@ fn trust(w: &World) -> Vec<&str> {
         "1793620800",
     ]
 }
-fn openssl() -> String {
-    openssl_command()
-}
-fn python() -> &'static str {
-    ["python", "python3", "py"]
-        .into_iter()
-        .find(|c| Command::new(c).arg("--version").output().is_ok())
-        .expect("python")
-}
 #[test]
 fn timestamp_acquire_then_verify_is_valid_and_altered_data_is_not() {
     let w = world();
@@ -139,7 +130,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
             w.dir.path().join(format!("{profile}.covered")),
             w.dir.path().join(format!("{profile}.cms")),
         );
-        let extract = Command::new(python())
+        let extract = Command::new(oncl_testkit::tool::python())
             .args([path(&script), path(&out), path(&covered), path(&cms)])
             .output()
             .unwrap();
@@ -150,7 +141,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
         );
         let root_pem = w.dir.path().join("root.pem");
         assert!(
-            Command::new(openssl())
+            Command::new(oncl_testkit::tool::openssl())
                 .args([
                     "x509",
                     "-inform",
@@ -165,7 +156,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
                 .success()
         );
         let check = |content: &Path| {
-            Command::new(openssl())
+            Command::new(oncl_testkit::tool::openssl())
                 .args([
                     "cms",
                     "-verify",
@@ -200,7 +191,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
         std::fs::write(&tampered, &tampered_bytes).unwrap();
         let (covered2, cms2) = (w.dir.path().join("t.covered"), w.dir.path().join("t.cms"));
         assert!(
-            Command::new(python())
+            Command::new(oncl_testkit::tool::python())
                 .args([path(&script), path(&tampered), path(&covered2), path(&cms2)])
                 .status()
                 .unwrap()
