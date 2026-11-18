@@ -18,7 +18,8 @@
 //! Environment: `ONCL_PLUGIN_WASM_DIR` (the directory of the built `oncl_port_*.wasm`; unset,
 //! the tests build `plugins/` themselves into `<target>/plugin-ports`), `ONCL_OPENSSL`,
 //! `ONCL_PYHANKO_PYTHON` (a Python with `lxml` and `cryptography`; else `python`, `python3`
-//! or `py`). A missing program fails with `oncl_testkit::tool`'s message.
+//! or `py`). A missing program skips its check with `oncl_testkit::tool`'s line on stderr
+//! (the repository's own verifiers still run), or fails it under `ONCL_REQUIRE_ORACLES=1`.
 //!
 //! A test file includes it with `#[path = "support/ports.rs"] mod ports;`.
 #![allow(dead_code)]
@@ -503,7 +504,7 @@ pub mod oracle {
     /// `cms` is a valid CMS signature by `cert` over `content`: by the repository's
     /// `oncl_pki::cms::verify` (and not over anything else) AND by `openssl cms -verify`
     /// (RSA keys; the chain is not checked by it: the signer's own certificate is). An
-    /// attached CMS must carry exactly `content`.
+    /// attached CMS must carry exactly `content`. Without OpenSSL its part is skipped.
     pub fn verify_cms(cms: &[u8], content: &[u8], cert: &Certificate, attached: bool) -> CmsFacts {
         let own = if attached {
             oncl_pki::cms::verify(cms, None)
@@ -518,15 +519,38 @@ pub mod oracle {
                 "the signature must not verify over another content"
             );
         }
+        if let Some(openssl) = oncl_testkit::tool::openssl_or_skip() {
+            openssl_verify_cms(&openssl, cms, content, attached);
+        }
+        // The signer certificate in the CMS is the key's.
+        let der = cert.to_der().unwrap();
+        assert!(
+            cms.windows(der.len()).any(|w| w == der.as_slice()),
+            "the CMS carries the signer's certificate"
+        );
+        let report = oncl_pki::cms::report(
+            cms,
+            if attached { None } else { Some(content) },
+            &Default::default(),
+        )
+        .unwrap_or_else(|e| panic!("cms report: {e:?}"));
+        CmsFacts {
+            signers: own.len(),
+            sig_alg: own[0].sig_alg,
+            time_stamped: report.signers.iter().any(|s| s.tsp.is_some()),
+            attached,
+        }
+    }
+
+    /// The `openssl cms -verify` part of [`verify_cms`].
+    fn openssl_verify_cms(openssl: &str, cms: &[u8], content: &[u8], attached: bool) {
         let dir = scratch();
         let cms_path = dir.path().join("sig.cms");
         let content_path = dir.path().join("content.bin");
         let out_path = dir.path().join("out.bin");
-        let cert_path = dir.path().join("signer.der");
         std::fs::write(&cms_path, cms).unwrap();
         std::fs::write(&content_path, content).unwrap();
-        std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
-        let mut command = Command::new(oncl_testkit::tool::openssl());
+        let mut command = Command::new(openssl);
         command
             .args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify"])
             .arg("-in")
@@ -552,7 +576,7 @@ pub mod oracle {
         // openssl must also refuse another content.
         if !attached {
             std::fs::write(&content_path, b"another content").unwrap();
-            let mut command = Command::new(oncl_testkit::tool::openssl());
+            let mut command = Command::new(openssl);
             command
                 .args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify"])
                 .arg("-in")
@@ -566,28 +590,11 @@ pub mod oracle {
                 "openssl accepted another content"
             );
         }
-        // The signer certificate in the CMS is the key's.
-        let der = cert.to_der().unwrap();
-        assert!(
-            cms.windows(der.len()).any(|w| w == der.as_slice()),
-            "the CMS carries the signer's certificate"
-        );
-        let report = oncl_pki::cms::report(
-            cms,
-            if attached { None } else { Some(content) },
-            &Default::default(),
-        )
-        .unwrap_or_else(|e| panic!("cms report: {e:?}"));
-        CmsFacts {
-            signers: own.len(),
-            sig_alg: own[0].sig_alg,
-            time_stamped: report.signers.iter().any(|s| s.tsp.is_some()),
-            attached,
-        }
     }
 
     /// `signature` is an RSA PKCS#1 v1.5 SHA-256 signature by the key of `cert` over `data`:
-    /// by the certificate's public key in the repository AND by `openssl pkeyutl -verify`.
+    /// by the certificate's public key in the repository AND by `openssl pkeyutl -verify`
+    /// (skipped without OpenSSL).
     pub fn verify_raw_rsa(cert: &Certificate, data: &[u8], signature: &[u8]) {
         let key =
             oncl_pki::key::PublicKey::from_spki(cert.tbs_certificate().subject_public_key_info())
@@ -598,6 +605,9 @@ pub mod oracle {
             key.verify(oncl_pki::key::SigAlg::RsaSha256, b"another data", signature)
                 .is_err()
         );
+        let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+            return;
+        };
         let dir = scratch();
         let cert_path = dir.path().join("cert.der");
         let pub_path = dir.path().join("pub.pem");
@@ -606,7 +616,7 @@ pub mod oracle {
         std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
         std::fs::write(&data_path, data).unwrap();
         std::fs::write(&sig_path, signature).unwrap();
-        let mut command = Command::new(oncl_testkit::tool::openssl());
+        let mut command = Command::new(&openssl);
         command
             .args(["x509", "-inform", "DER", "-pubkey", "-noout"])
             .arg("-in")
@@ -614,7 +624,7 @@ pub mod oracle {
         let output = run(command);
         assert!(output.status.success(), "openssl x509");
         std::fs::write(&pub_path, output.stdout).unwrap();
-        let mut command = Command::new(oncl_testkit::tool::openssl());
+        let mut command = Command::new(&openssl);
         command
             .args([
                 "pkeyutl", "-verify", "-pubin", "-rawin", "-digest", "sha256",
@@ -652,16 +662,16 @@ pub mod oracle {
         }
     }
 
-    fn run_xml_oracle(signed: &[u8], cert: &Certificate) -> (bool, String) {
+    /// `None` after the skip line when there is no Python with lxml and cryptography.
+    fn run_xml_oracle(signed: &[u8], cert: &Certificate) -> Option<(bool, String)> {
+        let python = oncl_testkit::tool::python_with_or_skip("lxml.etree, cryptography")?;
         let dir = scratch();
         let xml_path = dir.path().join("signed.xml");
         let cert_path = dir.path().join("signer.der");
         std::fs::write(&xml_path, signed).unwrap();
         std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
         let script = root().join("crates/oncl-core/tests/support/oracle/xmldsig_verify.py");
-        let mut command = Command::new(oncl_testkit::tool::require_python(
-            "lxml.etree, cryptography",
-        ));
+        let mut command = Command::new(python);
         command.arg(script).arg(&xml_path).arg(&cert_path);
         let output = run(command);
         let text = format!(
@@ -669,30 +679,33 @@ pub mod oracle {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        (output.status.success(), text)
+        Some((output.status.success(), text))
     }
 
     /// `signed` has exactly `signatures` XML signatures, all valid for the key of `cert`:
-    /// by `oncl_xml::verify` AND by `xmldsig_verify.py` (RSA keys).
-    pub fn verify_xml(signed: &[u8], cert: &Certificate, signatures: usize) -> XmlFacts {
+    /// by `oncl_xml::verify` AND by `xmldsig_verify.py` (RSA keys). `None` after the skip line
+    /// when the oracle's Python is missing (`oncl_xml::verify` has run); the test returns.
+    pub fn verify_xml(signed: &[u8], cert: &Certificate, signatures: usize) -> Option<XmlFacts> {
         let own = oncl_xml::verify(signed).unwrap_or_else(|e| panic!("oncl_xml::verify: {e:?}"));
         assert_eq!(own.len(), signatures, "oncl_xml::verify");
-        let (ok, text) = run_xml_oracle(signed, cert);
+        let (ok, text) = run_xml_oracle(signed, cert)?;
         assert!(ok, "xmldsig_verify.py failed: {text}");
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(json["signatures"].as_array().unwrap().len(), signatures);
-        XmlFacts { json }
+        Some(XmlFacts { json })
     }
 
     /// The oracle REFUSES `document` (a signed document that was changed after signing): the
-    /// check that the oracle can say no.
+    /// check that the oracle can say no. Skipped without the oracle's Python.
     pub fn assert_xml_rejected(document: &[u8], cert: &Certificate) {
         assert_xml_rejected_for(document, cert, "");
     }
 
     /// [`assert_xml_rejected`], and the oracle's problems name `reason`.
     pub fn assert_xml_rejected_for(document: &[u8], cert: &Certificate, reason: &str) {
-        let (ok, text) = run_xml_oracle(document, cert);
+        let Some((ok, text)) = run_xml_oracle(document, cert) else {
+            return;
+        };
         assert!(!ok, "the oracle accepted a changed document: {text}");
         assert!(text.contains(reason), "expected {reason:?} in {text}");
     }

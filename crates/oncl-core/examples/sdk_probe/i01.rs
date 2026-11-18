@@ -27,7 +27,7 @@ fn oracle(
     root: &str,
     valid: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let result = std::process::Command::new(oncl_testkit::tool::openssl())
+    let result = std::process::Command::new(oncl_testkit::tool::openssl()?)
         .current_dir(out)
         .args([
             "ts",

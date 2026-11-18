@@ -85,7 +85,9 @@ fn sign_xml_rsa_signs_with_an_rsa_key_and_the_signature_verifies_independently()
     let run = run_with("sign-xml-rsa", RSA_KEY);
     let signed = signed_of(&run);
     // lxml + cryptography, not OpenNCALayer's verifier (it runs as well).
-    let facts = oracle::verify_xml(signed.as_bytes(), &run.cert, 1);
+    let Some(facts) = oracle::verify_xml(signed.as_bytes(), &run.cert, 1) else {
+        return;
+    };
     let signature = &facts.json["signatures"][0];
     assert_eq!(facts.referenced_nodes(), ["r"], "{:?}", facts.json);
     assert_eq!(

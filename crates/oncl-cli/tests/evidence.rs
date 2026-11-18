@@ -84,11 +84,10 @@ fn trust(w: &World) -> Vec<&str> {
 fn tsa_args(tsa: &str) -> Vec<&str> {
     vec!["--tsa-url", tsa, "--tsa-policy", POLICY]
 }
-fn openssl_verify(w: &World, signature: &Path, content: &Path) -> bool {
-    let openssl = oncl_testkit::tool::openssl();
+fn openssl_verify(openssl: &str, w: &World, signature: &Path, content: &Path) -> bool {
     let root_pem = w.dir.path().join("root.pem");
     assert!(
-        Command::new(&openssl)
+        Command::new(openssl)
             .args([
                 "x509",
                 "-inform",
@@ -102,7 +101,7 @@ fn openssl_verify(w: &World, signature: &Path, content: &Path) -> bool {
             .unwrap()
             .success()
     );
-    Command::new(&openssl)
+    Command::new(openssl)
         .args([
             "cms",
             "-verify",
@@ -149,6 +148,9 @@ fn level_of(
 }
 #[test]
 fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let m = material(&w);
@@ -180,7 +182,7 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
         assert_eq!(code, Some(0), "{profile}: {report}");
         assert_eq!(report["ades_level"], level);
         assert!(
-            openssl_verify(&w, &out, &doc),
+            openssl_verify(&openssl, &w, &out, &doc),
             "{profile}: independent OpenSSL verification"
         );
         // The operator's OCSP response is embedded (independent byte oracle).
@@ -199,7 +201,7 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
             Some(2),
             "{profile}"
         );
-        assert!(!openssl_verify(&w, &out, &altered));
+        assert!(!openssl_verify(&openssl, &w, &out, &altered));
     }
     // Missing required material fails before private use with a typed refusal.
     let out = w.dir.path().join("refused.der");
@@ -246,6 +248,9 @@ fn cades_lt_and_lta_sign_from_operator_material_verify_at_level_and_with_openssl
 }
 #[test]
 fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence_is_rejected() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let m = material(&w);
@@ -302,7 +307,10 @@ fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence
         let (code, report) = level_of(&w, verify_as, &next, &doc);
         assert_eq!(code, Some(0), "{level}: {report}");
         assert_eq!(report["ades_level"], label);
-        assert!(openssl_verify(&w, &next, &doc), "{level}: OpenSSL");
+        assert!(
+            openssl_verify(&openssl, &w, &next, &doc),
+            "{level}: OpenSSL"
+        );
         current = next;
     }
     // A key option on `extend` does not exist at all.
@@ -386,10 +394,9 @@ fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence
 fn pdf_fixture() -> PathBuf {
     oncl_testkit::workspace_root().join("crates/oncl-pdf/tests/fixtures/external-multipage.pdf")
 }
-fn pyhanko(w: &World, pdf: &Path) -> (bool, serde_json::Value, String) {
-    // ONCL_PYHANKO_PYTHON must name a Python with pyHanko installed (see
-    // docs/dev/development.md, «Что нужно для тестов»); there is no default.
-    let python = oncl_testkit::tool::pyhanko_python();
+/// pyHanko's verdict on `pdf`; `python` is the one `ONCL_PYHANKO_PYTHON` names (see
+/// docs/dev/development.md, «Что нужно для тестов»), there is no default.
+fn pyhanko(python: &Path, w: &World, pdf: &Path) -> (bool, serde_json::Value, String) {
     let script = w.dir.path().join("pyhanko_oracle.py");
     std::fs::write(&script, include_str!("support/pyhanko_oracle.py")).unwrap();
     let out = Command::new(python)
@@ -419,12 +426,15 @@ fn tampered_copy(w: &World, pdf: &Path, name: &str) -> PathBuf {
 }
 #[test]
 fn pades_lt_and_lta_sign_and_keyless_extend_verify_with_pyhanko_dss_and_doctimestamp() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let m = material(&w);
     let pdf = pdf_fixture();
     let check = |file: &Path, label: &str, doc_timestamps: u64| {
-        let (ok, json, err) = pyhanko(&w, file);
+        let (ok, json, err) = pyhanko(&python, &w, file);
         assert!(ok, "{label}: pyHanko rejected: {json} {err}");
         assert_eq!(json["signatures"], 1, "{label}");
         assert_eq!(json["doc_timestamps"], doc_timestamps, "{label}");
@@ -470,7 +480,7 @@ fn pades_lt_and_lta_sign_and_keyless_extend_verify_with_pyhanko_dss_and_doctimes
         // Tamper negative: CLI Invalid (2), pyHanko no longer intact.
         let bad = tampered_copy(&w, &out, &format!("{profile}-tampered.pdf"));
         assert_eq!(cli_pdf_level(&w, profile, &bad).0, Some(2), "{profile}");
-        let (ok, json, _) = pyhanko(&w, &bad);
+        let (ok, json, _) = pyhanko(&python, &w, &bad);
         assert!(!ok, "{profile}: pyHanko accepted a tampered PDF: {json}");
     }
     // Keyless extend PAdES-T -> LT -> LTA with no key provider.

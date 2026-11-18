@@ -16,8 +16,8 @@
 //!
 //! The command line binary is `ONCL_BIN`, or `oncl[.exe]` of the build directory named by
 //! `CARGO_TARGET_DIR` (default: the workspace's `target`); OpenSSL is `ONCL_OPENSSL`, `openssl`
-//! on the path, or Git for Windows'. A tool that is missing FAILS the test; nothing is skipped
-//! silently.
+//! on the path, or Git for Windows'. A test whose tool is missing is skipped with a line on
+//! stderr naming it, and fails under `ONCL_REQUIRE_ORACLES=1`; nothing is skipped silently.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -141,10 +141,9 @@ impl Lab {
         (output.status.code(), report)
     }
 
-    fn openssl_cms(&self, signature: &Path, content: &Path) -> bool {
-        let openssl = oncl_testkit::tool::openssl();
+    fn openssl_cms(&self, openssl: &str, signature: &Path, content: &Path) -> bool {
         let root_pem = self.w.dir.path().join("root.pem");
-        let converted = Command::new(&openssl)
+        let converted = Command::new(openssl)
             .args([
                 "x509",
                 "-inform",
@@ -157,7 +156,7 @@ impl Lab {
             .output()
             .unwrap();
         assert!(converted.status.success());
-        Command::new(&openssl)
+        Command::new(openssl)
             .args([
                 "cms",
                 "-verify",
@@ -182,14 +181,14 @@ impl Lab {
             .success()
     }
 
-    fn pyhanko(&self, pdf: &Path) -> (bool, serde_json::Value) {
+    fn pyhanko(&self, python: &Path, pdf: &Path) -> (bool, serde_json::Value) {
         let script = self.w.dir.path().join("pyhanko_oracle.py");
         std::fs::write(
             &script,
             include_str!("../../../oncl-cli/tests/support/pyhanko_oracle.py"),
         )
         .unwrap();
-        let out: Output = Command::new(oncl_testkit::tool::pyhanko_python())
+        let out: Output = Command::new(python)
             .args([text(&script), text(pdf), text(&self.root), "1793620920"])
             .output()
             .unwrap();
@@ -198,7 +197,7 @@ impl Lab {
         (out.status.success(), json)
     }
 
-    fn xml_oracle(&self, signed: &Path) -> (bool, String) {
+    fn xml_oracle(&self, python: &Path, signed: &Path) -> (bool, String) {
         let script = self.w.dir.path().join("xmldsig_oracle.py");
         std::fs::write(
             &script,
@@ -207,7 +206,7 @@ impl Lab {
         .unwrap();
         let leaf = self.w.dir.path().join("oracle-leaf.der");
         std::fs::write(&leaf, self.w.leaf.cert.to_der().unwrap()).unwrap();
-        let out = Command::new(oncl_testkit::tool::pyhanko_python())
+        let out = Command::new(python)
             .args([text(&script), text(signed), text(&leaf)])
             .output()
             .unwrap();
@@ -267,6 +266,9 @@ fn cli_says(report: &serde_json::Value) -> (String, Option<String>) {
 #[test]
 #[ignore = "parity: needs the oncl binary and OpenSSL (see the module docs)"]
 fn cms_and_cades_signatures_agree_with_the_command_line_and_openssl() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let lab = lab();
     let content = lab.write("doc.bin", b"the document of the parity run");
     let altered = lab.write("altered.bin", b"the document of the parity RUN");
@@ -332,7 +334,7 @@ fn cms_and_cades_signatures_agree_with_the_command_line_and_openssl() {
             "{profile}: the level the workspace verified"
         );
         assert!(
-            lab.openssl_cms(&signature, &content),
+            lab.openssl_cms(&openssl, &signature, &content),
             "{profile}: OpenSSL accepts"
         );
         // The altered document: refused by all.
@@ -351,7 +353,7 @@ fn cms_and_cades_signatures_agree_with_the_command_line_and_openssl() {
         let (code, report) = lab.cli_verify(profile, &signature, Some(&altered));
         assert_eq!(code, Some(2), "{profile}: oncl verify refuses: {report}");
         assert!(
-            !lab.openssl_cms(&signature, &altered),
+            !lab.openssl_cms(&openssl, &signature, &altered),
             "{profile}: OpenSSL refuses"
         );
     }
@@ -363,6 +365,9 @@ fn cms_and_cades_signatures_agree_with_the_command_line_and_openssl() {
 #[test]
 #[ignore = "parity: needs the oncl binary and pyHanko (see the module docs)"]
 fn pades_signatures_agree_with_the_command_line_and_pyhanko() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let lab = lab();
     let source = oncl_testkit::workspace_root()
         .join("crates/oncl-pdf/tests/fixtures/external-multipage.pdf");
@@ -447,7 +452,7 @@ fn pades_signatures_agree_with_the_command_line_and_pyhanko() {
             "{profile}: oncl verify refuses the altered PDF"
         );
         if pyhanko {
-            let (ok, json) = lab.pyhanko(&signed);
+            let (ok, json) = lab.pyhanko(&python, &signed);
             assert!(ok, "{profile}: pyHanko accepts: {json}");
             assert!(
                 json["signatures"].as_u64().unwrap_or(0) >= 1,
@@ -460,7 +465,7 @@ fn pades_signatures_agree_with_the_command_line_and_pyhanko() {
                 );
             }
             assert!(
-                !lab.pyhanko(&tampered).0,
+                !lab.pyhanko(&python, &tampered).0,
                 "{profile}: pyHanko refuses the altered PDF"
             );
         }
@@ -473,6 +478,9 @@ fn pades_signatures_agree_with_the_command_line_and_pyhanko() {
 #[test]
 #[ignore = "parity: needs the oncl binary and python with lxml and cryptography (see the module docs)"]
 fn xml_signatures_agree_with_the_command_line_and_the_xml_oracle() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let lab = lab();
     let xml = lab.write("x.xml", b"<r><p Id='p'>protected</p><s Id='s'/></r>");
     let ids = SignOptions {
@@ -550,13 +558,13 @@ fn xml_signatures_agree_with_the_command_line_and_the_xml_oracle() {
             "{profile}"
         );
         if oracle {
-            let (ok, proof) = lab.xml_oracle(&signed);
+            let (ok, proof) = lab.xml_oracle(&python, &signed);
             assert!(
                 ok,
                 "{profile}: the XML oracle rejects the workspace's signature: {proof}"
             );
             assert!(
-                !lab.xml_oracle(&edited_path).0,
+                !lab.xml_oracle(&python, &edited_path).0,
                 "{profile}: the oracle refuses the edit"
             );
         }
@@ -598,6 +606,9 @@ fn wsse_signatures_agree_with_the_command_line() {
 #[test]
 #[ignore = "parity: needs the oncl binary and OpenSSL (see the module docs)"]
 fn extended_cades_agrees_with_the_command_line_and_openssl() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let lab = lab();
     let content = lab.write("doc.bin", b"extend me");
     lab.sign(
@@ -640,7 +651,7 @@ fn extended_cades_agrees_with_the_command_line_and_openssl() {
             "{profile}"
         );
         assert!(
-            lab.openssl_cms(&current, &content),
+            lab.openssl_cms(&openssl, &current, &content),
             "{profile}: OpenSSL accepts"
         );
     }

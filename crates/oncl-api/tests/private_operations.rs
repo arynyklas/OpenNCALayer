@@ -15,6 +15,9 @@ fn sign_metadata(profile: &str, extra: &str) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inline_rsa_cms_create_is_audited_verified_by_openssl_and_never_spooled() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let p12 = container(&leaf, PASSWORD);
@@ -62,7 +65,7 @@ async fn inline_rsa_cms_create_is_audited_verified_by_openssl_and_never_spooled(
     let directory = tempfile::tempdir().unwrap();
     // Independent oracle: OpenSSL verifies the attached CMS and recovers content.
     assert_eq!(
-        openssl_cms_verify(signature, None, directory.path()).as_deref(),
+        openssl_cms_verify(&openssl, signature, None, directory.path()).as_deref(),
         Some(payload.as_slice())
     );
     let mut altered = signature.to_vec();
@@ -71,7 +74,7 @@ async fn inline_rsa_cms_create_is_audited_verified_by_openssl_and_never_spooled(
         .position(|w| w == payload)
         .unwrap();
     altered[at] ^= 1;
-    assert!(openssl_cms_verify(&altered, None, directory.path()).is_none());
+    assert!(openssl_cms_verify(&openssl, &altered, None, directory.path()).is_none());
     // Exactly one durable private use bound to this principal and exact InlineID.
     let records = service.host.audit.records().unwrap();
     let begin: Vec<_> = records
@@ -140,6 +143,9 @@ async fn inline_key_without_client_right_is_refused_before_provider_or_audit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn named_operator_key_signs_only_with_exact_key_right() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let service = Running::start_with(|config, dir| {
         config.pki = pki.config(dir);
@@ -163,8 +169,12 @@ async fn named_operator_key_signs_only_with_exact_key_right() {
     assert_eq!(final_event(&parts)["status"], "completed");
     let dir = tempfile::tempdir().unwrap();
     let signature = artifact(&parts, "artifact-0");
-    assert!(openssl_cms_verify(signature, Some(b"named key content"), dir.path()).is_some());
-    assert!(openssl_cms_verify(signature, Some(b"named key contenT"), dir.path()).is_none());
+    assert!(
+        openssl_cms_verify(&openssl, signature, Some(b"named key content"), dir.path()).is_some()
+    );
+    assert!(
+        openssl_cms_verify(&openssl, signature, Some(b"named key contenT"), dir.path()).is_none()
+    );
     // A different alias is not authorized for this token.
     let other = metadata.replace("ops-key", "other-key");
     let body = multipart(
@@ -238,6 +248,9 @@ async fn sign_inline(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cades_t_create_add_and_keyless_extend_use_actual_tsa_and_openssl_oracle() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -248,7 +261,7 @@ async fn cades_t_create_add_and_keyless_extend_use_actual_tsa_and_openssl_oracle
     let done = final_event(&parts);
     assert_eq!(done["status"], "completed", "{done}");
     let base = artifact(&parts, "artifact-0").to_vec();
-    assert!(openssl_cms_verify(&base, Some(payload), dir.path()).is_some());
+    assert!(openssl_cms_verify(&openssl, &base, Some(payload), dir.path()).is_some());
     let begins_before = service
         .host
         .audit
@@ -282,9 +295,9 @@ async fn cades_t_create_add_and_keyless_extend_use_actual_tsa_and_openssl_oracle
     assert_eq!(done["results"][0]["applied"], "NotApplied");
     let extended = artifact(&parts, "artifact-0");
     assert!(extended.len() > base.len());
-    assert!(openssl_cms_verify(extended, Some(payload), dir.path()).is_some());
+    assert!(openssl_cms_verify(&openssl, extended, Some(payload), dir.path()).is_some());
     // The signature-timestamp attribute (id-aa-signatureTimeStampToken) is present.
-    let print = std::process::Command::new(oncl_testkit::tool::openssl())
+    let print = std::process::Command::new(&openssl)
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg({
             let p = dir.path().join("ext.der");
@@ -308,6 +321,9 @@ async fn cades_t_create_add_and_keyless_extend_use_actual_tsa_and_openssl_oracle
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cades_t_create_acquires_a_real_timestamp_during_private_use() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -317,12 +333,12 @@ async fn cades_t_create_acquires_a_real_timestamp_during_private_use() {
     assert_eq!(final_event(&parts)["status"], "completed");
     let sig = artifact(&parts, "artifact-0");
     assert_eq!(
-        openssl_cms_verify(sig, None, dir.path()).as_deref(),
+        openssl_cms_verify(&openssl, sig, None, dir.path()).as_deref(),
         Some(payload.as_slice())
     );
     let p = dir.path().join("t.der");
     std::fs::write(&p, sig).unwrap();
-    let print = std::process::Command::new(oncl_testkit::tool::openssl())
+    let print = std::process::Command::new(&openssl)
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&p)
         .output()
@@ -334,10 +350,10 @@ async fn cades_t_create_acquires_a_real_timestamp_during_private_use() {
 fn count(haystack: &str, needle: &str) -> usize {
     haystack.matches(needle).count()
 }
-fn cms_print(bytes: &[u8], dir: &std::path::Path) -> String {
+fn cms_print(openssl: &str, bytes: &[u8], dir: &std::path::Path) -> String {
     let p = dir.join("print.der");
     std::fs::write(&p, bytes).unwrap();
-    let out = std::process::Command::new(oncl_testkit::tool::openssl())
+    let out = std::process::Command::new(openssl)
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&p)
         .output()
@@ -347,6 +363,9 @@ fn cms_print(bytes: &[u8], dir: &std::path::Path) -> String {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cms_add_cosigns_the_detached_container_with_a_second_private_use() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -354,7 +373,10 @@ async fn cms_add_cosigns_the_detached_container_with_a_second_private_use() {
     let payload = b"co-signed detached payload";
     let (_, parts) = sign_inline(&service, &p12, "cms", "", payload).await;
     let first = artifact(&parts, "artifact-0").to_vec();
-    assert_eq!(count(&cms_print(&first, dir.path()), "messageDigest"), 1);
+    assert_eq!(
+        count(&cms_print(&openssl, &first, dir.path()), "messageDigest"),
+        1
+    );
     let metadata = r#"{"items":[{"id":"a1","operation":{"kind":"sign","profile":"cms","mode":"add","input":"sig","detached":"content","keys":[{"source":"inline","container":"p12","password":"pw"}]}}],"parts":[{"name":"p12","item_id":"a1","role":"secret"},{"name":"pw","item_id":"a1","role":"secret"},{"name":"sig","item_id":"a1","role":"document"},{"name":"content","item_id":"a1","role":"document"}]}"#;
     let body = multipart(
         metadata,
@@ -386,9 +408,12 @@ async fn cms_add_cosigns_the_detached_container_with_a_second_private_use() {
     let parts = mixed(&ct, response).await;
     assert_eq!(final_event(&parts)["status"], "completed");
     let second = artifact(&parts, "artifact-0");
-    assert_eq!(count(&cms_print(second, dir.path()), "messageDigest"), 2);
-    assert!(openssl_cms_verify(second, Some(payload), dir.path()).is_some());
-    assert!(openssl_cms_verify(second, Some(b"other"), dir.path()).is_none());
+    assert_eq!(
+        count(&cms_print(&openssl, second, dir.path()), "messageDigest"),
+        2
+    );
+    assert!(openssl_cms_verify(&openssl, second, Some(payload), dir.path()).is_some());
+    assert!(openssl_cms_verify(&openssl, second, Some(b"other"), dir.path()).is_none());
     let begins = service
         .host
         .audit
@@ -455,6 +480,9 @@ fn pdf_signatures(pdf: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pdf_incremental_signature_verifies_against_the_exact_byterange_in_openssl() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -475,10 +503,10 @@ async fn pdf_incremental_signature_verifies_against_the_exact_byterange_in_opens
         signed.len(),
         "the /ByteRange gap is exactly the signature hex and everything else is covered"
     );
-    assert!(openssl_cms_verify(cms, Some(covered), dir.path()).is_some());
+    assert!(openssl_cms_verify(&openssl, cms, Some(covered), dir.path()).is_some());
     let mut altered = covered.clone();
     altered[10] ^= 1;
-    assert!(openssl_cms_verify(cms, Some(&altered), dir.path()).is_none());
+    assert!(openssl_cms_verify(&openssl, cms, Some(&altered), dir.path()).is_none());
     service.stop().await;
 }
 
@@ -525,10 +553,10 @@ async fn audit_failure_before_use_is_a_not_applied_terminal_failure_without_arti
     service.stop().await;
 }
 
-fn run_openssl(args: &[&str], input: &[u8], dir: &std::path::Path) -> String {
+fn run_openssl(openssl: &str, args: &[&str], input: &[u8], dir: &std::path::Path) -> String {
     let file = dir.join("openssl.in");
     std::fs::write(&file, input).unwrap();
-    let mut command = std::process::Command::new(oncl_testkit::tool::openssl());
+    let mut command = std::process::Command::new(openssl);
     command.args(args).arg(&file);
     let out = command.output().unwrap();
     assert!(
@@ -556,6 +584,9 @@ async fn operate(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn inspect_certificate_cms_and_container_are_public_metadata_with_exact_alias_grants() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let cert_der = {
@@ -589,6 +620,7 @@ async fn inspect_certificate_cms_and_container_are_public_metadata_with_exact_al
     let done = json(status, &response);
     let entry = &done["results"][0]["result"]["entries"][0];
     let serial = run_openssl(
+        &openssl,
         &["x509", "-inform", "DER", "-noout", "-serial", "-in"],
         &cert_der,
         dir.path(),
@@ -602,6 +634,7 @@ async fn inspect_certificate_cms_and_container_are_public_metadata_with_exact_al
             .trim_start_matches('0')
     );
     let fingerprint = run_openssl(
+        &openssl,
         &[
             "x509",
             "-inform",
@@ -674,6 +707,9 @@ async fn inspect_certificate_cms_and_container_are_public_metadata_with_exact_al
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn standalone_stamp_and_verify_report_token_facts_and_bad_imprint_is_a_200_invalid() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let service = Running::start_with(|config, dir| {
         config.pki = pki.config(dir);
@@ -703,12 +739,13 @@ async fn standalone_stamp_and_verify_report_token_facts_and_bad_imprint_is_a_200
     let token = artifact(&parts, "artifact-0").to_vec();
     // Independent oracle: OpenSSL reads the message imprint inside the actual token.
     let text = run_openssl(
+        &openssl,
         &["ts", "-reply", "-token_in", "-text", "-in"],
         &token,
         dir.path(),
     );
     let digest = {
-        let out = run_openssl(&["dgst", "-sha256", "-r"], data, dir.path());
+        let out = run_openssl(&openssl, &["dgst", "-sha256", "-r"], data, dir.path());
         out.split_whitespace().next().unwrap().to_owned()
     };
     assert!(text.contains("Hash Algorithm: sha256"), "{text}");
@@ -809,7 +846,7 @@ fn b64url_decode(text: &str) -> Vec<u8> {
     out
 }
 /// Independent RS256 oracle: OpenSSL verifies header.payload with the leaf key.
-fn openssl_rs256(token: &str, public_pem: &[u8], dir: &std::path::Path) -> bool {
+fn openssl_rs256(openssl: &str, token: &str, public_pem: &[u8], dir: &std::path::Path) -> bool {
     let mut parts = token.split('.');
     let (h, p, s) = (
         parts.next().unwrap(),
@@ -819,7 +856,7 @@ fn openssl_rs256(token: &str, public_pem: &[u8], dir: &std::path::Path) -> bool 
     std::fs::write(dir.join("jws.pub"), public_pem).unwrap();
     std::fs::write(dir.join("jws.sig"), b64url_decode(s)).unwrap();
     std::fs::write(dir.join("jws.in"), format!("{h}.{p}")).unwrap();
-    std::process::Command::new(oncl_testkit::tool::openssl())
+    std::process::Command::new(openssl)
         .args(["dgst", "-sha256", "-verify"])
         .arg(dir.join("jws.pub"))
         .arg("-signature")
@@ -833,6 +870,9 @@ fn openssl_rs256(token: &str, public_pem: &[u8], dir: &std::path::Path) -> bool 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let p12 = container(&leaf, PASSWORD);
@@ -851,6 +891,7 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
     };
     let pem = {
         let out = run_openssl(
+            &openssl,
             &["x509", "-inform", "DER", "-pubkey", "-noout", "-in"],
             &cert_der,
             dir.path(),
@@ -884,11 +925,12 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
         "Applied"
     );
     let jws = String::from_utf8(artifact(&mixed_parts, "artifact-0").to_vec()).unwrap();
-    assert!(openssl_rs256(&jws, &pem, dir.path()));
+    assert!(openssl_rs256(&openssl, &jws, &pem, dir.path()));
     let mut forged = jws.clone().into_bytes();
     let at = jws.rfind('.').unwrap() + 3;
     forged[at] = if forged[at] == b'A' { b'B' } else { b'A' };
     assert!(!openssl_rs256(
+        &openssl,
         std::str::from_utf8(&forged).unwrap(),
         &pem,
         dir.path()
@@ -952,7 +994,7 @@ async fn jws_and_jwt_sign_verify_and_decode_are_separate_typed_operations() {
         let (status, mixed_parts, response) = operate(&service, metadata, &parts).await;
         assert_eq!(status, 200, "{}", String::from_utf8_lossy(&response));
         let token = String::from_utf8(artifact(&mixed_parts, "artifact-0").to_vec()).unwrap();
-        assert!(openssl_rs256(&token, &pem, dir.path()));
+        assert!(openssl_rs256(&openssl, &token, &pem, dir.path()));
         tokens.push(token);
     }
     let verify = r#"{"items":[{"id":"v","operation":{"kind":"jwt_verify","input":"jwt"}}],"parts":[{"name":"jwt","item_id":"v","role":"document"}]}"#;
@@ -1418,11 +1460,12 @@ async fn published_openapi_examples_are_accepted_by_the_running_service() {
     service.stop().await;
 }
 
-fn xml_oracle(xml: &[u8], dir: &std::path::Path) -> serde_json::Value {
+/// `python` is `oncl_testkit::tool::pyhanko_python_or_skip`'s.
+fn xml_oracle(python: &std::path::Path, xml: &[u8], dir: &std::path::Path) -> serde_json::Value {
     let file = dir.join("signed.xml");
     std::fs::write(&file, xml).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/xml_verify.py");
-    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
+    let out = std::process::Command::new(python)
         .arg(script)
         .arg(&file)
         .output()
@@ -1437,6 +1480,9 @@ fn xml_oracle(xml: &[u8], dir: &std::path::Path) -> serde_json::Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn enveloped_xml_and_xades_signatures_verify_in_lxml_and_cryptography() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -1454,7 +1500,7 @@ async fn enveloped_xml_and_xades_signatures_verify_in_lxml_and_cryptography() {
         let done = final_event(&parts);
         assert_eq!(done["status"], "completed", "{profile}: {done}");
         let signed = artifact(&parts, "artifact-0");
-        let verdict = xml_oracle(signed, dir.path());
+        let verdict = xml_oracle(&python, signed, dir.path());
         assert_eq!(
             verdict["checked"], true,
             "oracle must check at least one reference per signature: {verdict}"
@@ -1477,7 +1523,7 @@ async fn enveloped_xml_and_xades_signatures_verify_in_lxml_and_cryptography() {
         );
         // Altering signed content breaks the independent digest check.
         let altered = String::from_utf8_lossy(signed).replace("payload text", "payload texT");
-        let broken = xml_oracle(altered.as_bytes(), dir.path());
+        let broken = xml_oracle(&python, altered.as_bytes(), dir.path());
         assert!(
             broken["signatures"]
                 .as_array()
@@ -1543,6 +1589,9 @@ async fn malformed_signing_input_is_a_typed_not_applied_failure_not_a_transport_
 /// tamper control. No independent GOST math is claimed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gost_cms_signatures_are_structurally_checked_and_sdk_verified_over_http() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let dir = tempfile::tempdir().unwrap();
     for (fixture, signature_oid, digest_oid) in [
@@ -1573,7 +1622,7 @@ async fn gost_cms_signatures_are_structurally_checked_and_sdk_verified_over_http
         assert_eq!(done["status"], "completed", "{fixture}: {done}");
         assert_eq!(done["results"][0]["result"]["signers"][0], "Applied");
         let signature = artifact(&parts, "artifact-0").to_vec();
-        let print = cms_print(&signature, dir.path());
+        let print = cms_print(&openssl, &signature, dir.path());
         // OpenSSL decodes the actual wire OIDs (no GOST names: it has no GOST provider).
         assert!(
             print.contains(signature_oid),
@@ -1636,6 +1685,9 @@ async fn gost_cms_signatures_are_structurally_checked_and_sdk_verified_over_http
 /// route (secondary), with tamper controls.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gost_xmldsig_is_structurally_checked_and_sdk_verified_over_http() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-gost2015-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -1653,7 +1705,7 @@ async fn gost_xmldsig_is_structurally_checked_and_sdk_verified_over_http() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("g.xml");
     std::fs::write(&file, &signed).unwrap();
-    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
+    let out = std::process::Command::new(&python)
         .arg("-c")
         .arg(
             r#"
@@ -1730,8 +1782,13 @@ print(json.dumps({'sig':si.find('{%s}SignatureMethod'%DS).get('Algorithm'),
     service.stop().await;
 }
 
-fn pyhanko(pdf: &[u8], leaf_der: &[u8], dir: &std::path::Path) -> serde_json::Value {
-    let python = oncl_testkit::tool::pyhanko_python();
+/// `python` is `oncl_testkit::tool::pyhanko_python_or_skip`'s.
+fn pyhanko(
+    python: &std::path::Path,
+    pdf: &[u8],
+    leaf_der: &[u8],
+    dir: &std::path::Path,
+) -> serde_json::Value {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/pdf_pyhanko.py");
     std::fs::write(dir.join("o.pdf"), pdf).unwrap();
     std::fs::write(dir.join("leaf.der"), leaf_der).unwrap();
@@ -1751,6 +1808,9 @@ fn pyhanko(pdf: &[u8], leaf_der: &[u8], dir: &std::path::Path) -> serde_json::Va
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pades_levels_over_http_validate_in_pyhanko() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let leaf_der = {
@@ -1822,7 +1882,7 @@ async fn pades_levels_over_http_validate_in_pyhanko() {
         let done = final_event(&parts);
         assert_eq!(done["status"], "completed", "{level}: {done}");
         let signed = artifact(&parts, "artifact-0");
-        let report = pyhanko(signed, &leaf_der, dir.path());
+        let report = pyhanko(&python, signed, &leaf_der, dir.path());
         let signatures = report["signatures"].as_array().unwrap();
         assert!(!signatures.is_empty(), "{level}: {report}");
         // The signer's signature (first signature) is intact and valid in pyHanko.
@@ -1863,7 +1923,7 @@ async fn pades_levels_over_http_validate_in_pyhanko() {
         // only a real digest/integrity break can be detected (not a parse failure).
         let at = pdf.windows(8).position(|w| w == b"preserve").unwrap();
         altered[at] = b'P';
-        let broken = pyhanko(&altered, &leaf_der, dir.path());
+        let broken = pyhanko(&python, &altered, &leaf_der, dir.path());
         assert!(
             broken["signatures"]
                 .as_array()
@@ -2746,6 +2806,9 @@ async fn extract_and_hash_responses_match_the_schema_and_unimplemented_routes_st
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn legacy_xml_and_wsse_sign_verify_with_independent_lxml_oracle_and_shape_refusals() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -2756,7 +2819,7 @@ async fn legacy_xml_and_wsse_sign_verify_with_independent_lxml_oracle_and_shape_
     let done = final_event(&parts);
     assert_eq!(done["status"], "completed", "{done}");
     let signed = artifact(&parts, "artifact-0");
-    let verdict = xml_oracle(signed, dir.path());
+    let verdict = xml_oracle(&python, signed, dir.path());
     assert_eq!(verdict["checked"], true, "{verdict}");
     assert_eq!(
         verdict["signatures"][0]["signature_valid"], true,
@@ -2771,7 +2834,7 @@ async fn legacy_xml_and_wsse_sign_verify_with_independent_lxml_oracle_and_shape_
     );
     assert_eq!(verdict["signatures"][0]["references"][0]["uri"], "#d");
     let altered = String::from_utf8_lossy(signed).replace("legacy payload", "legacy payloaD");
-    let broken = xml_oracle(altered.as_bytes(), dir.path());
+    let broken = xml_oracle(&python, altered.as_bytes(), dir.path());
     assert!(
         broken["signatures"][0]["references"]
             .as_array()
@@ -2785,7 +2848,7 @@ async fn legacy_xml_and_wsse_sign_verify_with_independent_lxml_oracle_and_shape_
     let done = final_event(&parts);
     assert_eq!(done["status"], "completed", "{done}");
     let signed = artifact(&parts, "artifact-0");
-    let verdict = xml_oracle(signed, dir.path());
+    let verdict = xml_oracle(&python, signed, dir.path());
     assert_eq!(verdict["checked"], true, "{verdict}");
     assert_eq!(
         verdict["signatures"][0]["signature_valid"], true,
@@ -2855,6 +2918,9 @@ async fn legacy_xml_and_wsse_sign_verify_with_independent_lxml_oracle_and_shape_
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn xades_legacy_b_and_t_are_signed_over_http_and_checked_by_lxml() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
@@ -2866,7 +2932,7 @@ async fn xades_legacy_b_and_t_are_signed_over_http_and_checked_by_lxml() {
         let done = final_event(&parts);
         assert_eq!(done["status"], "completed", "{profile}: {done}");
         let signed = artifact(&parts, "artifact-0");
-        let verdict = xml_oracle(signed, dir.path());
+        let verdict = xml_oracle(&python, signed, dir.path());
         assert_eq!(verdict["checked"], true, "{profile}: {verdict}");
         for signature in verdict["signatures"].as_array().unwrap() {
             assert_eq!(signature["signature_valid"], true, "{profile}: {verdict}");
@@ -2989,6 +3055,9 @@ fn named_sign(name: &str, doc: &str) -> (String, Vec<u8>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn token_key_signs_over_http_serializes_per_device_and_fails_closed_without_a_card() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let leaf = pki.leaf("user-rsa-sign");
     let alias = leaf.alias.clone();
@@ -3053,7 +3122,8 @@ async fn token_key_signs_over_http_serializes_per_device_and_fails_closed_withou
         assert_eq!(final_event(&parts)["status"], "completed");
         let content = format!("token payload {round}");
         assert_eq!(
-            openssl_cms_verify(artifact(&parts, "artifact-0"), None, dir.path()).as_deref(),
+            openssl_cms_verify(&openssl, artifact(&parts, "artifact-0"), None, dir.path())
+                .as_deref(),
             Some(content.as_bytes())
         );
     }
@@ -3120,6 +3190,9 @@ const MESSAGE: &[u8] = b"plugin raw signing over HTTP";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusals() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     use oncl_pdk::abi::{self, Import};
     use oncl_server::config::{PluginConfig, PluginGrant};
     let pki = Pki::start();
@@ -3231,7 +3304,7 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     let digest = private_support::plugin::reply_bytes(
         done["results"][0]["result"]["response"].as_str().unwrap(),
     );
-    assert_eq!(digest, hex(&sha256(b"abc")));
+    assert_eq!(digest, hex(&sha256(&openssl, b"abc")));
     // Granted key plugin signs through the original context + durable audit.
     let (status, _, response) = service
         .post(FORM, multipart(&call("test.sign", key1, "\"{}\""), &[]))
@@ -3245,6 +3318,7 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     );
     let tmp = tempfile::tempdir().unwrap();
     let pem = run_openssl(
+        &openssl,
         &["x509", "-inform", "DER", "-pubkey", "-noout", "-in"],
         &{
             use der::Encode;
@@ -3255,7 +3329,7 @@ async fn plugin_route_uses_operator_grants_the_original_context_and_typed_refusa
     std::fs::write(tmp.path().join("k.pub"), pem).unwrap();
     std::fs::write(tmp.path().join("s.sig"), &signature).unwrap();
     std::fs::write(tmp.path().join("m.bin"), MESSAGE).unwrap();
-    let verified = std::process::Command::new(oncl_testkit::tool::openssl())
+    let verified = std::process::Command::new(&openssl)
         .args(["dgst", "-sha256", "-verify"])
         .arg(tmp.path().join("k.pub"))
         .arg("-signature")
@@ -3433,8 +3507,8 @@ content = "param:file"
     assert_eq!(service.host.audit.plugin_records().unwrap().len(), 1);
     service.stop().await;
 }
-fn sha256(bytes: &[u8]) -> Vec<u8> {
-    let out = std::process::Command::new(oncl_testkit::tool::openssl())
+fn sha256(openssl: &str, bytes: &[u8]) -> Vec<u8> {
+    let out = std::process::Command::new(openssl)
         .args(["dgst", "-sha256", "-binary"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -3451,6 +3525,9 @@ fn hex(bytes: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn xades_timestamp_levels_need_a_host_tsa_policy_refused_before_the_key_opens() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let dir = tempfile::tempdir().unwrap();
@@ -3460,7 +3537,7 @@ async fn xades_timestamp_levels_need_a_host_tsa_policy_refused_before_the_key_op
     let service = Running::start_with(inline_service_config(&pki)).await;
     let (_, parts) = sign_inline(&service, &p12, "xades_t", shape, xml).await;
     assert_eq!(final_event(&parts)["status"], "completed");
-    let verdict = xml_oracle(artifact(&parts, "artifact-0"), dir.path());
+    let verdict = xml_oracle(&python, artifact(&parts, "artifact-0"), dir.path());
     assert_eq!(
         verdict["signatures"][0]["signature_valid"], true,
         "{verdict}"
@@ -3521,6 +3598,9 @@ async fn xades_timestamp_levels_need_a_host_tsa_policy_refused_before_the_key_op
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn lt_levels_need_status_material_and_the_pades_memory_profile_before_any_key_use() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let inter = {
@@ -3616,6 +3696,7 @@ async fn lt_levels_need_status_material_and_the_pades_memory_profile_before_any_
     let dir = tempfile::tempdir().unwrap();
     assert!(
         openssl_cms_verify(
+            &openssl,
             artifact(&parts, "artifact-0"),
             Some(b"lt payload"),
             dir.path()
@@ -4708,6 +4789,9 @@ async fn plugin_grant_key_must_also_be_a_token_key_and_plugin_config_is_bounded(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn xades_lt_and_lta_are_sign_t_then_keyless_extend_and_stay_valid_in_lxml() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let inter = {
@@ -4767,7 +4851,7 @@ async fn xades_lt_and_lta_are_sign_t_then_keyless_extend_and_stay_valid_in_lxml(
             "extension is keyless"
         );
         current = artifact(&parts, "artifact-0").to_vec();
-        let verdict = xml_oracle(&current, dir.path());
+        let verdict = xml_oracle(&python, &current, dir.path());
         assert_eq!(verdict["checked"], true, "{level}: {verdict}");
         assert_eq!(
             verdict["signatures"][0]["signature_valid"], true,

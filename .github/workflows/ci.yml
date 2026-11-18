@@ -25,6 +25,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A test whose external program (OpenSSL, pyHanko's Python, keytool, certutil, git) is
+  # missing fails here instead of being skipped (docs/dev/development.md, «Что нужно для тестов»).
+  ONCL_REQUIRE_ORACLES: "1"
 
 jobs:
   fmt:

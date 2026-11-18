@@ -233,6 +233,9 @@ async fn presign(service: &Running, p12: &[u8], payload: &[u8]) -> Vec<u8> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mixed_batch_with_one_bad_source_keeps_exact_per_item_facts_and_verified_artifacts() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(service_config(&pki, |_| {})).await;
@@ -279,7 +282,10 @@ async fn mixed_batch_with_one_bad_source_keeps_exact_per_item_facts_and_verified
     assert_eq!(records[0]["applied"], "Applied");
     assert_eq!(records[0]["result"]["signers"][0], "Applied");
     let first = artifact(&parts, records[0]["result"]["artifact"].as_str().unwrap());
-    assert_eq!(openssl_cms_verify(first, None, dir.path()).unwrap(), a);
+    assert_eq!(
+        openssl_cms_verify(&openssl, first, None, dir.path()).unwrap(),
+        a
+    );
     // Item 1: failed before key use, no artifact, NotApplied, typed code.
     assert_eq!(records[1]["outcome"], "failed");
     assert_eq!(records[1]["applied"], "NotApplied");
@@ -304,7 +310,10 @@ async fn mixed_batch_with_one_bad_source_keeps_exact_per_item_facts_and_verified
     assert_eq!(records[4]["outcome"], "completed");
     assert_eq!(records[4]["applied"], "Applied");
     let last = artifact(&parts, records[4]["result"]["artifact"].as_str().unwrap());
-    assert_eq!(openssl_cms_verify(last, None, dir.path()).unwrap(), b);
+    assert_eq!(
+        openssl_cms_verify(&openssl, last, None, dir.path()).unwrap(),
+        b
+    );
     assert_eq!(
         parts.iter().filter(|(n, _, _)| n == "artifact").count(),
         2,
@@ -467,6 +476,9 @@ async fn approval_and_authority_cannot_be_supplied_by_the_payload() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_quota_stop_keeps_finished_artifacts_and_reports_the_rest_not_run() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(service_config(&pki, |config| {
@@ -508,7 +520,10 @@ async fn terminal_quota_stop_keeps_finished_artifacts_and_reports_the_rest_not_r
     let delivered: Vec<_> = parts.iter().filter(|(n, _, _)| n == "artifact").collect();
     assert_eq!(delivered.len(), 1, "{done}");
     let first = artifact(&parts, records[0]["result"]["artifact"].as_str().unwrap());
-    assert_eq!(openssl_cms_verify(first, None, dir.path()).unwrap(), small);
+    assert_eq!(
+        openssl_cms_verify(&openssl, first, None, dir.path()).unwrap(),
+        small
+    );
     assert_eq!(begins(&service), [Some(0), Some(1)]);
     service.stop().await;
 }
@@ -755,10 +770,10 @@ async fn progress_names_the_current_item_while_it_is_held_and_the_final_follows(
     service.stop().await;
 }
 
-fn cms_print(signature: &[u8], dir: &Path) -> String {
+fn cms_print(openssl: &str, signature: &[u8], dir: &Path) -> String {
     let file = dir.join("print.p7s");
     std::fs::write(&file, signature).unwrap();
-    let out = std::process::Command::new(oncl_testkit::tool::openssl())
+    let out = std::process::Command::new(openssl)
         .args(["cms", "-cmsout", "-print", "-inform", "DER", "-in"])
         .arg(&file)
         .output()
@@ -775,6 +790,9 @@ fn cms_print(signature: &[u8], dir: &Path) -> String {
 /// of a second batch, with a tampered control that must be Invalid.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn gost_batch_signatures_carry_the_gost_oids_and_verify_in_a_second_batch() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let dir = tempfile::tempdir().unwrap();
     for (fixture, signature_oid, digest_oid) in [
@@ -796,7 +814,7 @@ async fn gost_batch_signatures_carry_the_gost_oids_and_verify_in_a_second_batch(
         assert_eq!(done["status"], "completed", "{fixture}: {done}");
         assert_eq!(done["items"][0]["applied"], "Applied");
         let signature = artifact(&parts, "artifact-0").to_vec();
-        let print = cms_print(&signature, dir.path());
+        let print = cms_print(&openssl, &signature, dir.path());
         assert!(print.contains(signature_oid), "{fixture}: {signature_oid}");
         assert!(print.contains(digest_oid), "{fixture}: {digest_oid}");
         let mut tampered = signature.clone();
@@ -1006,11 +1024,12 @@ fn last_pdf_signature(pdf: &[u8]) -> (Vec<u8>, Vec<u8>, usize) {
     cms.truncate(der_len(&cms));
     (covered, cms, n[2] - (n[0] + n[1]))
 }
-fn xml_oracle(xml: &[u8], dir: &Path) -> serde_json::Value {
+/// `python` is `oncl_testkit::tool::pyhanko_python_or_skip`'s.
+fn xml_oracle(python: &Path, xml: &[u8], dir: &Path) -> serde_json::Value {
     let file = dir.join("signed.xml");
     std::fs::write(&file, xml).unwrap();
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/oracles/xml_verify.py");
-    let out = std::process::Command::new(oncl_testkit::tool::pyhanko_python())
+    let out = std::process::Command::new(python)
         .arg(script)
         .arg(&file)
         .output()
@@ -1028,6 +1047,12 @@ fn xml_oracle(xml: &[u8], dir: &Path) -> serde_json::Value {
 /// /ByteRange; lxml + cryptography for XMLDSig).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pdf_and_xml_items_in_one_batch_are_verified_by_independent_oracles() {
+    let (Some(openssl), Some(python)) = (
+        oncl_testkit::tool::openssl_or_skip(),
+        oncl_testkit::tool::pyhanko_python_or_skip(),
+    ) else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     // Completed format reports retain their bounded metadata until the batch ends:
@@ -1058,16 +1083,16 @@ async fn pdf_and_xml_items_in_one_batch_are_verified_by_independent_oracles() {
     assert!(signed_pdf.starts_with(pdf.as_slice()), "incremental update");
     let (covered, cms, gap) = last_pdf_signature(signed_pdf);
     assert_eq!(covered.len() + gap, signed_pdf.len());
-    assert!(openssl_cms_verify(&cms, Some(&covered), dir.path()).is_some());
+    assert!(openssl_cms_verify(&openssl, &cms, Some(&covered), dir.path()).is_some());
     let mut altered = covered.clone();
     altered[10] ^= 1;
-    assert!(openssl_cms_verify(&cms, Some(&altered), dir.path()).is_none());
+    assert!(openssl_cms_verify(&openssl, &cms, Some(&altered), dir.path()).is_none());
     for (index, xades) in [(2usize, false), (3usize, true)] {
         let signed = artifact(
             &parts,
             records[index]["result"]["artifact"].as_str().unwrap(),
         );
-        let verdict = xml_oracle(signed, dir.path());
+        let verdict = xml_oracle(&python, signed, dir.path());
         assert_eq!(verdict["checked"], true, "{verdict}");
         for signature in verdict["signatures"].as_array().unwrap() {
             assert_eq!(signature["signature_valid"], true, "{verdict}");
@@ -1132,6 +1157,9 @@ async fn batch_uses_the_same_precheck_including_the_tsa_policy_order() {
 /// its honest Applied state, later items are `not_run` and the earlier artifact stands.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn exhausted_retained_report_metadata_is_a_typed_item_stop_that_keeps_earlier_artifacts() {
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(service_config(&pki, |config| {
@@ -1151,7 +1179,7 @@ async fn exhausted_retained_report_metadata_is_a_typed_item_stop_that_keeps_earl
     let records = done["items"].as_array().unwrap();
     assert_eq!(records[0]["outcome"], "completed", "{done}");
     let first = artifact(&parts, records[0]["result"]["artifact"].as_str().unwrap());
-    assert_eq!(xml_oracle(first, dir.path())["checked"], true);
+    assert_eq!(xml_oracle(&python, first, dir.path())["checked"], true);
     assert_eq!(records[1]["outcome"], "failed", "{done}");
     assert_eq!(records[1]["error"]["code"], "MetadataLimit", "{done}");
     assert_eq!(

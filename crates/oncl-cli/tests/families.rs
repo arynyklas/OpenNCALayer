@@ -81,6 +81,12 @@ fn timestamp_acquire_then_verify_is_valid_and_altered_data_is_not() {
 }
 #[test]
 fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() {
+    let (Some(python), Some(openssl)) = (
+        oncl_testkit::tool::python_or_skip(),
+        oncl_testkit::tool::openssl_or_skip(),
+    ) else {
+        return;
+    };
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let pdf = oncl_testkit::workspace_root()
@@ -130,7 +136,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
             w.dir.path().join(format!("{profile}.covered")),
             w.dir.path().join(format!("{profile}.cms")),
         );
-        let extract = Command::new(oncl_testkit::tool::python())
+        let extract = Command::new(&python)
             .args([path(&script), path(&out), path(&covered), path(&cms)])
             .output()
             .unwrap();
@@ -141,7 +147,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
         );
         let root_pem = w.dir.path().join("root.pem");
         assert!(
-            Command::new(oncl_testkit::tool::openssl())
+            Command::new(&openssl)
                 .args([
                     "x509",
                     "-inform",
@@ -156,7 +162,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
                 .success()
         );
         let check = |content: &Path| {
-            Command::new(oncl_testkit::tool::openssl())
+            Command::new(&openssl)
                 .args([
                     "cms",
                     "-verify",
@@ -191,7 +197,7 @@ fn pdf_pades_b_and_t_sign_verify_with_an_independent_byterange_openssl_oracle() 
         std::fs::write(&tampered, &tampered_bytes).unwrap();
         let (covered2, cms2) = (w.dir.path().join("t.covered"), w.dir.path().join("t.cms"));
         assert!(
-            Command::new(oncl_testkit::tool::python())
+            Command::new(&python)
                 .args([path(&script), path(&tampered), path(&covered2), path(&cms2)])
                 .status()
                 .unwrap()

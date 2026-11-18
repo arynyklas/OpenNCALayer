@@ -90,8 +90,9 @@ fn strict_private_sign_then_valid_zero_and_altered_two_for_rsa_and_gost() {
             Some(2),
             "{name}: altered data"
         );
-        if name == "rsa" {
-            let openssl = oncl_testkit::tool::openssl();
+        if name == "rsa"
+            && let Some(openssl) = oncl_testkit::tool::openssl_or_skip()
+        {
             let root_pem = w.dir.path().join("root.pem");
             let status = Command::new(&openssl)
                 .args([

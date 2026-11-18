@@ -25,12 +25,14 @@ struct Repo {
 }
 
 impl Repo {
-    fn new() -> Self {
+    /// `None` after the skip line when there is no `git`.
+    fn new() -> Option<Self> {
+        oncl_testkit::tool::GIT.or_skip(&["--version"])?;
         let repo = Repo {
             dir: tempfile::tempdir().unwrap(),
         };
         repo.git(&["init", "-q"]);
-        repo
+        Some(repo)
     }
 
     fn root(&self) -> &Path {
@@ -55,23 +57,22 @@ impl Repo {
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = oncl_testkit::tool::GIT.spawned(
-            Command::new("git")
-                .arg("-C")
-                .arg(self.root())
-                .args([
-                    "-c",
-                    "core.autocrlf=false",
-                    "-c",
-                    "user.name=Test",
-                    "-c",
-                    "user.email=test@example.invalid",
-                    "-c",
-                    "commit.gpgsign=false",
-                ])
-                .args(args)
-                .output(),
-        );
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(self.root())
+            .args([
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
         assert!(
             out.status.success(),
             "git {args:?}: {}",
@@ -158,7 +159,9 @@ fn pem(der: &[u8]) -> String {
 
 #[test]
 fn privacy_rejects_transcript_file() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write(
         "recordings/win11/heartbeat.jsonl.zst",
         [0x28, 0xb5, 0x2f, 0xfd],
@@ -183,7 +186,9 @@ fn privacy_rejects_transcript_file() {
 
 #[test]
 fn privacy_rejects_transcript_text() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write(
         "docs/observed.md",
         format!("# Observed\n\n{}\n", transcript_header()),
@@ -213,7 +218,9 @@ fn privacy_rejects_transcript_text() {
 
 #[test]
 fn privacy_rejects_machine_path() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write(
         "docs/setup.md",
         format!(
@@ -277,7 +284,9 @@ fn privacy_rejects_machine_path() {
 
 #[test]
 fn privacy_rejects_test_nca_certificate() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     let der = issued_by_test_ca();
     repo.write("keys/leaf.der", &der);
     repo.write("keys/leaf.pem", format!("# a leaf\n{}", pem(&der)));
@@ -324,7 +333,9 @@ fn privacy_rejects_test_nca_certificate() {
 
 #[test]
 fn privacy_accepts_synthetic_and_public_fixtures() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     let fixtures = workspace().join("fixtures");
     let mut certificates = 0;
     for dir in [
@@ -362,7 +373,9 @@ fn privacy_accepts_synthetic_and_public_fixtures() {
 fn privacy_denylist_hits_files_and_commit_messages() {
     let denylist =
         Denylist::parse("# private names\n\nsecrethost.example\nre:\\bnode-\\d{4}\\b\n").unwrap();
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write("README.md", "nothing here\n");
     let base = repo.commit("init");
     repo.write(
@@ -426,7 +439,9 @@ fn history_findings(findings: &[Finding]) -> Vec<(String, Option<usize>, Rule)> 
 #[test]
 fn privacy_range_checks_only_the_lines_a_commit_adds() {
     let denylist = Denylist::parse("secrethost.example\n").unwrap();
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     // Public already: the base holds the line.
     repo.write("docs/lab.md", "one\nsecrethost.example\ntwo\n");
     repo.write("data/lines.txt", "a\nsecrethost.example\nb\nc\n");
@@ -480,7 +495,9 @@ fn privacy_range_checks_only_the_lines_a_commit_adds() {
 #[test]
 fn privacy_range_checks_binary_files_whole_when_new_or_changed() {
     let der = issued_by_test_ca();
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write("keys/leaf.der", &der);
     repo.write("notes.md", "one\n");
     let base = repo.commit("init");
@@ -533,7 +550,9 @@ fn privacy_range_checks_binary_files_whole_when_new_or_changed() {
 fn privacy_denylist_output_hides_the_pattern() {
     // In the findings: the place and the line only.
     let denylist = Denylist::parse("Hidden-Name\nre:nodeq-\\d+\n").unwrap();
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.write("a.md", "a hidden-name here\nand nodeq-17 there\n");
     let base = repo.commit("init");
     repo.commit("feat: about hidden-name");
@@ -604,6 +623,10 @@ fn privacy_denylist_output_hides_the_pattern() {
 
 #[test]
 fn privacy_passes_on_this_repository() {
+    // The check lists the repository's files with `git`.
+    if oncl_testkit::tool::GIT.or_skip(&["--version"]).is_none() {
+        return;
+    }
     let findings = privacy::check(&workspace(), &cas(), &Options::default()).unwrap();
     let printed: Vec<String> = findings.iter().map(ToString::to_string).collect();
     assert!(printed.is_empty(), "{}", printed.join("\n"));

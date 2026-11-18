@@ -6,9 +6,6 @@ use std::{path::Path, process::Command};
 use support::*;
 
 const MODULES: &str = "lxml, cryptography";
-fn python() -> Option<String> {
-    oncl_testkit::tool::python_with(MODULES)
-}
 fn trust(w: &World) -> Vec<&str> {
     vec![
         "--root",
@@ -57,16 +54,11 @@ fn verify_json(w: &World, profile: &str, signed: &Path) -> (Option<i32>, serde_j
     (result.status.code(), report)
 }
 /// Independent lxml+cryptography re-derivation of every reference digest and every
-/// SignedInfo signature (RSA-SHA256), no oncl code involved.
+/// SignedInfo signature (RSA-SHA256), no oncl code involved. `None` when there is no Python
+/// with lxml and cryptography: the check is skipped with a line on stderr, or fails the test
+/// under `ONCL_REQUIRE_ORACLES=1`.
 fn lxml_oracle(w: &World, signed: &Path) -> Option<String> {
-    let Some(python) = python() else {
-        assert!(
-            std::env::var_os("ONCL_ALLOW_NO_ORACLE").is_some(),
-            "{} To skip this check explicitly, set ONCL_ALLOW_NO_ORACLE=1.",
-            oncl_testkit::tool::python_missing_message(MODULES)
-        );
-        return None;
-    };
+    let python = oncl_testkit::tool::python_with_or_skip(MODULES)?;
     let script = w.dir.path().join("xmldsig_oracle.py");
     std::fs::write(&script, include_str!("support/xmldsig_oracle.py")).unwrap();
     let leaf = w.dir.path().join("oracle-leaf.der");
@@ -156,6 +148,10 @@ fn ncanode_gost_xades_is_read_not_refused() {
 /// Our verifier must not claim LT for a document without them either.
 #[test]
 fn xades_lt_carries_the_trust_anchor_and_the_verifier_does_not_claim_lt_without_it() {
+    // The independent structure oracle below runs Python's ElementTree.
+    let Some(python) = oncl_testkit::tool::python_or_skip() else {
+        return;
+    };
     let w = world();
     let tsa = format!("{}/tsa", w.origin);
     let doc = w.dir.path().join("doc.xml");
@@ -176,7 +172,6 @@ fn xades_lt_carries_the_trust_anchor_and_the_verifier_does_not_claim_lt_without_
 
     // Independent structure oracle (Python ElementTree, no oncl code): the carried
     // certificates, compared with the root DER the loopback PKI really uses.
-    let python = oncl_testkit::tool::python();
     let script = w.dir.path().join("lt_values.py");
     std::fs::write(
         &script,
@@ -310,7 +305,7 @@ fn xades_lt_with_a_multi_megabyte_crl_is_verified_not_refused() {
             &text[end..]
         )
     };
-    let python = python();
+    let python = oncl_testkit::tool::python_with_or_skip(MODULES);
     let root_der = w.dir.path().join("oracle-root.der");
     std::fs::write(&root_der, w.pki.root.cert.to_der().unwrap()).unwrap();
     let serial_hex = signer_serial
