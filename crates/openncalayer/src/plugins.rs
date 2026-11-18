@@ -1003,8 +1003,11 @@ impl PluginService {
                 PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_) => {
                     lock(&self.pending).remove(id);
                 }
-                // A choice this core does not know leaves the plugin as it is.
-                _ => {}
+                // A choice this core does not know leaves the plugin as it is, but is logged:
+                // a newer library may mean a withdrawal by it.
+                other => {
+                    warn!(plugin = %id, choice = ?other, "unknown plugin choice; the plugin is left as it is");
+                }
             }
         }
     }
