@@ -288,8 +288,7 @@ impl Store {
     }
 
     /// Keeps the index of `channel`, the bytes the TUF client verified, and raises the
-    /// channel's `last_seq` to its `seq`. The signature file an older version kept beside
-    /// it, which nothing reads now, is removed.
+    /// channel's `last_seq` to its `seq`.
     ///
     /// # Errors
     ///
@@ -301,7 +300,6 @@ impl Store {
         let dir = self.dir.join("catalog");
         std::fs::create_dir_all(&dir)?;
         write_atomically(&self.catalog_path(channel), index, Access::Default)?;
-        remove_file(&dir.join(format!("{channel}.json.minisig")));
         self.change(|state| {
             let last = state.last_seq.entry(channel).or_insert(seq);
             *last = (*last).max(seq);

@@ -678,9 +678,12 @@ pub fn oracle_python() -> PathBuf {
         .map(PathBuf::from)
         .filter(|p| p.is_file())
         .expect(
-            "oracle Python unavailable: create a Python environment with `pip install -r \
-             xtask/assets/oracle/requirements.txt` and set ONCL_PYHANKO_PYTHON to that \
-             environment's python executable",
+            "oracle Python unavailable: ONCL_PYHANKO_PYTHON must name the python executable of \
+             a SEPARATE virtual environment (not your global Python). Create one, e.g. \
+             `python -m venv .venv-oracle`, install xtask/assets/oracle/requirements.txt into \
+             it with that environment's own pip, and set ONCL_PYHANKO_PYTHON to its python \
+             (Windows: .venv-oracle\\Scripts\\python.exe, Linux/macOS: .venv-oracle/bin/python). \
+             Commands for every OS: docs/dev/development.md, section \"Что нужно для тестов\"",
         )
 }
 
