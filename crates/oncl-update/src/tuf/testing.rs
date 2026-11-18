@@ -175,7 +175,8 @@ impl Repo {
     pub fn index_file_path(&self, channel: Channel) -> String {
         let target = channel.target_path();
         let bytes = self.indexes.get(&target).expect("a published channel");
-        layout::target_file_path(&target, &super::Digest::of(bytes)).expect("a valid path")
+        let target = super::TargetPath::parse(&target).expect("a valid path");
+        layout::target_file_path(&target, &super::Digest::of(bytes))
     }
 
     /// The files in a [`MemoryFetcher`].

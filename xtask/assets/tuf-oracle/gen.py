@@ -6,8 +6,9 @@
 #   /mnt/d/oncl-tuf-venv/bin/pip install tuf==7.0.1 cryptography==50.0.2
 #   /mnt/d/oncl-tuf-venv/bin/python xtask/assets/tuf-oracle/gen.py
 #
-# Writes crates/oncl-update/tests/fixtures/tuf/{valid,<attack>}/ (+ keys.json), then runs
-# python-tuf's ngclient.Updater over a local http.server against every repository and prints a
+# Writes crates/oncl-update/tests/fixtures/tuf/{valid,<attack>}/ (+ keys.json) and the delegated
+# repositories {delegated-*,cross-repo}/, then runs python-tuf's ngclient.Updater over a local
+# http.server against every repository and prints a
 # verdict table. Everything is deterministic: the keys are SYNTHETIC test keys derived from fixed
 # seeds, Ed25519 signatures are deterministic, and the clock of the check is fixed (NOW below).
 # Re-running must leave `git status` clean.
@@ -29,6 +30,7 @@ import threading
 from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from securesystemslib.formats import encode_canonical
 from securesystemslib.signer import CryptoSigner
 from tuf.api.metadata import (
     Key,
@@ -356,6 +358,442 @@ ATTACKS = [
 ]
 
 
+# ------------------------------------------------------------- delegated vectors
+#
+# A second repository, as `tuf/v2` is laid out (docs/design/publishers.md): its own root (new
+# root, snapshot and timestamp keys; the `targets` key shared with the valid repository), a
+# top-level targets that always has `delegations`, and the delegated roles `pub-alpha` and
+# `pub-beta` of two third-party publishers, each delegated `plugins/<name>/*/*`, terminating,
+# threshold 1. The snapshot lists every metadata file with version, length and sha256.
+#
+# These files are written as raw JSON and signed over their canonical form here, not through
+# python-tuf's model: the negative vectors need what that model refuses to build (a role name
+# twice, a top-level role name). python-tuf only reads them, through its ngclient.
+
+V2_KEY_NAMES = ["v2-root", "v2-snapshot", "v2-timestamp", "pub-alpha", "pub-beta", "pub-beta-2"]
+for _n in V2_KEY_NAMES:
+    SIGNERS[_n], SEEDS[_n] = make_signer(_n)
+
+SPEC = ".".join(["1", "0", "31"])
+DELEGATED_ANCHOR = "delegated-valid/metadata/1.root.json"
+
+
+def iso(t: dt.datetime) -> str:
+    return t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def sign_raw(signed: dict, *names: str) -> bytes:
+    """The file of `signed`, signed by `names` over its OLPC canonical form."""
+    payload = encode_canonical(signed).encode()
+    sigs = [SIGNERS[n].sign(payload) for n in names]
+    doc = {"signatures": [{"keyid": s.keyid, "sig": s.signature} for s in sigs], "signed": signed}
+    return json.dumps(doc, indent=1, separators=(",", ": "), sort_keys=True).encode()
+
+
+def meta_entry(version: int, data: bytes) -> dict:
+    return {"version": version, "length": len(data), "hashes": {"sha256": hashlib.sha256(data).hexdigest()}}
+
+
+def file_entry(data: bytes, custom: dict | None = None) -> dict:
+    entry = {"length": len(data), "hashes": {"sha256": hashlib.sha256(data).hexdigest()}}
+    if custom is not None:
+        entry["custom"] = custom
+    return entry
+
+
+def publishers_body() -> bytes:
+    doc = {
+        "schema": 1,
+        "publishers": [
+            {"name": name, "state": "active", "display": {"ru": name, "kk": name, "en": name},
+             "id_prefix": f"kz.{name}.", "modules": [f"kz.{name}.Module"], "bundles": []}
+            for name in ("alpha", "beta")
+        ],
+    }
+    return (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode()
+
+
+DELEGATED_TOP_BODIES = {**BODIES, "publishers.json": publishers_body()}
+
+
+def plugin(publisher: str, plugin_id: str, version: str) -> tuple[str, bytes, dict]:
+    """A publisher's target: its path, the (synthetic, unpublished) package and custom.oncl."""
+    path = f"plugins/{publisher}/{plugin_id}/{version}.onclp"
+    package = f"synthetic package {plugin_id} {version}\n".encode()
+    custom = {"oncl": {
+        "schema": 1, "id": plugin_id, "version": version,
+        "url": f"https://downloads.example.invalid/{plugin_id}-{version}.onclp",
+        "channel": "stable", "min_core": "0.1.2", "modules": [f"kz.{publisher}.Module"],
+        "name": {"ru": plugin_id, "kk": plugin_id, "en": plugin_id},
+        "capabilities": {}, "rollout": 100, "revoked": False,
+    }}
+    return path, package, custom
+
+
+ALPHA = plugin("alpha", "kz.alpha.signer", "1.0.0")
+BETA = plugin("beta", "kz.beta.tool", "2.1.0")
+
+
+def key_dict(name: str) -> dict:
+    return key_of(name).to_dict()
+
+
+def delegation(publisher: str, keys: list[str], threshold: int = 1) -> dict:
+    return {
+        "name": f"pub-{publisher}",
+        "keyids": [keyid_of(k) for k in keys],
+        "threshold": threshold,
+        "paths": [f"plugins/{publisher}/*/*"],
+        "terminating": True,
+    }
+
+
+def role_signed(version: int, targets: list[tuple[str, bytes, dict]], expires: dt.datetime = TARGETS_EXPIRES) -> dict:
+    return {
+        "_type": "targets", "spec_version": SPEC, "version": version, "expires": iso(expires),
+        "targets": {path: file_entry(package, custom) for path, package, custom in targets},
+    }
+
+
+class DRepo:
+    """The delegated repository as data; `render` signs it into files."""
+
+    def __init__(self):
+        self.keys = ["pub-alpha", "pub-beta"]
+        self.delegations = [delegation("alpha", ["pub-alpha"]), delegation("beta", ["pub-beta"])]
+        self.top_version = 1
+        # Role name -> [signed, signers, mutate(bytes) -> bytes or None].
+        self.roles: dict[str, list] = {
+            "pub-alpha": [role_signed(2, [ALPHA]), ["pub-alpha"], None],
+            "pub-beta": [role_signed(1, [BETA]), ["pub-beta"], None],
+        }
+        self.snapshot_version = 1
+        self.snapshot_drop: set[str] = set()
+        # Role name -> the version its file is named and listed by, if not its own.
+        self.listed_versions: dict[str, int] = {}
+        self.timestamp_version = TS_VERSION
+        self.post = []
+
+    def top(self) -> dict:
+        return {
+            "_type": "targets", "spec_version": SPEC, "version": self.top_version,
+            "expires": iso(TARGETS_EXPIRES),
+            "targets": {p: file_entry(b) for p, b in DELEGATED_TOP_BODIES.items()},
+            "delegations": {"keys": {keyid_of(k): key_dict(k) for k in self.keys}, "roles": self.delegations},
+        }
+
+    def render(self) -> dict[str, bytes]:
+        files = {"metadata/1.root.json": V2_ROOT}
+        top = sign_raw(self.top(), "targets")
+        files[f"metadata/{self.top_version}.targets.json"] = top
+        meta = {"targets.json": meta_entry(self.top_version, top)}
+        for name, (signed, signers, mutate) in self.roles.items():
+            data = sign_raw(signed, *signers)
+            if mutate is not None:
+                data = mutate(data)
+            version = self.listed_versions.get(name, signed["version"])
+            files[f"metadata/{version}.{name}.json"] = data
+            meta[f"{name}.json"] = meta_entry(version, data)
+        for name in self.snapshot_drop:
+            del meta[name]
+        snapshot = sign_raw(
+            {"_type": "snapshot", "spec_version": SPEC, "version": self.snapshot_version,
+             "expires": iso(SNAPSHOT_EXPIRES), "meta": meta},
+            "v2-snapshot",
+        )
+        files[f"metadata/{self.snapshot_version}.snapshot.json"] = snapshot
+        files["metadata/timestamp.json"] = sign_raw(
+            {"_type": "timestamp", "spec_version": SPEC, "version": self.timestamp_version,
+             "expires": iso(TIMESTAMP_EXPIRES), "meta": {"snapshot.json": meta_entry(self.snapshot_version, snapshot)}},
+            "v2-timestamp",
+        )
+        for p, body in DELEGATED_TOP_BODIES.items():
+            files[target_file_name(p, body)] = body
+        for fn in self.post:
+            fn(files)
+        return files
+
+
+V2_ROOT = sign_with(
+    build_root(1, {"root": ["v2-root"], "targets": ["targets"], "snapshot": ["v2-snapshot"],
+                   "timestamp": ["v2-timestamp"]}),
+    "v2-root",
+)
+
+
+def flip_signature(data: bytes) -> bytes:
+    """The file with the last hex digit of its first signature flipped: same length."""
+    doc = json.loads(data)
+    doc["signatures"][0]["sig"] = flip_hex_char(doc["signatures"][0]["sig"])
+    return json.dumps(doc, indent=1, separators=(",", ": "), sort_keys=True).encode()
+
+
+def d_bad_signature(r: DRepo):
+    r.roles["pub-beta"][2] = flip_signature
+
+
+def d_threshold(r: DRepo):
+    r.keys.append("pub-beta-2")
+    r.delegations[1] = delegation("beta", ["pub-beta", "pub-beta-2"], threshold=2)
+
+
+def d_version_mismatch(r: DRepo):
+    # metadata/1.pub-beta.json, listed as version 1, is version 2 inside.
+    r.roles["pub-beta"][0]["version"] = 2
+    r.listed_versions["pub-beta"] = 1
+
+
+def d_hash_mismatch(r: DRepo):
+    # After the snapshot lists it: the file changes, same length.
+    def tamper(files):
+        files["metadata/1.pub-beta.json"] = flip_signature(files["metadata/1.pub-beta.json"])
+    r.post.append(tamper)
+
+
+def d_expired(r: DRepo):
+    r.roles["pub-beta"][0]["expires"] = iso(EXPIRED)
+
+
+def d_rollback(r: DRepo):
+    # After pub-alpha version 2 was accepted: a newer timestamp and snapshot 2 list version 1.
+    r.roles["pub-alpha"][0]["version"] = 1
+    r.snapshot_version = 2
+    r.timestamp_version = TS_VERSION + 3600
+
+
+def d_not_in_snapshot(r: DRepo):
+    r.snapshot_drop.add("pub-beta.json")
+
+
+def d_removed(r: DRepo):
+    # The delegation is gone; the snapshot still lists the role (a dropped entry would be a
+    # rollback), and its file is still published.
+    r.keys.remove("pub-beta")
+    del r.delegations[1]
+
+
+EVIL_ALPHA = plugin("alpha", "kz.alpha.evil", "9.0.0")
+
+
+def d_path_outside(r: DRepo):
+    r.roles["pub-beta"][0] = role_signed(1, [BETA, EVIL_ALPHA])
+
+
+DEEP_BETA = plugin("beta", "kz.beta.deep", "1.0.0")
+
+
+def d_nested(r: DRepo):
+    signed = role_signed(1, [BETA])
+    signed["delegations"] = {
+        "keys": {keyid_of("pub-beta-2"): key_dict("pub-beta-2")},
+        "roles": [{"name": "pub-beta-sub", "keyids": [keyid_of("pub-beta-2")], "threshold": 1,
+                   "paths": ["plugins/beta/*/*"], "terminating": True}],
+    }
+    r.roles["pub-beta"][0] = signed
+    r.roles["pub-beta-sub"] = [role_signed(1, [DEEP_BETA]), ["pub-beta-2"], None]
+
+
+def d_hash_prefixes(r: DRepo):
+    role = delegation("beta", ["pub-beta"])
+    del role["paths"]
+    role["path_hash_prefixes"] = [hashlib.sha256(BETA[0].encode()).hexdigest()[:2]]
+    r.delegations[1] = role
+
+
+def d_key_reuse(r: DRepo):
+    # pub-beta is delegated to the top-level targets key, and signed by it.
+    r.keys = ["pub-alpha", "targets"]
+    r.delegations[1] = delegation("beta", ["targets"])
+    r.roles["pub-beta"][1] = ["targets"]
+
+
+DEEP_ALPHA = ("plugins/alpha/kz.alpha.signer/extra/1.0.0.onclp", b"synthetic deep package\n", ALPHA[2])
+
+
+def d_glob_depth(r: DRepo):
+    r.roles["pub-alpha"][0] = role_signed(2, [ALPHA, DEEP_ALPHA])
+
+
+def d_duplicate_role(r: DRepo):
+    r.delegations.append(delegation("beta", ["pub-beta"]))
+
+
+def d_top_level_name(r: DRepo):
+    # (timestamp: its file, metadata/1.timestamp.json, is no other file's name.)
+    r.delegations[1] = {**delegation("beta", ["pub-beta"]), "name": "timestamp"}
+    r.roles["timestamp"] = r.roles.pop("pub-beta")
+
+
+class DVector:
+    def __init__(self, name, attack, build, python, contract, prior=None, probes=()):
+        self.name, self.attack, self.build = name, attack, build
+        self.python, self.contract, self.prior = python, contract, prior
+        self.probes = [ALPHA[0], BETA[0], *probes]
+
+
+def py(refresh="ok", **targets):
+    """What python-tuf is expected to do: refresh, then get_targetinfo per probe path."""
+    return {"refresh": refresh, "targets": targets}
+
+
+FOUND_BOTH = {ALPHA[0]: "found", BETA[0]: "found"}
+
+
+def beta(outcome: str, **more: str) -> dict:
+    """python-tuf refreshes, finds pub-alpha's target, and `outcome` for pub-beta's."""
+    return {"refresh": "ok", "targets": {ALPHA[0]: "found", BETA[0]: outcome, **more}}
+
+
+DVECTORS = [
+    DVector("delegated-valid", "two publishers, publishers.json, each role verified",
+            lambda r: None, {"refresh": "ok", "targets": FOUND_BOTH},
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "verified"}}),
+    DVector("delegated-bad-signature", "the only signature of pub-beta has its last hex digit flipped "
+            "(the snapshot lists the file as it is)", d_bad_signature, beta("UnsignedMetadataError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: signature"}}),
+    DVector("delegated-threshold-not-met", "pub-beta is delegated 2 of {pub-beta, pub-beta-2} and signed by one",
+            d_threshold, beta("UnsignedMetadataError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: signature"}}),
+    DVector("delegated-version-mismatch", "metadata/1.pub-beta.json (listed as version 1) is version 2",
+            d_version_mismatch, beta("BadVersionNumberError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: version mismatch"}}),
+    DVector("delegated-hash-mismatch", "metadata/1.pub-beta.json changed after the snapshot listed it (same length)",
+            d_hash_mismatch, beta("LengthOrHashMismatchError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: hash"}}),
+    DVector("delegated-expired", "pub-beta is past its expires", d_expired, beta("ExpiredMetadataError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: expired"}}),
+    DVector("delegated-rollback", "after pub-alpha version 2 was accepted, a newer timestamp and snapshot 2 "
+            "list pub-alpha version 1", d_rollback, py("BadVersionNumberError"),
+            {"refresh": "refused at the snapshot: rollback of pub-alpha.json", "roles": {}},
+            prior="delegated-valid"),
+    DVector("delegated-not-in-snapshot", "the snapshot does not list pub-beta.json", d_not_in_snapshot,
+            beta("RepositoryError"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: not in snapshot"}}),
+    DVector("delegated-removed", "the top-level targets no longer delegate to pub-beta; the snapshot still "
+            "lists it", d_removed, beta("absent"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified"}}),
+    DVector("delegated-path-outside", "pub-beta also lists a target under plugins/alpha/", d_path_outside,
+            beta("found", **{EVIL_ALPHA[0]: "absent"}),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: path outside"}},
+            probes=[EVIL_ALPHA[0]]),
+    DVector("delegated-nested", "pub-beta delegates plugins/beta/*/* further to pub-beta-sub", d_nested,
+            beta("found", **{DEEP_BETA[0]: "found"}),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: nested"}},
+            probes=[DEEP_BETA[0]]),
+    DVector("delegated-path-hash-prefixes", "pub-beta is delegated by path_hash_prefixes", d_hash_prefixes,
+            beta("found"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: path_hash_prefixes"}}),
+    DVector("delegated-key-reuse", "pub-beta is delegated to (and signed by) the top-level targets key",
+            d_key_reuse, beta("found"),
+            {"refresh": "accepted", "roles": {"pub-alpha": "verified", "pub-beta": "refused: key reused"}}),
+    DVector("delegated-glob-depth", "pub-alpha (plugins/alpha/*/*) lists a target one segment deeper",
+            d_glob_depth, beta("found", **{DEEP_ALPHA[0]: "absent"}),
+            {"refresh": "accepted", "roles": {"pub-alpha": "refused: path outside", "pub-beta": "verified"}},
+            probes=[DEEP_ALPHA[0]]),
+    DVector("delegated-duplicate-role", "the top-level targets delegate to pub-beta twice", d_duplicate_role,
+            py("DeserializationError"), {"refresh": "refused at the targets: a role listed twice", "roles": {}}),
+    DVector("delegated-top-level-name", "a delegated role is named timestamp", d_top_level_name,
+            py("DeserializationError"), {"refresh": "refused at the targets: not a pub-<name> role", "roles": {}}),
+]
+
+
+def cross_repo(valid: dict[str, bytes]) -> dict[str, bytes]:
+    """The files of the valid (v1) repository behind the root of the delegated (v2) one."""
+    files = {k: v for k, v in valid.items() if not k.endswith(".root.json")}
+    files["metadata/1.root.json"] = V2_ROOT
+    return files
+
+
+def run_delegated(repo: Path, cache: Path, dl: Path, probes: list[str]) -> dict:
+    """refresh, the top-level targets, then get_targetinfo of every probe path."""
+    srv = serve(repo)
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        up = Updater(
+            metadata_dir=str(cache),
+            metadata_base_url=base + "/metadata/",
+            target_dir=str(dl),
+            target_base_url=base + "/targets/",
+            bootstrap=(repo.parent / DELEGATED_ANCHOR).read_bytes(),
+            config=UpdaterConfig(),
+        )
+        up._trusted_set.reference_time = NOW  # the fixed clock
+        try:
+            up.refresh()
+        except Exception as e:  # noqa: BLE001
+            cause = f" ({type(e.__cause__).__name__}: {e.__cause__})" if e.__cause__ else ""
+            return {"refresh": type(e).__name__, "error": f"{e}{cause}"[:150], "targets": {}}
+        for p, body in DELEGATED_TOP_BODIES.items():
+            info = up.get_targetinfo(p)
+            if info is None or Path(up.download_target(info)).read_bytes() != body:
+                return {"refresh": "ok", "error": f"top-level target {p} not as published", "targets": {}}
+        targets = {}
+        for p in probes:
+            try:
+                targets[p] = "found" if up.get_targetinfo(p) is not None else "absent"
+            except Exception as e:  # noqa: BLE001
+                targets[p] = type(e).__name__
+        return {"refresh": "ok", "targets": targets}
+    finally:
+        srv.shutdown()
+
+
+def check_delegated(repo: Path, prior: str | None, probes: list[str]) -> dict:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        cache = tmp / "meta"
+        cache.mkdir()
+        if prior:
+            first = run_delegated(repo.parent / prior, cache, tmp / "dl0", [ALPHA[0], BETA[0]])
+            assert first["refresh"] == "ok", f"prior state {prior} was not accepted: {first}"
+        return run_delegated(repo, cache, tmp / "dl", probes)
+
+
+def write_delegated(out: Path, valid: dict[str, bytes]) -> list[tuple[str, bool, str]]:
+    """Writes the delegated vectors and cross-repo; returns (name, as expected, python-tuf said)."""
+    results = []
+    base = DRepo().render()
+    for v in DVECTORS:
+        r = DRepo()
+        v.build(r)
+        files = r.render()
+        changed = sorted(k for k in set(files) | set(base) if files.get(k) != base.get(k))
+        write_repo(out / v.name, files)
+        got = check_delegated(out / v.name, v.prior, v.probes)
+        want = v.python
+        same = got["refresh"] == want["refresh"] and got["targets"] == (want["targets"] if want["refresh"] == "ok" else {})
+        (out / v.name / "expected.json").write_text(json.dumps({
+            "name": v.name,
+            "attack": v.attack,
+            "now": iso(NOW),
+            "trust_anchor": DELEGATED_ANCHOR,
+            "prior_state": (f"client already accepted the '{v.prior}' repository at the same clock"
+                            if v.prior else None),
+            "probes": v.probes,
+            "contract": v.contract,
+            "changed_files_vs_delegated_valid": changed if v.name != "delegated-valid" else [],
+            "python_tuf": got,
+        }, indent=2) + "\n")
+        results.append((v.name, same, json.dumps(got, sort_keys=True)))
+    files = cross_repo(valid)
+    write_repo(out / "cross-repo", files)
+    got = check_delegated(out / "cross-repo", None, [])
+    (out / "cross-repo" / "expected.json").write_text(json.dumps({
+        "name": "cross-repo",
+        "attack": "the files of the valid (tuf/v1) repository served behind the root of delegated-valid "
+                  "(tuf/v2): its timestamp is signed by a key the v2 root does not trust",
+        "now": iso(NOW),
+        "trust_anchor": DELEGATED_ANCHOR,
+        "prior_state": None,
+        "contract": {"refresh": "refused at the timestamp: signature, before anything is saved", "roles": {}},
+        "python_tuf": got,
+    }, indent=2) + "\n")
+    results.append(("cross-repo", got["refresh"] == "UnsignedMetadataError", json.dumps(got, sort_keys=True)))
+    return results
+
+
+
+
 # ------------------------------------------------------------------ python-tuf run
 
 
@@ -468,12 +906,16 @@ def main() -> int:
                 "public_hex": key_of(n).keyval["public"],
                 "keyid": keyid_of(n),
             }
-            for n in KEY_NAMES
+            for n in [*KEY_NAMES, *V2_KEY_NAMES]
         },
         "roles": {
             "root-v1": {"root": "root-a", "targets": "targets", "snapshot": "snapshot", "timestamp": "timestamp-1"},
             "root-v2": {"root": "root-a", "targets": "targets", "snapshot": "snapshot", "timestamp": "timestamp-2"},
             "root-v3": {"root": "root-b", "targets": "targets", "snapshot": "snapshot", "timestamp": "timestamp-2"},
+            "delegated-root-v1": {"root": "v2-root", "targets": "targets", "snapshot": "v2-snapshot",
+                                  "timestamp": "v2-timestamp"},
+            "delegations": {"pub-alpha": "pub-alpha", "pub-beta": "pub-beta",
+                            "pub-beta (threshold 2, delegated-threshold-not-met)": "pub-beta + pub-beta-2"},
         },
         "times": {
             "signed_at": T0.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -515,6 +957,9 @@ def main() -> int:
         if verdict != (divergence or "REJECT"):
             ok = False
 
+    delegated = write_delegated(out, valid)
+    ok = ok and all(same for _, same, _ in delegated)
+
     w = max(len(r[0]) for r in results)
     print(f"{'repository'.ljust(w)}  python-tuf  step         error")
     for name, want, verdict, step, err in results:
@@ -522,6 +967,9 @@ def main() -> int:
         if want == "ACCEPT" and name != "valid":
             flag = "  (known divergence from the contract)"
         print(f"{name.ljust(w)}  {verdict:<10}  {step:<11}  {err}{flag}")
+    print()
+    for name, same, got in delegated:
+        print(f"{name}: {got}{'' if same else '  <-- UNEXPECTED'}")
     return 0 if ok else 1
 
 
