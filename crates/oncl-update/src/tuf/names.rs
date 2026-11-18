@@ -9,7 +9,6 @@
 //! - [`RoleName`]: exactly `pub-<publisher>`; it can never be the name of a top-level role.
 //! - [`PathPattern`]: exactly `plugins/<publisher>/*/*`, `*` matching one whole segment.
 
-use std::borrow::Borrow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -26,6 +25,14 @@ pub enum NameKind {
     RoleName,
     /// A [`PathPattern`].
     PathPattern,
+    /// A plugin id (`crate::catalog::PluginId`).
+    PluginId,
+    /// A plugin id prefix (`crate::catalog::IdPrefix`).
+    IdPrefix,
+    /// A module name (`crate::catalog::ModuleName`).
+    ModuleName,
+    /// A bundle name (`crate::catalog::BundleName`).
+    BundleName,
 }
 
 impl fmt::Display for NameKind {
@@ -35,6 +42,10 @@ impl fmt::Display for NameKind {
             NameKind::PublisherName => "publisher name",
             NameKind::RoleName => "delegated role name",
             NameKind::PathPattern => "delegation path pattern",
+            NameKind::PluginId => "plugin id",
+            NameKind::IdPrefix => "plugin id prefix",
+            NameKind::ModuleName => "module name",
+            NameKind::BundleName => "bundle name",
         })
     }
 }
@@ -50,7 +61,7 @@ pub struct NameError {
 }
 
 impl NameError {
-    fn new(kind: NameKind, value: &str) -> NameError {
+    pub(crate) fn new(kind: NameKind, value: &str) -> NameError {
         NameError {
             kind,
             value: value.to_owned(),
@@ -58,7 +69,8 @@ impl NameError {
     }
 }
 
-/// Implements the string views and conversions every name here shares.
+/// Implements the string views and conversions every name here shares; the type needs a
+/// `parse(&str) -> Result<Self, NameError>`, and `NameError` in scope where it is used.
 macro_rules! string_name {
     ($name:ident) => {
         impl $name {
@@ -74,19 +86,19 @@ macro_rules! string_name {
             }
         }
 
-        impl Borrow<str> for $name {
+        impl ::std::borrow::Borrow<str> for $name {
             fn borrow(&self) -> &str {
                 &self.0
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.write_str(&self.0)
             }
         }
 
-        impl FromStr for $name {
+        impl ::std::str::FromStr for $name {
             type Err = NameError;
 
             fn from_str(text: &str) -> Result<$name, NameError> {
@@ -109,6 +121,8 @@ macro_rules! string_name {
         }
     };
 }
+
+pub(crate) use string_name;
 
 /// A target path this client accepts: at most [`TargetPath::MAX_LEN`] bytes of
 /// `A-Za-z0-9._+-` in segments separated by `/`, no segment empty, `.` or `..`.

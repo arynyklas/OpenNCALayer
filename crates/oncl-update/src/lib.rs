@@ -10,10 +10,14 @@
 //!   `keys/root.json`), and without one the updater is off;
 //! - [`choose()`]: the version to move to, with the staged rollout, revoked versions and
 //!   versions that failed locally;
-//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs.
+//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs;
+//! - [`catalog`]: the plugin catalog, the owner's index plus the releases of third-party
+//!   publishers ([`Catalog`]), which [`choose_plugin()`] and [`offer()`] read.
 //!
 //! The format is described in `docs/design/update-index.md`, the authentication in
-//! `docs/design/tuf.md`.
+//! `docs/design/tuf.md`, the publishers in `docs/design/publishers.md`.
+
+pub mod catalog;
 
 pub mod choose;
 mod contents;
@@ -24,6 +28,10 @@ pub mod plugins;
 pub mod state;
 pub mod tuf;
 
+pub use catalog::{
+    Catalog, CatalogBuilder, CatalogError, DeclaredCapabilities, EntryRejected, EntryRejection,
+    PublisherPolicy, PublisherRelease, PublisherState,
+};
 pub use choose::{Choice, Target, choose, rollout_bucket};
 pub use contents::contents_sha256;
 pub use index::{
