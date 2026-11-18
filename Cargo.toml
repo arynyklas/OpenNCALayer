@@ -26,31 +26,33 @@ oncl-builtins-build = { path = "crates/oncl-builtins-build" }
 oncl-core = { path = "crates/oncl-core" }
 oncl-desktop = { path = "crates/oncl-desktop" }
 # The SDK's packaged dependency chain (`xtask::sdk_delivery::CHAIN`, docs/dev/sdk.md section 7)
-# pins the exact workspace version: `cargo package` needs a `version` next to each `path`, and
-# it must be bumped together with `[workspace.package]`. These crates (and only these) set
-# `publish = true` in their manifests so that `cargo package` can verify the chain offline;
-# nothing uploads them: a registry release is a separate decision (docs/dev/sdk.md section 7).
-# A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
+# pins the exact SDK version: `cargo package` needs a `version` next to each `path`. The SDK
+# crates have a version of their own, not `[workspace.package]` (the program's): it is set in
+# each chain crate's manifest and bumped there and here together (docs/dev/sdk.md section 6).
+# These crates (and only these) set `publish = true` in their manifests so that `cargo package`
+# can verify the chain offline; nothing uploads them: a registry release is a separate decision
+# (docs/dev/sdk.md section 7). A test (`xtask/tests/sdk_delivery.rs`) keeps the set, its order
+# and its one version.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
-oncl-flows = { path = "crates/oncl-flows", version = "=0.1.1" }
-oncl-gost = { path = "crates/oncl-gost", version = "=0.1.1" }
+oncl-flows = { path = "crates/oncl-flows", version = "=0.2.0" }
+oncl-gost = { path = "crates/oncl-gost", version = "=0.2.0" }
 oncl-ipc = { path = "crates/oncl-ipc" }
-oncl-pki = { path = "crates/oncl-pki", version = "=0.1.1" }
-oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.1" }
-oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.1" }
+oncl-pki = { path = "crates/oncl-pki", version = "=0.2.0" }
+oncl-pdf = { path = "crates/oncl-pdf", version = "=0.2.0" }
+oncl-pdk = { path = "crates/oncl-pdk", version = "=0.2.0" }
 # Explicit defaults also keep inherited no-default SDK dependencies valid outside this workspace.
-oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.1" }
-oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.1" }
-oncl-registry = { path = "crates/oncl-registry", version = "=0.1.1" }
+oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.2.0" }
+oncl-protocol = { path = "crates/oncl-protocol", version = "=0.2.0" }
+oncl-registry = { path = "crates/oncl-registry", version = "=0.2.0" }
 oncl-testkit = { path = "crates/oncl-testkit" }
 oncl-tls = { path = "crates/oncl-tls" }
-oncl-token = { path = "crates/oncl-token", version = "=0.1.1" }
+oncl-token = { path = "crates/oncl-token", version = "=0.2.0" }
 oncl-trust = { path = "crates/oncl-trust" }
 oncl-ui = { path = "crates/oncl-ui" }
-oncl-update = { path = "crates/oncl-update", version = "=0.1.1" }
+oncl-update = { path = "crates/oncl-update", version = "=0.2.0" }
 # The installer entry WinGet runs: `xtask package` writes the Setup it carries into it.
 oncl-winget-setup = { path = "crates/oncl-winget-setup", default-features = false }
-oncl-xml = { path = "crates/oncl-xml", version = "=0.1.1" }
+oncl-xml = { path = "crates/oncl-xml", version = "=0.2.0" }
 
 aes = "0.9.0"
 anyhow = "1.0.104"

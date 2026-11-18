@@ -4235,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4279,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-flows"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "der 0.8.2",
  "oncl-pki",
@@ -4295,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-gost"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "crypto-bigint",
  "getrandom 0.4.3",
@@ -4334,7 +4334,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pdf"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "der 0.8.2",
  "flate2",
@@ -4349,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pdk"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ciborium",
  "oncl-protocol",
@@ -4361,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pki"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -4402,7 +4402,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-plugin"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4466,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-protocol"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "hashbrown 0.17.1",
@@ -4477,7 +4477,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-registry"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "windows-sys 0.61.2",
 ]
@@ -4566,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-token"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "der 0.8.2",
  "flate2",
@@ -4646,7 +4646,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-update"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "getrandom 0.4.3",
  "oncl-pki",
@@ -4691,7 +4691,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-xml"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64",
  "der 0.8.2",

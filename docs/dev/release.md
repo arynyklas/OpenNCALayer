@@ -26,7 +26,7 @@
 
 ## 2. Выпуск версии
 
-1. Поднять версию в `[workspace.package]` файла `Cargo.toml`. Вместе с ней поднимаются одиннадцать пинов `version = "=<версия>"` у крейтов SDK в `[workspace.dependencies]` (`oncl-flows`, `oncl-gost`, `oncl-pki`, `oncl-pdf`, `oncl-pdk`, `oncl-plugin`, `oncl-protocol`, `oncl-registry`, `oncl-token`, `oncl-update`, `oncl-xml`; без этого workspace не разрешается), четыре `plugin.toml` встроенных модулей и lock-файлы (подробно в [`sdk.md`](sdk.md), раздел 6). Затем обновить `Cargo.lock` (`cargo check --workspace`), прогнать проверки из раздела «Перед отправкой изменений» в [`development.md`](development.md) и закоммитить.
+1. Поднять версию программы в `[workspace.package]` файла `Cargo.toml`. Вместе с ней поднимаются четыре `plugin.toml` встроенных модулей (`version`, `min_core`). У крейтов SDK своя версия (`version` в манифестах двенадцати крейтов цепочки и пины `=<версия SDK>` в `[workspace.dependencies]`), и при выпуске программы её не трогают: её поднимает первое несовместимое изменение SDK после прошлого выпуска ([`sdk.md`](sdk.md), раздел 6). Затем обновить `Cargo.lock` (`cargo update -w`), прогнать проверки из раздела «Перед отправкой изменений» в [`development.md`](development.md) и закоммитить.
 
    В том же коммите записи раздела «Unreleased» в `CHANGELOG.md` переносятся в новый раздел `## <версия> — <дата>`. Они же служат основой описания релиза.
 2. Поставить подписанный тег, проверить подпись и запушить:

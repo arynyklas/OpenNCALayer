@@ -111,9 +111,24 @@ fn later_functions_name_an_unreleased_core() {
     }
 }
 
+/// The program's version, `[workspace.package]` of the workspace: the core a function appears
+/// in. The SDK crates, this one too, have a version of their own.
+fn core_version() -> Version {
+    let manifest = include_str!("../../../Cargo.toml");
+    let package = manifest
+        .split("[workspace.package]")
+        .nth(1)
+        .expect("[workspace.package]");
+    let version = package
+        .lines()
+        .find_map(|line| line.strip_prefix("version = "))
+        .expect("its version");
+    Version::parse(version.trim_matches('"')).unwrap()
+}
+
 #[test]
 fn since_is_not_newer_than_the_workspace() {
-    let workspace = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    let workspace = core_version();
     for import in Import::ALL {
         assert!(
             import.since() <= workspace,

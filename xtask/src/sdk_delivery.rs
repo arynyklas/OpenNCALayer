@@ -282,7 +282,7 @@ fn toml_path(path: &Path) -> String {
 /// A step fails: packaging, unpacking, the consumer's build or run, its output, or a closure
 /// that contains a [`FORBIDDEN`] crate or a package outside the unpacked sources.
 pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
-    let version = workspace_version(root)?;
+    let version = sdk_version(root)?;
     let work = target_directory(root)?.join("sdk-smoke");
     if work.exists() {
         fs::remove_dir_all(&work).with_context(|| format!("removing {}", work.display()))?;
@@ -469,16 +469,46 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn workspace_version(root: &Path) -> anyhow::Result<String> {
-    let text = fs::read_to_string(root.join("Cargo.toml"))?;
-    let table: toml::Table = toml::from_str(&text)?;
-    table
-        .get("workspace")
-        .and_then(|w| w.get("package"))
-        .and_then(|p| p.get("version"))
-        .and_then(toml::Value::as_str)
-        .map(str::to_owned)
-        .context("Cargo.toml: no [workspace.package] version")
+/// The SDK's version: the one version of every [`CHAIN`] crate (their own, not the program's
+/// `[workspace.package]`).
+fn sdk_version(root: &Path) -> anyhow::Result<String> {
+    let versions = chain_versions(&metadata_no_deps(root)?);
+    let mut names = versions.keys();
+    match (names.next(), names.next()) {
+        (Some(version), None) => Ok(version.clone()),
+        _ => bail!("the SDK chain has more than one version: {versions:?}"),
+    }
+}
+
+/// `cargo metadata --no-deps` of the workspace.
+fn metadata_no_deps(root: &Path) -> anyhow::Result<Value> {
+    Ok(serde_json::from_str(&cargo(
+        root,
+        &[
+            "metadata",
+            "--format-version",
+            "1",
+            "--no-deps",
+            "--offline",
+            "--locked",
+        ],
+    )?)?)
+}
+
+/// The [`CHAIN`] crates of `metadata` by version.
+fn chain_versions(metadata: &Value) -> BTreeMap<String, Vec<String>> {
+    let mut versions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        if let (Some(name), Some(version)) = (package["name"].as_str(), package["version"].as_str())
+            && CHAIN.contains(&name)
+        {
+            versions
+                .entry(version.to_owned())
+                .or_default()
+                .push(name.to_owned());
+        }
+    }
+    versions
 }
 
 /// The licence inventory of the SDK closure: the third-party crates (crates.io or the git
@@ -568,25 +598,15 @@ pub fn inventory_is_current(path: &Path, expected: &str) -> bool {
 }
 
 /// Problems with the publication chain, from `cargo metadata` of the real workspace: the set
-/// of crates with `publish` enabled must be exactly [`CHAIN`], and every crate must come after
+/// of crates with `publish` enabled must be exactly [`CHAIN`], every crate must come after
 /// the chain crates it depends on (normal and build dependencies; dev-dependencies are dropped
-/// by `cargo package`).
+/// by `cargo package`), and all of them must have one version, the SDK's.
 ///
 /// # Errors
 ///
 /// `cargo metadata` fails.
 pub fn chain_problems(root: &Path) -> anyhow::Result<Vec<String>> {
-    let metadata: Value = serde_json::from_str(&cargo(
-        root,
-        &[
-            "metadata",
-            "--format-version",
-            "1",
-            "--no-deps",
-            "--offline",
-            "--locked",
-        ],
-    )?)?;
+    let metadata = metadata_no_deps(root)?;
     let mut problems = Vec::new();
     let mut publishable = BTreeSet::new();
     let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -624,6 +644,10 @@ pub fn chain_problems(root: &Path) -> anyhow::Result<Vec<String>> {
                 ));
             }
         }
+    }
+    let versions = chain_versions(&metadata);
+    if versions.len() > 1 {
+        problems.push(format!("the chain has more than one version: {versions:?}"));
     }
     Ok(problems)
 }

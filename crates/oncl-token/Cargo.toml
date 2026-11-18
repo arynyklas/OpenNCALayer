@@ -1,7 +1,7 @@
 [package]
 name = "oncl-token"
 description = "Hardware tokens and ID cards for OpenNCALayer: APDU transport over PC/SC, a driver per token family, keys that sign on the card"
-version.workspace = true
+version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
