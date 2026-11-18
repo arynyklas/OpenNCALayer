@@ -10,25 +10,49 @@ use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use super::names::PluginId;
+use super::source::{ReleaseSource, SourceError};
 use crate::index::{Channel, Package, Sha256};
 use crate::plugins::{PluginName, PluginRelease, PluginReplaces};
-use crate::tuf::{PublisherName, Target, TargetPath};
+use crate::tuf::{Digest, PublisherName, Target, TargetPath};
 
-/// The longest URL of a publisher's package or homepage, in bytes.
+/// The longest URL a publisher's entry or `publishers.json` names, in bytes.
 pub const MAX_URL: usize = 2048;
 
-/// Whether `url` is a plain `https://` URL of at most [`MAX_URL`] bytes: a host, no user
-/// info, query or fragment, no whitespace or control characters.
-pub(crate) fn plain_https_url(url: &str) -> bool {
+/// Where the copies of the publishers' packages are downloaded from: the project's GitHub
+/// Releases (the repository of this crate), one release `pub-<publisher>-<sha256>` per
+/// package.
+pub const MIRROR_BASE: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases/download/");
+
+/// The only `url` a publisher's release may have: the copy of its package in the project's
+/// Releases, `<MIRROR_BASE>pub-<publisher>-<sha256>/<id>-<version>.onclp`, with the
+/// package's sha256 in lowercase hex.
+pub fn mirror_url(
+    publisher: &PublisherName,
+    id: &PluginId,
+    version: &Version,
+    sha256: &Digest,
+) -> String {
+    format!("{MIRROR_BASE}pub-{publisher}-{sha256}/{id}-{version}.onclp")
+}
+
+/// Whether `url` is an anonymous `https://` URL of at most [`MAX_URL`] bytes: a host, no
+/// user info or fragment, no whitespace or control characters. A query is allowed.
+pub(crate) fn anonymous_https_url(url: &str) -> bool {
     let Some(rest) = url.strip_prefix("https://") else {
         return false;
     };
-    let authority = rest.split('/').next().unwrap_or_default();
+    let authority = rest.split(['/', '?']).next().unwrap_or_default();
     url.len() <= MAX_URL
         && !authority.is_empty()
         && !authority.contains('@')
-        && !url.contains(['?', '#'])
+        && !url.contains('#')
         && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Whether `url` is a plain `https://` URL of at most [`MAX_URL`] bytes: an anonymous one
+/// without a query.
+pub(crate) fn plain_https_url(url: &str) -> bool {
+    anonymous_https_url(url) && !url.contains('?')
 }
 
 /// The `capabilities` of a publisher's release (`custom.oncl.capabilities`): the
@@ -109,10 +133,17 @@ pub enum EntryRejection {
     /// `id` or `version` differ from the path.
     #[error("id or version differ from the target path")]
     PathMismatch,
-    /// `url` is not a plain `https://` URL of at most [`MAX_URL`] bytes: no user info,
-    /// query or fragment.
-    #[error("the package url is not a plain https:// url of at most 2048 bytes")]
-    Url,
+    /// The version has build metadata (`+…`): GitHub renames such release files, and
+    /// versions differing only in it are equal in precedence.
+    #[error("the version has build metadata")]
+    BuildMetadata,
+    /// `url` is not the copy of the package in the project's Releases ([`mirror_url`]) for
+    /// this publisher, id, version and the target's sha256.
+    #[error("the package url is not its copy in the project's releases")]
+    NotMirrored,
+    /// `source` is missing or breaks a rule of its fields.
+    #[error("invalid source")]
+    Source(#[source] SourceError),
     /// `rollout` is over 100.
     #[error("rollout {0} is over 100")]
     Rollout(u8),
@@ -209,17 +240,20 @@ struct RawRelease {
     name: PluginName,
     #[serde(default)]
     capabilities: Option<Value>,
+    #[serde(default)]
+    source: Option<Value>,
     rollout: u8,
     #[serde(default)]
     revoked: bool,
 }
 
 /// A publisher's release as its role signs it: a [`PluginRelease`] with
-/// [`PluginRelease::publisher`] and [`PluginRelease::capabilities`] set, and the channel it
-/// is published to.
+/// [`PluginRelease::publisher`] and [`PluginRelease::capabilities`] set, the channel it is
+/// published to and the source archive it was built from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublisherRelease {
     channel: Channel,
+    source: ReleaseSource,
     release: PluginRelease,
 }
 
@@ -230,7 +264,8 @@ impl PublisherRelease {
     pub const MAX_MODULES: usize = 32;
 
     /// Reads the target `path` of `publisher`'s role: the path names the publisher, id and
-    /// version; `custom.oncl` the rest; the target's length and sha256 are the package's.
+    /// version; `custom.oncl` the rest; the target's length and sha256 are the package's,
+    /// and its `url` the copy of the package in the project's Releases ([`mirror_url`]).
     ///
     /// # Errors
     ///
@@ -243,6 +278,9 @@ impl PublisherRelease {
         let place = PublisherTarget::parse(path)
             .filter(|place| place.publisher == *publisher)
             .ok_or(EntryRejection::Path)?;
+        if !place.version.build.is_empty() {
+            return Err(EntryRejection::BuildMetadata);
+        }
         let entry = target
             .custom
             .as_ref()
@@ -262,9 +300,10 @@ impl PublisherRelease {
         if raw.id != place.id.as_str() || raw.version != place.version {
             return Err(EntryRejection::PathMismatch);
         }
-        if !plain_https_url(&raw.url) {
-            return Err(EntryRejection::Url);
+        if raw.url != mirror_url(publisher, &place.id, &place.version, &target.sha256) {
+            return Err(EntryRejection::NotMirrored);
         }
+        let source = ReleaseSource::parse(raw.source.as_ref()).map_err(EntryRejection::Source)?;
         if raw.rollout > 100 {
             return Err(EntryRejection::Rollout(raw.rollout));
         }
@@ -279,6 +318,7 @@ impl PublisherRelease {
                 .map_err(EntryRejection::Capabilities)?;
         Ok(PublisherRelease {
             channel: raw.channel,
+            source,
             release: PluginRelease {
                 id: raw.id,
                 version: raw.version,
@@ -303,6 +343,11 @@ impl PublisherRelease {
     /// `beta`.
     pub fn channel(&self) -> Channel {
         self.channel
+    }
+
+    /// The source archive the package was built from.
+    pub fn source(&self) -> &ReleaseSource {
+        &self.source
     }
 
     /// Whether a client of `channel` is offered the release.

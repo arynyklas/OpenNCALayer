@@ -1,8 +1,9 @@
 //! The plugin catalog of a channel: the owner's index plus the releases of third-party
 //! publishers (`docs/design/publishers.md`, «Каталог»).
 //!
-//! A [`Catalog`] is built from the owner's [`Index`], `publishers.json` read into a
-//! [`PublisherPolicy`] and the delegated roles of the publishers. The owner's word wins:
+//! A [`Catalog`] is built from the owner's [`Index`], the top-level targets,
+//! `publishers.json` read into a [`PublisherPolicy`] and the delegated roles of the
+//! publishers. The owner's word wins:
 //!
 //! 1. a version the owner revoked in `publishers.json` is revoked whatever the publisher's
 //!    role says;
@@ -11,13 +12,17 @@
 //!    owner's index is left out, unless the publisher replaces that port (`supersedes`);
 //! 4. a publisher's release outside its prefix, modules or bundles is left out.
 //!
+//! A publisher's target (`plugins/…`) in the top-level targets makes every publisher
+//! unavailable: the owner's tools never write one.
+//!
 //! Each publisher is [`PublisherState::Active`], [`PublisherState::Retired`] (it publishes no
 //! more: no new versions, installed ones stay unless revoked),
 //! [`PublisherState::Unavailable`] (its role, `publishers.json` or the delegations did not
 //! hold up, its `state` is unknown to this version, or `publishers.json` does not name it:
-//! its plugins are not updated and stay installed, except versions the owner revoked in
-//! `publishers.json`) or [`PublisherState::Revoked`] (the verified `publishers.json` says
-//! so). An error or a missing entry never revokes a publisher.
+//! its plugins are not updated and stay installed, except versions revoked by the owner in
+//! `publishers.json` or by a role still verified) or [`PublisherState::Revoked`] (the
+//! verified `publishers.json` says so). An error or a missing entry never revokes a
+//! publisher.
 //!
 //! A catalog of the owner's index alone ([`Catalog::owner`]) behaves as the index did:
 //! every publisher is unavailable and only the index's releases are offered.
@@ -25,6 +30,7 @@
 mod names;
 mod policy;
 mod release;
+mod source;
 #[cfg(test)]
 mod tests;
 
@@ -39,9 +45,10 @@ pub use policy::{
     Standing,
 };
 pub use release::{
-    CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, MAX_URL,
-    PublisherRelease, PublisherTarget,
+    CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, MAX_URL, MIRROR_BASE,
+    PublisherRelease, PublisherTarget, mirror_url,
 };
+pub use source::{ReleaseSource, SourceError, SourceVcs};
 
 use crate::index::Index;
 use crate::plugins::{PluginRelease, offerable};
@@ -54,11 +61,11 @@ pub enum PublisherState {
     /// Its role was verified; its releases are in the catalog.
     Active,
     /// It publishes no more: none of its releases is offered, its installed plugins stay
-    /// unless the owner revoked their versions in `publishers.json`.
+    /// unless their versions are revoked ([`Catalog::is_revoked`]).
     Retired,
     /// Its role, `publishers.json` or the delegations did not hold up, its `state` is
     /// unknown to this version, or `publishers.json` does not name it: its installed plugins
-    /// stay as they are until they do.
+    /// stay as they are until they do, unless their versions are revoked.
     Unavailable,
     /// The verified `publishers.json` names it revoked: its plugins are turned off.
     Revoked,
@@ -75,6 +82,9 @@ pub struct Catalog {
     states: BTreeMap<PublisherName, PublisherState>,
     /// The releases of the active publishers offered on the index's channel.
     releases: Vec<PluginRelease>,
+    /// The versions (build metadata cleared) the publishers' verified roles revoke, on
+    /// every channel, whatever their publisher's state: read by the target path alone.
+    self_revoked: BTreeSet<(String, Version)>,
     rejected: Vec<EntryRejected>,
 }
 
@@ -84,6 +94,8 @@ pub struct Catalog {
 pub struct CatalogBuilder<'r> {
     index: Index,
     policy: Result<PublisherPolicy, CatalogError>,
+    /// A publisher's target the top-level targets list, if any.
+    owner_plugin: Option<TargetPath>,
     builtin_modules: BTreeSet<String>,
     /// The delegated roles, in order, each name once: its targets if it was verified.
     roles: Vec<(PublisherName, Option<&'r BTreeMap<TargetPath, Target>>)>,
@@ -98,19 +110,26 @@ impl Catalog {
             policy: None,
             states: BTreeMap::new(),
             releases: Vec::new(),
+            self_revoked: BTreeSet::new(),
             rejected: Vec::new(),
         }
     }
 
-    /// Starts a catalog of `index` and `publishers.json` read as `policy`; an `Err` makes
-    /// every publisher unavailable.
+    /// Starts a catalog of `index`, the verified top-level targets `top_level` and
+    /// `publishers.json` read as `policy`. An `Err`, or a publisher's target (`plugins/…`)
+    /// among `top_level`, makes every publisher unavailable.
     pub fn builder<'r>(
         index: Index,
+        top_level: &BTreeMap<TargetPath, Target>,
         policy: Result<PublisherPolicy, CatalogError>,
     ) -> CatalogBuilder<'r> {
         CatalogBuilder {
             index,
             policy,
+            owner_plugin: top_level
+                .keys()
+                .find(|path| path.as_str().starts_with("plugins/"))
+                .cloned(),
             builtin_modules: BTreeSet::new(),
             roles: Vec::new(),
         }
@@ -156,21 +175,24 @@ impl Catalog {
         Some(self.policy.as_ref()?.covering(id)?.name())
     }
 
-    /// Whether `version` of `id` is revoked: by its release in the catalog, or by the owner
-    /// in `publishers.json` (build metadata aside), listed or not. The owner's revocation
-    /// holds while the publisher is active, retired or unavailable; it needs
-    /// `publishers.json`.
+    /// Whether `version` of `id` is revoked: by its release in the catalog, by the owner in
+    /// `publishers.json`, or by a verified role of its publisher on any channel (build
+    /// metadata aside, listed in the catalog or not). The publisher's revocations hold while
+    /// it is active, retired or unavailable; they need `publishers.json`.
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
         self.releases()
             .any(|r| r.id == id && r.version == *version && r.revoked)
             || self.publisher_of(id).is_some_and(|publisher| {
                 self.publisher_state(publisher) != PublisherState::Revoked
-                    && self
+                    && (self
                         .policy
                         .as_ref()
                         .and_then(|policy| policy.publisher(publisher))
                         .and_then(Publisher::rules)
                         .is_some_and(|active| active.revokes(id, version))
+                        || self
+                            .self_revoked
+                            .contains(&(id.to_owned(), without_build(version))))
             })
     }
 
@@ -243,20 +265,26 @@ impl<'r> CatalogBuilder<'r> {
         }
     }
 
-    /// The catalog. A `publishers.json` that gives a publisher a built-in module, names a
-    /// publisher active without a delegated role, or does not name (or names revoked) the
-    /// publisher of a delegated role is not used: every publisher is unavailable. Active
-    /// publishers' targets are offered; of a retired or unknown-state publisher's verified
-    /// role only the versions it revoked are read, so they stay withdrawn. Each target left
-    /// out of an active role is logged once.
+    /// The catalog. A publisher's target among the top-level targets, or a
+    /// `publishers.json` that gives a publisher a built-in module, names a publisher active
+    /// without a delegated role, or does not name (or names revoked) the publisher of a
+    /// delegated role, is not used: every publisher is unavailable. Active publishers'
+    /// targets are offered. Of every verified role, whatever its publisher's state, the
+    /// versions it revokes are read by their target path alone, on every channel, so they
+    /// stay withdrawn even when the rest of the target no longer holds. Each target left out
+    /// of an active role is logged once.
     pub fn build(self) -> Catalog {
         let CatalogBuilder {
             index,
             policy,
+            owner_plugin,
             builtin_modules,
             roles,
         } = self;
         let policy = policy.and_then(|policy| {
+            if let Some(path) = owner_plugin {
+                return Err(CatalogError::OwnerPluginTarget(path));
+            }
             policy.check_builtin(&builtin_modules)?;
             check_delegations(&policy, &roles)?;
             Ok(policy)
@@ -270,6 +298,7 @@ impl<'r> CatalogBuilder<'r> {
         };
         let mut states = BTreeMap::new();
         let mut releases = Vec::new();
+        let mut self_revoked = BTreeSet::new();
         let mut rejected = Vec::new();
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
@@ -299,18 +328,8 @@ impl<'r> CatalogBuilder<'r> {
                 continue;
             };
             states.insert(name.clone(), state);
+            self_revoked.extend(self_revocations(publisher, targets));
             if state != PublisherState::Active {
-                // Nothing is offered; only the versions it revoked itself are kept, so an
-                // installation that missed the withdrawal still withdraws them.
-                releases.extend(
-                    targets
-                        .iter()
-                        .filter_map(|(path, target)| {
-                            admit(publisher, rules, &owner, path, target).ok()
-                        })
-                        .map(PublisherRelease::into_release)
-                        .filter(|release| release.revoked),
-                );
                 continue;
             }
             for (path, target) in targets {
@@ -334,9 +353,42 @@ impl<'r> CatalogBuilder<'r> {
             policy: Some(policy),
             states,
             releases,
+            self_revoked,
             rejected,
         }
     }
+}
+
+/// `version` without build metadata: revocations do not tell versions apart by it.
+fn without_build(version: &Version) -> Version {
+    Version {
+        build: semver::BuildMetadata::EMPTY,
+        ..version.clone()
+    }
+}
+
+/// The versions `publisher`'s verified role revokes (`custom.oncl.revoked` is `true`),
+/// read from the target path alone: a path of its role, an id under its prefix. Nothing
+/// else of the target has to hold, so a revocation survives a rule the target no longer
+/// meets (a module the owner since took back, a newer schema).
+fn self_revocations<'t>(
+    publisher: &'t Publisher,
+    targets: &'t BTreeMap<TargetPath, Target>,
+) -> impl Iterator<Item = (String, Version)> + 't {
+    targets.iter().filter_map(move |(path, target)| {
+        let revoked = target
+            .custom
+            .as_ref()
+            .and_then(|custom| custom.get("oncl"))
+            .and_then(|oncl| oncl.get("revoked"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let place = PublisherTarget::parse(path)?;
+        (revoked
+            && place.publisher == *publisher.name()
+            && publisher.id_prefix().covers(place.id.as_str()))
+        .then(|| (place.id.as_str().to_owned(), without_build(&place.version)))
+    })
 }
 
 /// The active publishers are exactly those with a delegated role; a retired publisher or one

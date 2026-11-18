@@ -87,11 +87,38 @@ fn refused(publishers: Vec<Value>) -> CatalogError {
     PublisherPolicy::from_json(&policy_json(publishers)).unwrap_err()
 }
 
+/// The sha256 of every test package (`target`), in hex.
+fn package_hex() -> String {
+    "09".repeat(32)
+}
+
+/// The copy of `ecc`'s package `id` `version` in the project's Releases.
+fn mirrored(id: &str, version: &str) -> String {
+    format!(
+        "https://github.com/arynyklas/OpenNCALayer/releases/download/pub-ecc-{}/{id}-{version}.onclp",
+        package_hex()
+    )
+}
+
+/// A `custom.oncl.source` meeting every rule.
+fn source() -> Value {
+    json!({
+        "archive_sha256": "ab".repeat(32),
+        "archive_length": 2_345_678,
+        "fetch": "https://downloads.ecc.kz/oncl/kz.ecc.market-1.2.0.src.tar.gz",
+        "path": "crates/market",
+        "license": "Apache-2.0",
+        "builder": format!("sha256:{}", "cd".repeat(32)),
+        "vcs": {"url": "https://git.ecc.kz/oncl/market.git", "rev": "ef".repeat(20)}
+    })
+}
+
 /// `custom.oncl` of a stable release of `id` serving `kz.ecc.market.Signer`.
 fn entry(id: &str, version: &str) -> Value {
     json!({
         "schema": 1, "id": id, "version": version,
-        "url": format!("https://downloads.ecc.kz/{id}-{version}.onclp"),
+        "url": mirrored(id, version),
+        "source": source(),
         "channel": "stable", "min_core": "0.1.0",
         "modules": [SIGNER],
         "replaces": {"symname": MARKET, "version": "1.2.0"},
@@ -132,7 +159,7 @@ fn build(index: Index, publishers: Vec<Value>, roles: &Roles<'_>) -> Catalog {
     roles
         .iter()
         .fold(
-            Catalog::builder(index, Ok(policy(publishers))),
+            Catalog::builder(index, &BTreeMap::new(), Ok(policy(publishers))),
             |builder, (name, targets)| match targets {
                 Some(targets) => builder.role(&role_name(name), targets),
                 None => builder.unavailable_role(&role_name(name)),
@@ -193,10 +220,7 @@ fn custom_oncl_maps_onto_a_plugin_release() {
     let release = catalog.releases().next().unwrap();
     assert_eq!(release.id, MARKET);
     assert_eq!(release.version, v("1.2.0"));
-    assert_eq!(
-        release.package.url,
-        "https://downloads.ecc.kz/kz.ecc.market-1.2.0.onclp"
-    );
+    assert_eq!(release.package.url, mirrored(MARKET, "1.2.0"));
     assert_eq!(release.package.size, 4096);
     assert_eq!(release.package.sha256, Sha256([9; 32]));
     assert_eq!(release.min_core, v("0.1.0"));
@@ -515,13 +539,8 @@ fn an_owner_revocation_ignores_build_metadata() {
     let mut publisher = ecc_entry();
     publisher["revoked_versions"] =
         json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
-    let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.1.0+build.7")]);
+    let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.1.0")]);
     let catalog = build(index(vec![]), vec![publisher], &[("ecc", Some(&targets))]);
-    let tagged = catalog
-        .releases()
-        .find(|r| r.version == v("1.1.0+build.7"))
-        .unwrap();
-    assert!(tagged.revoked);
     assert!(catalog.is_revoked(MARKET, &v("1.1.0+x")));
     assert!(!catalog.is_revoked(MARKET, &v("1.1.0-rc.1")));
     let PluginChoice::Downgrade(fallback) = choose(&catalog, MARKET, "1.1.0+x") else {
@@ -534,9 +553,13 @@ fn an_owner_revocation_ignores_build_metadata() {
 fn an_unusable_publishers_json_makes_every_publisher_unavailable() {
     let targets = role(&[entry(MARKET, "1.0.0")]);
     let owner = port(PORT, "1.0.0", "kz.owner.Module", "kz.owner.bundle");
-    let catalog = Catalog::builder(index(vec![owner]), Err(CatalogError::Schema(2)))
-        .role(&role_name("ecc"), &targets)
-        .build();
+    let catalog = Catalog::builder(
+        index(vec![owner]),
+        &BTreeMap::new(),
+        Err(CatalogError::Schema(2)),
+    )
+    .role(&role_name("ecc"), &targets)
+    .build();
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
     assert_eq!(catalog.publisher_of(MARKET), None);
     assert!(matches!(
@@ -562,16 +585,24 @@ fn publishers_json_and_delegations_must_agree_on_the_active_publishers() {
 #[test]
 fn a_builtin_module_in_publishers_json_makes_every_publisher_unavailable() {
     let targets = role(&[entry(MARKET, "1.0.0")]);
-    let catalog = Catalog::builder(index(vec![]), Ok(policy(vec![ecc_entry()])))
-        .builtin_modules([SIGNER.to_owned()])
-        .role(&role_name("ecc"), &targets)
-        .build();
+    let catalog = Catalog::builder(
+        index(vec![]),
+        &BTreeMap::new(),
+        Ok(policy(vec![ecc_entry()])),
+    )
+    .builtin_modules([SIGNER.to_owned()])
+    .role(&role_name("ecc"), &targets)
+    .build();
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
     assert!(by_module(&catalog, SIGNER).is_none());
-    let catalog = Catalog::builder(index(vec![]), Ok(policy(vec![ecc_entry()])))
-        .builtin_modules([SIGNER.to_ascii_uppercase()])
-        .role(&role_name("ecc"), &targets)
-        .build();
+    let catalog = Catalog::builder(
+        index(vec![]),
+        &BTreeMap::new(),
+        Ok(policy(vec![ecc_entry()])),
+    )
+    .builtin_modules([SIGNER.to_ascii_uppercase()])
+    .role(&role_name("ecc"), &targets)
+    .build();
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
 }
 
@@ -603,6 +634,7 @@ fn a_port_is_hidden_only_by_a_replacement_serving_all_its_modules_and_bundle() {
     both["modules"] = json!([SIGNER, OTHER_MODULE]);
     let mut unbundled = both.clone();
     unbundled["version"] = json!("3.0.0");
+    unbundled["url"] = json!(mirrored(MARKET, "3.0.0"));
     unbundled["replaces"] = Value::Null;
     let cases = [
         (vec![entry(MARKET, "1.0.0")], None),
@@ -777,26 +809,56 @@ fn each_broken_rule_leaves_a_publisher_target_out() {
             matches!(r, R::Rollout(101))
         }),
         (
-            Box::new(|e| e["url"] = json!("http://downloads.ecc.kz/p.onclp")),
-            |r| matches!(r, R::Url),
-        ),
-        (
-            Box::new(|e| e["url"] = json!("https://user@downloads.ecc.kz/p.onclp")),
-            |r| matches!(r, R::Url),
-        ),
-        (
-            Box::new(|e| e["url"] = json!("https://downloads.ecc.kz/p.onclp?x=1")),
-            |r| matches!(r, R::Url),
-        ),
-        (
-            Box::new(|e| e["url"] = json!("https://downloads.ecc.kz/p.onclp#top")),
-            |r| matches!(r, R::Url),
+            Box::new(|e| e["url"] = json!("https://downloads.ecc.kz/p.onclp")),
+            |r| matches!(r, R::NotMirrored),
         ),
         (
             Box::new(|e| {
-                e["url"] = json!(format!("https://downloads.ecc.kz/{}", "a".repeat(2048)));
+                e["url"] = json!(mirrored(MARKET, "1.0.0").replace("https://", "http://"));
             }),
-            |r| matches!(r, R::Url),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| {
+                e["url"] = json!(mirrored(MARKET, "1.0.0").replace("arynyklas/", "other/"));
+            }),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| {
+                e["url"] = json!(mirrored(MARKET, "1.0.0").replace("pub-ecc-", "pub-other-"));
+            }),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(mirrored(MARKET, "1.0.0").replace("0909", "0a0a"))),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(mirrored(MARKET, "1.0.0").to_ascii_uppercase())),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(mirrored(MARKET, "1.0.1"))),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(mirrored("kz.ecc.other", "1.0.0"))),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(format!("{}?x=1", mirrored(MARKET, "1.0.0")))),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| e["url"] = json!(format!("{}/", mirrored(MARKET, "1.0.0")))),
+            |r| matches!(r, R::NotMirrored),
+        ),
+        (
+            Box::new(|e| {
+                e.as_object_mut().unwrap().remove("source");
+            }),
+            |r| matches!(r, R::Source(SourceError::Missing)),
         ),
         (Box::new(|e| e["modules"] = json!([])), |r| {
             matches!(r, R::Modules(0))
@@ -1009,7 +1071,7 @@ fn publishers_json_compares_module_and_bundle_names_ignoring_case() {
 }
 
 #[test]
-fn publishers_json_refuses_bad_shapes_and_sizes() {
+fn publishers_json_refuses_bad_shapes() {
     assert!(matches!(
         refused(vec![ecc_entry(), ecc_entry()]),
         CatalogError::Duplicate(_)
@@ -1030,24 +1092,10 @@ fn publishers_json_refuses_bad_shapes_and_sizes() {
         p["revoked_versions"] = json!([{"id": MARKET, "version": "1.0.0", "date": "2027-02-30"}]);
     });
     assert!(matches!(refused(vec![bad_date]), CatalogError::Date { .. }));
-    let many = (0..=PublisherPolicy::MAX_PUBLISHERS)
-        .map(|n| {
-            json!({
-                "name": format!("p{n:03}"), "state": "revoked", "display": display(),
-                "id_prefix": format!("kz.p{n:03}.")
-            })
-        })
-        .collect();
-    assert!(matches!(refused(many), CatalogError::TooMany { .. }));
     let schema = serde_json::to_vec(&json!({"schema": 2, "publishers": "?"})).unwrap();
     assert!(matches!(
         PublisherPolicy::from_json(&schema),
         Err(CatalogError::Schema(2))
-    ));
-    let large = vec![b' '; PublisherPolicy::MAX_LEN + 1];
-    assert!(matches!(
-        PublisherPolicy::from_json(&large),
-        Err(CatalogError::TooLarge { .. })
     ));
 }
 
@@ -1069,11 +1117,375 @@ fn declared_capabilities_are_an_object_of_at_most_16_kib() {
 #[test]
 fn the_first_role_of_a_publisher_counts() {
     let targets = role(&[entry(MARKET, "1.0.0")]);
-    let catalog = Catalog::builder(index(vec![]), Ok(policy(vec![ecc_entry()])))
-        .role(&role_name("ecc"), &targets)
-        .unavailable_role(&role_name("ecc"))
-        .build();
+    let catalog = Catalog::builder(
+        index(vec![]),
+        &BTreeMap::new(),
+        Ok(policy(vec![ecc_entry()])),
+    )
+    .role(&role_name("ecc"), &targets)
+    .unavailable_role(&role_name("ecc"))
+    .build();
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Active);
     assert_eq!(catalog.releases().count(), 1);
     assert_eq!(Channel::Stable, catalog.index().channel);
+}
+
+#[test]
+fn publishers_json_takes_up_to_its_limits_and_no_more() {
+    let publishers = |count: usize| -> Vec<Value> {
+        (0..count)
+            .map(|n| {
+                json!({
+                    "name": format!("p{n:03}"), "state": "revoked", "display": display(),
+                    "id_prefix": format!("kz.p{n:03}.")
+                })
+            })
+            .collect()
+    };
+    let most = PublisherPolicy::MAX_PUBLISHERS;
+    assert_eq!(most, 128);
+    assert_eq!(policy(publishers(most)).publishers().len(), most);
+    assert!(matches!(
+        refused(publishers(most + 1)),
+        CatalogError::TooMany {
+            count: 129,
+            max: 128
+        }
+    ));
+
+    // The revoked versions count across all publishers.
+    let revocations = |id: &str, numbers: std::ops::Range<usize>| -> Value {
+        numbers
+            .map(|n| json!({"id": id, "version": format!("1.0.{n}"), "date": "2027-02-10"}))
+            .collect()
+    };
+    let split = |total: usize| -> Vec<u8> {
+        let half = total / 2;
+        let mut ecc = ecc_entry();
+        ecc["revoked_versions"] = revocations(MARKET, 0..half);
+        let mut other = second("kz.second.");
+        other["revoked_versions"] = revocations("kz.second.tool", half..total);
+        policy_json(vec![ecc, other])
+    };
+    let most = PublisherPolicy::MAX_REVOKED_VERSIONS;
+    assert_eq!(most, 8000);
+    let fits = split(most);
+    assert!(fits.len() <= PublisherPolicy::MAX_LEN);
+    let read = PublisherPolicy::from_json(&fits).unwrap();
+    assert!(
+        read.publishers()[1]
+            .rules()
+            .unwrap()
+            .revokes("kz.second.tool", &v("1.0.7999"))
+    );
+    assert!(matches!(
+        PublisherPolicy::from_json(&split(most + 1)),
+        Err(CatalogError::TooManyRevoked {
+            count: 8001,
+            max: 8000
+        })
+    ));
+
+    // The file: 1 MiB, padding included.
+    assert_eq!(PublisherPolicy::MAX_LEN, 1024 * 1024);
+    let mut bytes = policy_json(vec![ecc_entry()]);
+    bytes.resize(PublisherPolicy::MAX_LEN, b' ');
+    assert!(PublisherPolicy::from_json(&bytes).is_ok());
+    bytes.push(b' ');
+    assert!(matches!(
+        PublisherPolicy::from_json(&bytes),
+        Err(CatalogError::TooLarge { len, max }) if len == max + 1 && max == 1024 * 1024
+    ));
+}
+
+#[test]
+fn the_mirror_is_the_projects_releases() {
+    assert_eq!(
+        MIRROR_BASE,
+        "https://github.com/arynyklas/OpenNCALayer/releases/download/"
+    );
+    let place = PublisherTarget::parse(&path_of(&entry(MARKET, "1.2.0"))).unwrap();
+    assert_eq!(
+        mirror_url(&ecc(), &place.id, &place.version, &Digest([9; 32])),
+        mirrored(MARKET, "1.2.0")
+    );
+}
+
+#[test]
+fn a_publisher_version_has_no_build_metadata() {
+    assert!(matches!(
+        rejection_at(
+            "plugins/ecc/kz.ecc.market/1.1.0+build.7.onclp",
+            entry(MARKET, "1.1.0+build.7")
+        ),
+        EntryRejection::BuildMetadata
+    ));
+}
+
+/// `PublisherRelease::parse` of `entry(MARKET, "1.0.0")` with `change` made to its `source`.
+fn parse_with_source(change: impl FnOnce(&mut Value)) -> Result<PublisherRelease, EntryRejection> {
+    let mut oncl = entry(MARKET, "1.0.0");
+    change(&mut oncl["source"]);
+    PublisherRelease::parse(&ecc(), &path_of(&oncl), &target(oncl))
+}
+
+#[test]
+fn a_source_is_read_by_the_rules_of_its_fields() {
+    let release = parse_with_source(|_| {}).unwrap();
+    let source = release.source();
+    assert_eq!(source.archive_sha256, Sha256([0xab; 32]));
+    assert_eq!(source.archive_length, 2_345_678);
+    assert_eq!(
+        source.fetch,
+        "https://downloads.ecc.kz/oncl/kz.ecc.market-1.2.0.src.tar.gz"
+    );
+    assert_eq!(source.path, "crates/market");
+    assert_eq!(source.license, "Apache-2.0");
+    assert_eq!(source.builder, Sha256([0xcd; 32]));
+    let vcs = source.vcs.as_ref().unwrap();
+    assert_eq!(vcs.url, "https://git.ecc.kz/oncl/market.git");
+    assert_eq!(vcs.rev, "ef".repeat(20));
+
+    let accepted: Vec<Change> = vec![
+        Box::new(|s| {
+            s.as_object_mut().unwrap().remove("vcs");
+        }),
+        Box::new(|s| s["vcs"] = Value::Null),
+        Box::new(|s| s["vcs"]["rev"] = json!("ef".repeat(32))),
+        Box::new(|s| s["path"] = json!("")),
+        Box::new(|s| s["fetch"] = json!("https://downloads.ecc.kz/get?file=market.tar.gz")),
+        Box::new(|s| s["archive_length"] = json!(ReleaseSource::MAX_ARCHIVE)),
+        Box::new(|s| s["license"] = json!("(MIT OR Apache-2.0) AND Unicode-3.0")),
+        Box::new(|s| s["license"] = json!("Not-Yet-Listed-1.0")),
+        Box::new(|s| s["future"] = json!({"any": 1})),
+    ];
+    for (index, change) in accepted.into_iter().enumerate() {
+        if let Err(reason) = parse_with_source(change) {
+            panic!("case {index}: {reason:?}");
+        }
+    }
+
+    type SourceExpected = fn(&SourceError) -> bool;
+    use SourceError as S;
+    let refused: Vec<(Change, SourceExpected)> = vec![
+        (Box::new(|s| *s = json!("https://x/")), |e| {
+            matches!(e, S::Malformed(_))
+        }),
+        (
+            Box::new(|s| {
+                s.as_object_mut().unwrap().remove("license");
+            }),
+            |e| matches!(e, S::Malformed(_)),
+        ),
+        (Box::new(|s| s["archive_length"] = json!(-1)), |e| {
+            matches!(e, S::Malformed(_))
+        }),
+        (Box::new(|s| s["vcs"] = json!("https://x/")), |e| {
+            matches!(e, S::Malformed(_))
+        }),
+        (
+            Box::new(|s| s["archive_sha256"] = json!("AB".repeat(32))),
+            |e| matches!(e, S::ArchiveSha256),
+        ),
+        (
+            Box::new(|s| s["archive_sha256"] = json!("ab".repeat(31))),
+            |e| matches!(e, S::ArchiveSha256),
+        ),
+        (Box::new(|s| s["archive_length"] = json!(0)), |e| {
+            matches!(e, S::ArchiveLength(0))
+        }),
+        (
+            Box::new(|s| s["archive_length"] = json!(ReleaseSource::MAX_ARCHIVE + 1)),
+            |e| matches!(e, S::ArchiveLength(_)),
+        ),
+        (
+            Box::new(|s| s["fetch"] = json!("http://downloads.ecc.kz/a.tar.gz")),
+            |e| matches!(e, S::Fetch),
+        ),
+        (
+            Box::new(|s| s["fetch"] = json!("https://user:pw@downloads.ecc.kz/a.tar.gz")),
+            |e| matches!(e, S::Fetch),
+        ),
+        (
+            Box::new(|s| s["fetch"] = json!("https://downloads.ecc.kz/a.tar.gz#top")),
+            |e| matches!(e, S::Fetch),
+        ),
+        (
+            Box::new(|s| s["fetch"] = json!(format!("https://ecc.kz/{}", "a".repeat(2048)))),
+            |e| matches!(e, S::Fetch),
+        ),
+        (Box::new(|s| s["path"] = json!("/crates/market")), |e| {
+            matches!(e, S::Path)
+        }),
+        (Box::new(|s| s["path"] = json!("crates/../market")), |e| {
+            matches!(e, S::Path)
+        }),
+        (Box::new(|s| s["license"] = json!("MIT/Apache-2.0")), |e| {
+            matches!(e, S::License)
+        }),
+        (Box::new(|s| s["license"] = json!("")), |e| {
+            matches!(e, S::License)
+        }),
+        (Box::new(|s| s["builder"] = json!("cd".repeat(32))), |e| {
+            matches!(e, S::Builder)
+        }),
+        (
+            Box::new(|s| s["builder"] = json!(format!("sha256:{}", "CD".repeat(32)))),
+            |e| matches!(e, S::Builder),
+        ),
+        (
+            Box::new(|s| s["builder"] = json!(format!("sha512:{}", "cd".repeat(32)))),
+            |e| matches!(e, S::Builder),
+        ),
+        (
+            Box::new(|s| s["vcs"]["url"] = json!("http://git.ecc.kz/market.git")),
+            |e| matches!(e, S::Vcs),
+        ),
+        (
+            Box::new(|s| s["vcs"]["rev"] = json!("ef".repeat(21))),
+            |e| matches!(e, S::Vcs),
+        ),
+        (
+            Box::new(|s| s["vcs"]["rev"] = json!("EF".repeat(20))),
+            |e| matches!(e, S::Vcs),
+        ),
+    ];
+    for (index, (change, expected)) in refused.into_iter().enumerate() {
+        match parse_with_source(change) {
+            Err(EntryRejection::Source(error)) if expected(&error) => {}
+            other => panic!("case {index}: {other:?}"),
+        }
+    }
+    // In a catalog the target is left out with the rest of its role kept.
+    let mut broken = entry(MARKET, "1.1.0");
+    broken["source"]["license"] = json!("MIT/Apache-2.0");
+    let catalog = ecc_catalog(&[entry(MARKET, "1.0.0"), broken]);
+    assert!(matches!(
+        catalog.rejected()[0].reason,
+        EntryRejection::Source(SourceError::License)
+    ));
+    assert_eq!(by_module(&catalog, SIGNER).unwrap().version, v("1.0.0"));
+}
+
+#[test]
+fn a_publisher_target_in_the_top_level_targets_makes_every_publisher_unavailable() {
+    let targets = role(&[entry(MARKET, "1.0.0")]);
+    let owner = port(PORT, "1.0.0", "kz.owner.Module", "kz.owner.bundle");
+    let top = |path: &str| {
+        BTreeMap::from([
+            (
+                TargetPath::parse("indexes/stable.json").unwrap(),
+                target(Value::Null),
+            ),
+            (TargetPath::parse(path).unwrap(), target(Value::Null)),
+        ])
+    };
+    let catalog_with = |path: &str| {
+        Catalog::builder(
+            index(vec![owner.clone()]),
+            &top(path),
+            Ok(policy(vec![ecc_entry()])),
+        )
+        .role(&role_name("ecc"), &targets)
+        .build()
+    };
+    let clean = catalog_with("publishers.json");
+    assert_eq!(clean.publisher_state(&ecc()), PublisherState::Active);
+    for path in ["plugins/ecc/kz.ecc.market/1.0.0.onclp", "plugins/x"] {
+        let tainted = catalog_with(path);
+        assert_eq!(
+            tainted.publisher_state(&ecc()),
+            PublisherState::Unavailable,
+            "{path}"
+        );
+        assert!(tainted.policy().is_none());
+        assert_eq!(tainted.releases().count(), 1);
+        assert_eq!(by_module(&tainted, "kz.owner.Module").unwrap().id, PORT);
+    }
+}
+
+#[test]
+fn a_publisher_revocation_holds_on_every_channel_whatever_else_the_target_breaks() {
+    let mut beta = entry(MARKET, "2.0.0-beta.1");
+    beta["channel"] = json!("beta");
+    beta["revoked"] = json!(true);
+    // A module the owner since took back from the publisher.
+    let mut taken = entry(MARKET, "1.1.0");
+    taken["modules"] = json!(["kz.ecc.taken.Module"]);
+    taken["revoked"] = json!(true);
+    // A newer schema this version does not read.
+    let mut newer = entry(MARKET, "1.2.0");
+    newer["schema"] = json!(2);
+    newer["revoked"] = json!(true);
+    // Under another publisher's prefix: not this role's to revoke.
+    let mut foreign = entry("kz.second.tool", "1.0.0");
+    foreign["revoked"] = json!(true);
+    let targets = role(&[entry(MARKET, "1.0.0"), beta, taken, newer, foreign]);
+    let mut other = second("kz.second.");
+    other["state"] = json!("retired");
+    for state in ["active", "retired", "suspended"] {
+        let mut publisher = ecc_entry();
+        publisher["state"] = json!(state);
+        let catalog = build(
+            index(vec![]),
+            vec![publisher, other.clone()],
+            &[("ecc", Some(&targets))],
+        );
+        for revoked in ["2.0.0-beta.1", "1.1.0", "1.1.0+local", "1.2.0"] {
+            assert!(catalog.is_revoked(MARKET, &v(revoked)), "{state} {revoked}");
+        }
+        assert!(!catalog.is_revoked(MARKET, &v("1.0.0")), "{state}");
+        assert!(
+            !catalog.is_revoked("kz.second.tool", &v("1.0.0")),
+            "{state}"
+        );
+        for current in ["2.0.0-beta.1", "1.1.0"] {
+            let choice = choose(&catalog, MARKET, current);
+            if state == "active" {
+                assert!(
+                    matches!(choice, PluginChoice::Downgrade(r) if r.version == v("1.0.0")),
+                    "{state} {current}: {choice:?}"
+                );
+            } else {
+                assert_eq!(choice, PluginChoice::Withdrawn, "{state} {current}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_replaced_port_lies_under_no_publishers_prefix() {
+    for state in ["active", "retired", "revoked"] {
+        let mut other = second("kz.second.");
+        other["state"] = json!(state);
+        let replacing = with(|p| p["supersedes"] = json!({ "kz.second.port": MARKET }));
+        assert!(
+            matches!(
+                refused(vec![replacing.clone(), other.clone()]),
+                CatalogError::Supersedes { .. }
+            ),
+            "{state}"
+        );
+        assert!(
+            matches!(
+                refused(vec![other, replacing]),
+                CatalogError::Supersedes { .. }
+            ),
+            "{state}"
+        );
+    }
+}
+
+#[test]
+fn one_publishers_modules_and_bundles_differ_in_more_than_case() {
+    let lower = SIGNER.to_ascii_lowercase();
+    assert!(matches!(
+        refused(vec![with(|p| p["modules"] = json!([SIGNER, lower]))]),
+        CatalogError::SharedModule { .. }
+    ));
+    let upper = MARKET.to_ascii_uppercase();
+    assert!(matches!(
+        refused(vec![with(|p| p["bundles"] = json!([MARKET, upper]))]),
+        CatalogError::SharedBundle { .. }
+    ));
 }

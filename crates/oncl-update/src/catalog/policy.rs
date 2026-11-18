@@ -14,7 +14,7 @@ use time::{Date, Month};
 
 use super::names::{BundleName, IdPrefix, ModuleName, PROJECT_PREFIX, PluginId};
 use super::release::plain_https_url;
-use crate::tuf::{NameError, PublisherName};
+use crate::tuf::{NameError, PublisherName, TargetPath};
 
 /// The longest translation of a publisher's display name, in characters.
 const MAX_DISPLAY: usize = 128;
@@ -40,6 +40,15 @@ pub enum CatalogError {
     /// More publishers than [`PublisherPolicy::MAX_PUBLISHERS`].
     #[error("publishers.json lists {count} publishers, more than {max}")]
     TooMany {
+        /// How many it lists.
+        count: usize,
+        /// The limit.
+        max: usize,
+    },
+    /// More revoked versions, all publishers together, than
+    /// [`PublisherPolicy::MAX_REVOKED_VERSIONS`].
+    #[error("publishers.json lists {count} revoked versions, more than {max}")]
+    TooManyRevoked {
         /// How many it lists.
         count: usize,
         /// The limit.
@@ -114,6 +123,10 @@ pub enum CatalogError {
     /// The delegations have a role of a publisher the file does not name, or names revoked.
     #[error("the delegations have a role of {0}, which is unnamed or revoked")]
     NotActive(PublisherName),
+    /// The top-level targets list a publisher's target (`plugins/…`): only publishers'
+    /// roles may.
+    #[error("the top-level targets list {0}, a publisher's target")]
+    OwnerPluginTarget(TargetPath),
     /// A translation of a publisher's display name is empty, longer than 128 characters,
     /// has a control character or names the project.
     #[error("the display name of publisher {0} is not acceptable")]
@@ -289,10 +302,12 @@ pub struct PublisherPolicy {
 impl PublisherPolicy {
     /// The format version read.
     pub const SCHEMA: u32 = 1;
-    /// The largest file, in bytes.
-    pub const MAX_LEN: usize = 64 * 1024;
+    /// The largest file, in bytes; also the most the caller downloads.
+    pub const MAX_LEN: usize = 1024 * 1024;
     /// The most publishers, revoked ones included.
     pub const MAX_PUBLISHERS: usize = 128;
+    /// The most revoked versions, all publishers together.
+    pub const MAX_REVOKED_VERSIONS: usize = 8000;
 
     /// Reads `publishers.json`. Members this version does not know are skipped.
     ///
@@ -543,6 +558,17 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
             return Err(CatalogError::TooMany {
                 count: raw.publishers.len(),
                 max: PublisherPolicy::MAX_PUBLISHERS,
+            });
+        }
+        let revoked = raw
+            .publishers
+            .iter()
+            .map(|p| p.revoked_versions.len())
+            .sum::<usize>();
+        if revoked > PublisherPolicy::MAX_REVOKED_VERSIONS {
+            return Err(CatalogError::TooManyRevoked {
+                count: revoked,
+                max: PublisherPolicy::MAX_REVOKED_VERSIONS,
             });
         }
         let publishers = raw
