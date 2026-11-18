@@ -36,6 +36,10 @@ pub const SUMS: &str = "SHA256SUMS";
 /// The file of a folder of modules naming what they were built from ([`source_digest`]).
 pub const SOURCE: &str = "SOURCE-SHA256";
 
+/// The lock file [`build`] holds in its target directory while it builds and reads the
+/// modules.
+const LOCK: &str = ".oncl-builtins.lock";
+
 /// A built-in module's crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Guest {
@@ -111,11 +115,21 @@ const CLEARED_VARS: &[&str] = &[
 /// Linux.
 /// `out` also gets [`SOURCE`], the [`source_digest`] of what they were built from.
 ///
+/// Builds in one `target_dir` run one at a time (a lock on a file there): the build scripts
+/// of several crates and `cargo xtask` share it, and none reads a module another rewrites.
+///
 /// # Errors
 ///
 /// The build fails, or a manifest is not a built-in module's of this version.
 pub fn build(workspace: &Path, target_dir: &Path, out: &Path) -> io::Result<Vec<Built>> {
     let digest = source_digest(workspace)?;
+    fs::create_dir_all(target_dir)?;
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(target_dir.join(LOCK))?;
+    lock.lock()?;
     let mut cargo = Command::new("cargo");
     cargo
         .current_dir(workspace)
@@ -405,9 +419,10 @@ pub fn check_manifest(manifest: &str) -> io::Result<()> {
 
 /// What a build script embedding the modules does: takes them from
 /// [`BUILTINS_DIR_VAR`] if it is set (checked against the sources of `workspace`), else
-/// builds them from the workspace at `workspace` in `$OUT_DIR/builtins-target`; lays them
-/// out in `$OUT_DIR/builtins` and writes `$OUT_DIR/builtins.rs` ([`sources_rs`]), to be
-/// `include!`d. Tells Cargo what to rerun on: the sources either way.
+/// builds them from the workspace at `workspace` in `builtins-target` of the build's target
+/// directory (one build for every crate embedding them, every profile and `cargo check`);
+/// lays them out in `$OUT_DIR/builtins` and writes `$OUT_DIR/builtins.rs` ([`sources_rs`]),
+/// to be `include!`d. Tells Cargo what to rerun on: the sources either way.
 ///
 /// # Errors
 ///
@@ -427,9 +442,33 @@ pub fn embed(workspace: &Path) -> io::Result<()> {
             println!("cargo:rerun-if-changed={}", dir.display());
             take(workspace, &dir, &out)?
         }
-        None => build(workspace, &out_dir.join("builtins-target"), &out)?,
+        None => {
+            let target = std::env::var("TARGET").unwrap_or_default();
+            build(workspace, &shared_target_dir(&out_dir, &target), &out)?
+        }
     };
     write_if_changed(&out_dir.join("builtins.rs"), sources_rs(&built).as_bytes())
+}
+
+/// Where [`embed`] builds the modules: `builtins-target` in the target directory of the
+/// build (`cargo xtask builtins build` builds in `target/builtins-target` too), so that
+/// every crate embedding the modules, every profile and `cargo check` share one build.
+/// Cargo gives a build script `out_dir` =
+/// `<target directory>[/<target>]/<profile>/build/<package>-<hash>/out`, the `<target>`
+/// folder named after the target triple `target` when the build names one (`--target`).
+/// `out_dir/builtins-target` if `out_dir` is laid out otherwise.
+fn shared_target_dir(out_dir: &Path, target: &str) -> PathBuf {
+    let named = |dir: &Path, name: &str| dir.file_name().is_some_and(|n| n == name);
+    let root = out_dir
+        .ancestors()
+        .nth(2)
+        .filter(|build| named(build, "build"))
+        .and_then(|build| build.parent()?.parent())
+        .map(|root| match root.parent() {
+            Some(parent) if !target.is_empty() && named(root, target) => parent,
+            _ => root,
+        });
+    root.unwrap_or(out_dir).join("builtins-target")
 }
 
 /// The Rust source of `SOURCES: &[oncl_plugin::BuiltinSource<'static>]`, the modules of
@@ -564,5 +603,32 @@ mod tests {
                 ["--remap-path-prefix=/home/u/.cargo=/cargo"]
             );
         }
+    }
+
+    #[test]
+    fn embed_builds_in_the_target_directory_of_the_out_dir() {
+        let host = "x86_64-pc-windows-msvc";
+        let root = Path::new("/w/target");
+        let shared = root.join("builtins-target");
+        for (out_dir, target) in [
+            ("debug/build/openncalayer-0123/out", host),
+            ("release/build/oncl-builtin-tests-4567/out", ""),
+            (
+                "x86_64-pc-windows-msvc/release/build/openncalayer-0123/out",
+                host,
+            ),
+            (
+                "aarch64-apple-darwin/builtin-test/build/openncalayer-0123/out",
+                "aarch64-apple-darwin",
+            ),
+        ] {
+            assert_eq!(
+                shared_target_dir(&root.join(out_dir), target),
+                shared,
+                "{out_dir}"
+            );
+        }
+        let odd = root.join("debug/elsewhere/openncalayer-0123/out");
+        assert_eq!(shared_target_dir(&odd, host), odd.join("builtins-target"));
     }
 }
