@@ -383,31 +383,30 @@ jobs:
           name: ncanode-fixtures
           path: target/fixtures/ncanode
       - uses: ./.github/actions/test-oracles
-      # Every platform's packages: the licences tests (`committed_licenses_are_fresh`,
-      # `committed_plugin_licenses_are_fresh`) and the SDK's inventory test
-      # (`committed_inventory_is_current_and_a_stale_copy_is_detected`, `cargo tree --target`
-      # of every platform) read them offline. Their result does not depend on the host, so
-      # they run on Linux alone, where the fetch takes seconds (close to a minute on Windows).
+      # Every platform's packages, which tests read offline from the cargo registry: the
+      # licences tests (`committed_licenses_are_fresh`, `committed_plugin_licenses_are_fresh`)
+      # and the SDK's closure and inventory tests (`cargo tree --offline`, the inventory with
+      # `--target` of every platform). This job builds nothing, so its registry is empty on
+      # every OS without this step. Under half a minute on Linux, about a minute on Windows,
+      # most of it unpacking: no cache, which would save little of that and share the
+      # repository's cache space with the test builds' caches.
       - name: Fetch packages
-        if: runner.os == 'Linux'
+        # bash (`-e`) on every OS: pwsh would fail the step on the last command's code only.
+        shell: bash
         run: |
           cargo fetch --locked
           cargo fetch --locked --manifest-path plugins/Cargo.toml
       - name: Test
         shell: bash
         run: |
-          filter='not binary_id(oncl-core::examples)'
-          if [ "$RUNNER_OS" != Linux ]; then
-            filter+=' and not (test(committed_licenses_are_fresh) | test(committed_plugin_licenses_are_fresh)'
-            filter+=' | test(committed_inventory_is_current_and_a_stale_copy_is_detected))'
-          fi
           # Extracted into the workspace's own target/, where the tests look for the
           # programs and the fixtures (and leave the downloaded fixtures alone). Tests write
           # into their `CARGO_TARGET_TMPDIR` (target/tmp), which cargo makes at build time.
           mkdir -p target/tmp
           cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/nextest/nextest.tar.zst" \
             --workspace-remap . --extract-to . --extract-overwrite \
-            --partition "slice:${{ matrix.partition }}/3" --run-ignored all -E "$filter"
+            --partition "slice:${{ matrix.partition }}/3" --run-ignored all \
+            -E 'not binary_id(oncl-core::examples)'
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
