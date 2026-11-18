@@ -1,7 +1,7 @@
 //! The secret keys of the repository, on the owner's machine.
 //!
 //! - `root`, `targets` and `snapshot` keys are **encrypted**: a minisign secret key file
-//!   (the format of `cargo xtask sign keygen`: scrypt over the passphrase, a checksum that
+//!   (scrypt over the passphrase, a checksum that
 //!   a wrong passphrase fails). A minisign secret key is an Ed25519 key pair; its 64-byte
 //!   `sk` is the 32-byte seed followed by the public key, so decrypting it gives the seed
 //!   `ring` builds the signing key from ([`oncl_update::tuf::SigningKey::from_seed`]), and
@@ -17,7 +17,7 @@
 //! directory with those of `tuf/v1`: a key is picked by its id, never by its file name. The
 //! two repositories share the targets key, the one of `tuf/v1`.
 //!
-//! Key files are written only where git would not commit them (as `sign keygen`) and never
+//! Key files are written only where git would not commit them and never
 //! over an existing file.
 
 use std::collections::BTreeSet;
@@ -192,7 +192,7 @@ pub fn parse_seed(text: &str) -> anyhow::Result<SigningKey> {
 pub fn write_key_file(dir: &Path, name: &str, text: &str) -> anyhow::Result<PathBuf> {
     let path = key_path(dir, name)?;
     fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-    crate::sign::write_new(&path, text.as_bytes(), true)?;
+    crate::files::write_new(&path, text.as_bytes(), true)?;
     Ok(path)
 }
 
@@ -210,7 +210,7 @@ pub fn key_path(dir: &Path, name: &str) -> anyhow::Result<PathBuf> {
             path.display()
         );
     }
-    crate::sign::refuse_committable(&path)?;
+    crate::files::refuse_committable(&path)?;
     Ok(path)
 }
 

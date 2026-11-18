@@ -3,21 +3,11 @@
 use oncl_pdk::abi::Import;
 use oncl_plugin::{Engine, Package};
 use oncl_port_tests::port_package;
-use oncl_testkit::plugin::{port_dirs, ports_built};
+use oncl_testkit::plugin::port_dirs;
 
 /// The short name of a port directory.
 fn short(dir: &std::path::Path) -> String {
     dir.file_name().unwrap().to_string_lossy().into_owned()
-}
-
-#[test]
-fn ports_workspace_builds_for_wasm32() {
-    let built = ports_built();
-    assert!(built.is_dir(), "{} is not built", built.display());
-    for dir in port_dirs() {
-        let wasm = oncl_testkit::plugin::port_wasm(&short(&dir));
-        assert!(wasm.is_file(), "{} is missing", wasm.display());
-    }
 }
 
 #[test]

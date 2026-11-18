@@ -2,11 +2,9 @@
 //! (`docs/design/update-index.md`).
 //!
 //! - [`add`] appends a released version to an index, from the downloaded assets of its
-//!   GitHub release, with the next `seq` and a new validity. The result is unsigned: sign it
-//!   with `cargo xtask sign`.
-//! - [`refresh`] gives an index the next `seq` and a new validity without other changes, to
-//!   sign it again before it expires.
-//! - [`check`] is the gate before publishing: the format, the signature by a trusted key,
+//!   GitHub release, with the next `seq` and a new validity.
+//! - [`refresh`] gives an index the next `seq` and a new validity without other changes.
+//! - [`check`] is the gate before publishing: the format, validity,
 //!   asset URLs on the project's releases ([`check_asset_urls`]), `seq` growth against the
 //!   base branch and, with a [`Remote`], that every asset answers `HEAD` with 200 and,
 //!   behind flags, that new versions passed `vm-smoke` and new `stable` versions
@@ -20,19 +18,20 @@ use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use minisign_verify::PublicKey;
 use oncl_update::{
-    Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, Package, PluginName,
-    PluginRelease, PluginReplaces, Sha256, Version,
+    Asset, Channel, CoreRelease, Extension, Flavor, FlavorPackage, Index, MAX_INDEX_LEN, Package,
+    PluginName, PluginRelease, PluginReplaces, Sha256, Version,
 };
 use serde_json::Value;
 use sha2::Digest;
 use time::OffsetDateTime;
 use ureq::Agent;
 
-use crate::legacy_index;
 use crate::registry::ports::Conformance;
-use crate::sign::signature_path;
+
+/// The oldest an index may be, from its `generated`, whatever its `expires` says: the length
+/// of the index's validity.
+pub const MAX_AGE: time::Duration = time::Duration::days(30);
 
 /// Where the indexes live, from the workspace root; published under `/updates/v1/`.
 pub const INDEX_DIR: &str = "updates/v1";
@@ -272,8 +271,6 @@ pub struct Written {
     pub path: PathBuf,
     /// Its new `seq`.
     pub seq: u64,
-    /// A signature of the previous index, removed: it does not match the new one.
-    pub removed_signature: Option<PathBuf>,
 }
 
 /// What [`add`] did.
@@ -296,8 +293,7 @@ pub struct Added {
 /// - optionally the extension, [`chromium_name`] and [`firefox_name`] together.
 ///
 /// sha256 and sizes come from the files; URLs are [`release_asset_url`]. `seq` grows by
-/// one, `generated` is `now` and `expires` 30 days later ([`legacy_index::MAX_AGE`]). A
-/// signature of the old index is removed.
+/// one, `generated` is `now` and `expires` 30 days later ([`MAX_AGE`]).
 ///
 /// # Errors
 ///
@@ -409,8 +405,7 @@ pub fn add(
 }
 
 /// Gives the index of `channel` in `dir` the next `seq`, `generated` = `now` and `expires`
-/// 30 days later, and nothing else, so it can be signed again before it expires. A
-/// signature of the old index is removed.
+/// 30 days later, and nothing else, before it expires.
 ///
 /// # Errors
 ///
@@ -422,7 +417,7 @@ pub fn refresh(dir: &Path, channel: Channel, now: OffsetDateTime) -> anyhow::Res
     write_next(&path, index, now)
 }
 
-/// Appends validated plugin packages to a channel's index, leaving the result unsigned.
+/// Appends validated plugin packages to a channel's index.
 ///
 /// Package hashes and metadata come from their bytes, never from their file names. A
 /// package goes to `stable` only if its port in `plugins` has `conformance = "confirmed"`
@@ -533,15 +528,14 @@ pub(crate) fn read_index(path: &Path, channel: Channel) -> anyhow::Result<Index>
     Ok(index)
 }
 
-/// Writes `index` to `path` with the next `seq` and a validity from `now`, and removes the
-/// signature beside it.
+/// Writes `index` to `path` with the next `seq` and a validity from `now`.
 fn write_next(path: &Path, mut index: Index, now: OffsetDateTime) -> anyhow::Result<Written> {
     index.seq = index
         .seq
         .checked_add(1)
         .context("seq cannot grow any further")?;
     index.generated = now.replace_nanosecond(0).expect("0 is a valid nanosecond");
-    index.expires = index.generated + legacy_index::MAX_AGE;
+    index.expires = index.generated + MAX_AGE;
 
     let mut json = serde_json::to_string_pretty(&index).context("serializing the index")?;
     json.push('\n');
@@ -552,17 +546,9 @@ fn write_next(path: &Path, mut index: Index, now: OffsetDateTime) -> anyhow::Res
         fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
     }
     fs::write(path, json).with_context(|| format!("writing {}", path.display()))?;
-    let signature = signature_path(path);
-    let removed_signature = if signature.exists() {
-        fs::remove_file(&signature).with_context(|| format!("removing {}", signature.display()))?;
-        Some(signature)
-    } else {
-        None
-    };
     Ok(Written {
         path: path.to_owned(),
         seq: index.seq,
-        removed_signature,
     })
 }
 
@@ -739,13 +725,8 @@ impl Remote for GitHub {
 
 /// What [`check`] reads besides the indexes.
 pub struct CheckOptions<'a> {
-    /// The trusted public keys (`crates/oncl-update/keys/`, [`trusted_keys`]): every index
-    /// must be signed with `current`, and every version new against `base` must be tagged
-    /// with a build embedding one of them ([`check_tag_key`]).
-    pub keys: &'a TrustedKeys,
-    /// The git revision of the base branch whose indexes `seq` must grow from and against
-    /// which new versions get [`check_tag_key`]; `None` skips both (the signature, schema,
-    /// expiry and URLs are still checked).
+    /// The git revision of the base branch whose indexes `seq` must grow from; `None` skips
+    /// it (the schema, expiry and URLs are still checked).
     pub base: Option<&'a str>,
     /// Require [`VM_SMOKE`] = `success` on the tag of every version new against `base`.
     /// Needs a [`Remote`].
@@ -770,17 +751,35 @@ pub struct Checked {
     pub new_versions: Vec<Version>,
 }
 
-/// Checks the indexes in `dir`: each passes the client's verification
-/// (`legacy_index::verify`, the signature by `options.keys.current` only: a `next.pub` is for
-/// clients, not for signing before the switch) at `options.now` and [`check_asset_urls`];
-/// against `options.base`, a changed index has a greater `seq` and no index is removed.
-/// With a base, every version new against it, or whose packages changed, passes
-/// [`check_tag_key`] in the repository of `dir` (all versions, if the base has no index of
-/// the channel). Without a base the tag gate is not applied: versions published before a
-/// key rotation keep tags with the old key, and the gate ran when they were added. With
-/// `remote`, every asset URL answers `HEAD` with 200, if `options.vm_smoke` every new
-/// version passed `vm-smoke`, and if `options.conformance` every new `stable` version
-/// passed `conformance`.
+/// Reads the index `bytes` of `channel`: at most [`MAX_INDEX_LEN`] bytes, valid
+/// ([`Index::from_json`]), of `channel`, and at `now` before its `expires` and less than
+/// [`MAX_AGE`] after its `generated`.
+fn read_valid(bytes: &[u8], channel: Channel, now: OffsetDateTime) -> anyhow::Result<Index> {
+    if bytes.len() as u64 > MAX_INDEX_LEN {
+        bail!("the index is larger than {MAX_INDEX_LEN} bytes");
+    }
+    let index = Index::from_json(bytes)?;
+    if index.channel != channel {
+        bail!(
+            "the index is for the {} channel, not {channel}",
+            index.channel
+        );
+    }
+    let deadline = match index.generated.checked_add(MAX_AGE) {
+        Some(aged) => aged.min(index.expires),
+        None => index.expires,
+    };
+    if now >= deadline {
+        bail!("the index expired at {deadline}");
+    }
+    Ok(index)
+}
+
+/// Checks the indexes in `dir`: each is valid at `options.now` ([`read_valid`]) and passes
+/// [`check_asset_urls`]; against `options.base`, a changed index has a greater `seq` and no
+/// index is removed. With `remote`, every asset URL answers `HEAD` with 200, if
+/// `options.vm_smoke` every new version passed `vm-smoke`, and if `options.conformance`
+/// every new `stable` version passed `conformance`.
 ///
 /// A `dir` that does not exist (no index published yet) passes with nothing checked,
 /// unless the base has an index there. An existing `dir` needs at least one index.
@@ -801,19 +800,14 @@ pub fn check(
             bail!("the {context} gate needs the network");
         }
     }
-    let signing = [options.keys.current.clone()];
     let mut checked = Vec::new();
     for channel in Channel::ALL {
         let path = index_path(dir, channel);
-        let signature = signature_path(&path);
         let base = match options.base {
             Some(rev) => base_index(dir, rev, channel)?,
             None => None,
         };
         if !path.exists() {
-            if signature.exists() {
-                bail!("{} has no index beside it", signature.display());
-            }
             if base.is_some() {
                 bail!(
                     "{} is in {} but removed here",
@@ -824,13 +818,7 @@ pub fn check(
             continue;
         }
         let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-        let sig = fs::read(&signature).with_context(|| {
-            format!(
-                "reading {}: sign the index with `cargo xtask sign`",
-                signature.display()
-            )
-        })?;
-        let index = legacy_index::verify(&bytes, &sig, &signing, channel, None, options.now)
+        let index = read_valid(&bytes, channel, options.now)
             .with_context(|| format!("{} is refused", path.display()))?;
         check_asset_urls(&index).with_context(|| format!("{} is refused", path.display()))?;
 
@@ -866,7 +854,7 @@ pub fn check(
                     None => true,
                 };
                 if changed {
-                    check_tag_key(dir, &release.version, options.keys)
+                    check_tag_root(dir, &release.version)
                         .with_context(|| format!("{} is refused", path.display()))?;
                 }
             }
@@ -981,76 +969,17 @@ pub(crate) fn git(dir: &Path, args: &[&str]) -> anyhow::Result<Output> {
         .with_context(|| format!("running git {}", args.join(" ")))
 }
 
-/// Where a build's update key is, from the workspace root: what the client embeds.
-pub const TAG_KEY: &str = "crates/oncl-update/keys/current.pub";
-
-/// The trusted public keys: `current.pub`, which signs the indexes, and the `next.pub` of a
-/// key rotation, which only clients take (`docs/dev/release.md`).
-pub struct TrustedKeys {
-    /// The key every published index is signed with.
-    pub current: PublicKey,
-    /// The key line (base64) of `current`.
-    current_line: String,
-    /// The key line of `next.pub`, if present.
-    next_line: Option<String>,
-}
-
-impl TrustedKeys {
-    /// Whether the key file `text` is `current` or `next`.
-    fn trusts(&self, text: &str) -> bool {
-        let line = key_line(text);
-        line == self.current_line || self.next_line.as_deref() == Some(line)
-    }
-}
-
-/// The base64 line of a minisign public key file.
-fn key_line(text: &str) -> &str {
-    text.lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.starts_with("untrusted comment:"))
-        .unwrap_or_default()
-}
-
-/// The trusted public keys in `dir`: `current.pub` and, if present, `next.pub`.
-///
-/// # Errors
-///
-/// If `current.pub` is missing or a key cannot be read.
-pub fn trusted_keys(dir: &Path) -> anyhow::Result<TrustedKeys> {
-    let read = |name: &str| -> anyhow::Result<(PublicKey, String)> {
-        let path = dir.join(name);
-        let text = fs::read_to_string(&path).with_context(|| {
-            format!(
-                "reading {}: make the key with `cargo xtask sign keygen`",
-                path.display()
-            )
-        })?;
-        let key =
-            PublicKey::decode(&text).with_context(|| format!("reading {}", path.display()))?;
-        Ok((key, key_line(&text).to_owned()))
-    };
-    let (current, current_line) = read("current.pub")?;
-    let next_line = if dir.join("next.pub").exists() {
-        Some(read("next.pub")?.1)
-    } else {
-        None
-    };
-    Ok(TrustedKeys {
-        current,
-        current_line,
-        next_line,
-    })
-}
+/// Where a build's TUF trust root is, from the workspace root: what the client embeds.
+pub const TAG_ROOT: &str = "crates/oncl-update/keys/root.json";
 
 /// Refuses `version` unless its tag `v<version>`, in the git repository of `dir`, holds
-/// [`TAG_KEY`] that is a minisign public key and one of `keys`: an installation moved onto
-/// it (an update, or the way off a revoked version) must be able to verify later indexes.
-/// A build without the key has its updater off for good.
+/// [`TAG_ROOT`]: an installation moved onto it must be able to verify later indexes. A
+/// build without the root has its updater off for good.
 ///
 /// # Errors
 ///
-/// The tag is missing, has no key, a malformed key, or a key `keys` does not have.
-pub fn check_tag_key(dir: &Path, version: &Version, keys: &TrustedKeys) -> anyhow::Result<()> {
+/// The tag is missing or has no trust root.
+pub fn check_tag_root(dir: &Path, version: &Version) -> anyhow::Result<()> {
     let tag = format!("v{version}");
     // The index directory may not exist yet (the first index of a channel).
     let (dir, _) = existing_ancestor(dir)?;
@@ -1062,18 +991,48 @@ pub fn check_tag_key(dir: &Path, version: &Version, keys: &TrustedKeys) -> anyho
     {
         bail!("{version}: there is no tag {tag} (fetch the tags)");
     }
-    let object = format!("refs/tags/{tag}:{TAG_KEY}");
-    let output = git(dir, &["cat-file", "blob", &object])?;
-    if !output.status.success() {
+    let object = format!("refs/tags/{tag}:{TAG_ROOT}");
+    if !git(dir, &["cat-file", "-e", &object])?.status.success() {
         bail!(
-            "{version}: {tag} has no {TAG_KEY}: its build cannot update itself, so no installation may be moved onto it"
+            "{version}: {tag} has no {TAG_ROOT}: its build cannot update itself, so no installation may be moved onto it"
         );
     }
-    let text = String::from_utf8(output.stdout).context("the key is not UTF-8")?;
-    PublicKey::decode(&text)
-        .with_context(|| format!("{version}: {TAG_KEY} of {tag} is not a minisign public key"))?;
-    if !keys.trusts(&text) {
-        bail!("{version}: {TAG_KEY} of {tag} is neither current.pub nor next.pub");
-    }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn valid(generated: OffsetDateTime, expires: OffsetDateTime) -> Vec<u8> {
+        use time::format_description::well_known::Rfc3339;
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "schema": 1,
+            "channel": "beta",
+            "seq": 1,
+            "generated": generated.format(&Rfc3339).unwrap(),
+            "expires": expires.format(&Rfc3339).unwrap(),
+            "core": [],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_index_over_the_size_limit_is_refused() {
+        let now = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        let mut bytes = valid(now, now + MAX_AGE);
+        read_valid(&bytes, Channel::Beta, now).unwrap();
+        bytes.resize(MAX_INDEX_LEN as usize + 1, b' ');
+        let error = read_valid(&bytes, Channel::Beta, now).unwrap_err();
+        assert!(error.to_string().contains("larger than"), "{error}");
+    }
+
+    #[test]
+    fn an_index_older_than_max_age_is_refused_whatever_its_expires() {
+        let generated = OffsetDateTime::from_unix_timestamp(1_790_000_000).unwrap();
+        let bytes = valid(generated, generated + time::Duration::days(365));
+        read_valid(&bytes, Channel::Beta, generated + time::Duration::days(29)).unwrap();
+        let error = read_valid(&bytes, Channel::Beta, generated + MAX_AGE).unwrap_err();
+        assert!(error.to_string().contains("expired"), "{error}");
+    }
 }
