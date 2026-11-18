@@ -424,10 +424,11 @@ fn open_page_path_asks_consent_once_per_session() {
     assert_eq!(asked.len(), 1);
     assert_eq!(asked[0].origin, ORIGIN);
     assert_eq!(asked[0].source, "Тестовый плагин");
-    let shown = std::fs::canonicalize(synthetic("user-gost2015-sign").path).unwrap();
-    let shown = path_text(&shown);
-    let shown = shown.strip_prefix(r"\\?\").unwrap_or(&shown);
-    assert!(asked[0].text.contains(shown), "{}", asked[0].text);
+    // As the prompt shows it: `\\?\UNC\host\…` as `\\host\…`, other `\\?\` paths without it.
+    let shown = path_text(&oncl_testkit::real_path(
+        &synthetic("user-gost2015-sign").path,
+    ));
+    assert!(asked[0].text.contains(&shown), "{}", asked[0].text);
     assert!(asked[0].text.contains(ORIGIN), "{}", asked[0].text);
     // Another session asks again.
     let mut second = guest_in(&services, &manifest(KEY_FILES), &calls, 2);
