@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 use oncl_pki::http::HttpTransport;
 use oncl_update::tuf::{
     Fetcher, FileStore, HttpFetcher, Limits, Response, Store, TufClient, TufError, layout,
+    model::TARGETS_META,
 };
 use oncl_update::{Channel, Index, MAX_INDEX_LEN, UpdateError};
 use time::OffsetDateTime;
@@ -256,6 +257,31 @@ impl Repository {
         self.offline
             .verify_cached_target(&channel.target_path(), bytes, now)
             .map_err(|e| e.to_string())
+    }
+
+    /// Whether the saved state has seen newer metadata than it has accepted: a timestamp
+    /// that lists a newer snapshot than the one accepted, or a snapshot that lists newer
+    /// targets than the ones accepted. A refresh that failed halfway leaves that: the
+    /// repository has published something the saved state does not hold, and what the
+    /// saved state vouches for may be what that publication withdrew.
+    ///
+    /// # Errors
+    ///
+    /// Why the saved state cannot be read.
+    pub fn newer_metadata_seen(&self) -> Result<bool, String> {
+        let state = self.offline.store().load().map_err(|e| e.to_string())?;
+        let behind = |listed: Option<u64>, accepted: Option<u64>| match (listed, accepted) {
+            (Some(listed), Some(accepted)) => listed > accepted,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let listed_snapshot = state.timestamp.as_ref().map(|t| t.snapshot.version);
+        let accepted_snapshot = state.snapshot.as_ref().map(|s| s.version);
+        let listed_targets = state
+            .snapshot
+            .as_ref()
+            .and_then(|s| s.meta.get(TARGETS_META).copied());
+        Ok(behind(listed_snapshot, accepted_snapshot) || behind(listed_targets, state.targets))
     }
 }
 
