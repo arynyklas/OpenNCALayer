@@ -9,18 +9,20 @@ use oncl_builtins_build::Built;
 /// Where `builtins build` lays the modules out, from the workspace root.
 pub const DEFAULT_OUT: &str = "target/builtins";
 
-/// Builds the built-in modules of the workspace `root` (in `target/builtins-target`) and lays
-/// them out in `out`, which it returns absolute; prints `<package> <sha256>` of each.
+/// Builds the built-in modules of the workspace `root` (in `builtins-target` of its target
+/// directory, the one the build scripts share) and lays them out in `out`, which it returns
+/// absolute; prints `<package> <sha256>` of each.
 ///
 /// # Errors
 ///
-/// The build fails or a manifest is not a built-in module's of this version.
+/// The target directory is unknown, the build fails or a manifest is not a built-in
+/// module's of this version.
 pub fn build(root: &Path, out: &Path) -> anyhow::Result<(PathBuf, Vec<Built>)> {
     let out = std::path::absolute(out).with_context(|| format!("{}", out.display()))?;
     println!("Building the built-in modules into {}", out.display());
+    let target = crate::sdk_delivery::target_directory(root)?.join("builtins-target");
     let built =
-        oncl_builtins_build::build(root, &root.join("target").join("builtins-target"), &out)
-            .context("building the built-in modules")?;
+        oncl_builtins_build::build(root, &target, &out).context("building the built-in modules")?;
     for module in &built {
         println!(
             "{} {}",

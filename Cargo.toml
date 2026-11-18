@@ -29,9 +29,8 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 # pins the exact workspace version: `cargo package` needs a `version` next to each `path`, and
 # it must be bumped together with `[workspace.package]`. These crates (and only these) set
 # `publish = true` in their manifests so that `cargo package` can verify the chain offline;
-# nothing uploads them: the forked `hmac`/`streebog` (git dependencies) are not on crates.io under
-# these names (crates.io's lack the `secret-input` feature), so a registry release is blocked
-# until that is decided. A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
+# nothing uploads them: a registry release is a separate decision (docs/dev/sdk.md section 7).
+# A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
 oncl-flows = { path = "crates/oncl-flows", version = "=0.1.1" }
 oncl-gost = { path = "crates/oncl-gost", version = "=0.1.1" }
@@ -82,9 +81,11 @@ gost94 = { version = "0.11.0", default-features = false }
 # point to, so no key is stored twice; already in the lock file, no features (std's hasher).
 hashbrown = { version = "0.17.1", default-features = false }
 hex-literal = "1.1.0"
-# Fork with additive secret-input variants (see `[patch.crates-io]`); the git source is also
-# named here so that independent SDK consumers, who do not inherit that section, get it too.
-hmac = { version = "0.13.0", git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
+# Ordinary HMAC (PKCS#12 MACs, PBKDF2). The KDF HMAC of `oncl-gost::wrap` is its own code over
+# its secret-input Streebog (`crates/oncl-gost/src/secret_hmac.rs`). `zeroize` turns on
+# `digest/zeroize` for the whole graph: hash cores and block buffers wipe themselves on drop
+# (e.g. the PBKDF2 `Hmac<Sha256>` state of PKCS#12).
+hmac = { version = "0.13.0", features = ["zeroize"] }
 httparse = "1.10.1"
 # The tray on Linux (StatusNotifierItem over D-Bus, no GTK): zbus on async-io, like the AT-SPI
 # of Slint's winit backend; `blocking` runs the service in a thread of its own.
@@ -145,9 +146,12 @@ sha2 = "0.11.1"
 slint = { version = "~1.18.1", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "accessibility"] }
 slint-build = "~1.18.1"
 spki = { version = "0.8.1", features = ["alloc"] }
-# Fork with additive secret-input variants (see `[patch.crates-io]`); the git source is also
-# named here so that independent SDK consumers, who do not inherit that section, get it too.
-streebog = { version = "0.11.0", git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69", default-features = false }
+# Public-document hashing. Secret input (VKO shared point, KDF key blocks) goes through the
+# secret-input Streebog of `oncl-gost` (`crates/oncl-gost/src/streebog_secret.rs`).
+streebog = { version = "0.11.0", default-features = false, features = ["zeroize"] }
+# Constant-time selection of the secret-input Streebog of `oncl-gost`. Pinned: its selection
+# code was reviewed in optimized builds at this version.
+subtle = { version = "=2.6.1", default-features = false }
 tempfile = "3.27.0"
 thiserror = "2.0.21"
 time = "0.3.55"
@@ -205,8 +209,8 @@ zip = { version = "9.1.0", default-features = false, features = ["deflate-flate2
 
 [patch.crates-io]
 # Forks of the crates.io packages with one change each, pinned by commit (`rev`); the change
-# and its upstream commit are in the fork branch named in each comment. A Slint, Velopack,
-# RustCrypto or multer upgrade means rebasing that branch and moving the `rev`.
+# and its upstream commit are in the fork branch named in each comment. A Slint, Velopack or
+# multer upgrade means rebasing that branch and moving the `rev`.
 #
 # `SystemParametersInfoForDpi` (Windows 10 1607+) is looked up at run time instead of
 # imported, so the Windows 7 builds start. The version must stay the one `slint` locks.
@@ -215,14 +219,11 @@ i-slint-backend-winit = { git = "https://github.com/arynyklas/slint", rev = "586
 
 # A full package already on disk or rebuilt from deltas is checked by the update source before
 # it is used and before Update.exe is taken from it. The version must stay the one above.
-# Branch `openncalayer/velopack-1.3.39-g8d2844f` of arynyklas/velopack.
+# Branch `openncalayer/velopack-1.3.39-g8d2844f` of arynyklas/velopack. Upstream plans to stop
+# keeping packages on disk and to drop this verify step (velopack/velopack#1175): on that
+# upgrade the contents check (`IndexSource::verify_full_package`) must move to wherever
+# Velopack then reads the package, still before the new Update.exe runs.
 velopack = { git = "https://github.com/arynyklas/velopack", rev = "e2c8d73c368ce0383a547ed5f3dfece42f98ac72" }
-
-# Additive secret-input variants of the cores for agreement/wrap; the ordinary public-document
-# hash/HMAC APIs keep their original fast path. Branches `openncalayer/streebog-0.11.0` of
-# arynyklas/hashes and `openncalayer/hmac-0.13.0` of arynyklas/MACs.
-streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
-hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 
 # RSA key generation (`oncl-pki::keygen` and its tests, `cargo xtask gen-fixtures` and the
 # xtask tests) is very slow unoptimized.

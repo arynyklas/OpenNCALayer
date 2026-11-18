@@ -19,24 +19,13 @@
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 oncl-pki = { path = "OpenNCALayer/crates/oncl-pki" }
-
-# SDK собран с форками `streebog` и `hmac` (добавлены варианты с секретным входом):
-# потребитель вне workspace должен нести тот же патч. `rev` — те же, что в
-# `[patch.crates-io]` корневого `Cargo.toml`.
-[patch.crates-io]
-streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
-hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
-или по git, закреплённому на коммите (секция патча та же):
+или по git, закреплённому на коммите:
 
 ```toml
 [dependencies]
 oncl-core = { git = "https://github.com/arynyklas/OpenNCALayer", rev = "<коммит>", features = ["full"] }
-
-[patch.crates-io]
-streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
-hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
 Минимальный SDK (`default-features = false`, то же, что по умолчанию) включает CMS/CAdES,

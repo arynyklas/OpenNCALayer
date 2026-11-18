@@ -70,7 +70,7 @@ cargo test -p <crate>
 - Never generate, replace, rotate or commit signing keys. Secret keys never go into the repository or CI (the single exception is the TUF `timestamp` key held as a GitHub secret). Do not edit `crates/oncl-update/keys/`.
 - `updates/v1/*` and `tuf/v1/*` are owner-signed. Never edit, re-sign or "fix" them by hand; an index change comes only from the release workflow plus the maintainer's signature (`docs/dev/release.md`). Do not resolve `seq` conflicts manually.
 - Forked dependencies are pinned by full `rev` in the root `Cargo.toml`. Fork branches are never rewritten; a change is a new commit and a new `rev` (`docs/dev/development.md`, "Форки сторонних крейтов").
-- Secret input (keys, passwords) goes through the `secret-input` types and is wiped; never log or persist it.
+- Secret input (keys, passwords) is wiped; never log or persist it. GOST hashing of secrets (VKO shared point, KDF keys) goes through the secret-input Streebog/HMAC of `oncl-gost` (`streebog_secret.rs`, `secret_hmac.rs`), never through the public `streebog`/`hmac`.
 - Do not change test expectations, fixtures or `expected` files only to make a test pass. State the failure mode first.
 - Never publish recordings of the original, private paths, hostnames or real certificates.
 

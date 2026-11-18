@@ -1,4 +1,5 @@
-//! Plugin releases in the signed channel index, and the version an installation may use.
+//! Plugin releases in the signed channel index and in publishers' roles, and the version an
+//! installation may use.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -6,7 +7,9 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
-use crate::{Index, Package, UpdateError};
+use crate::catalog::{Catalog, DeclaredCapabilities, PublisherState};
+use crate::tuf::PublisherName;
+use crate::{Package, UpdateError};
 
 /// A version of one plugin, independently released from the core.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,6 +35,14 @@ pub struct PluginRelease {
     /// Stop offering this release and move installed copies away from it.
     #[serde(default)]
     pub revoked: bool,
+    /// The publisher whose role signed the release; `None` for the owner's index. Never
+    /// read from JSON, so the owner's index cannot pass a port off as a publisher's plugin.
+    #[serde(skip)]
+    pub publisher: Option<PublisherName>,
+    /// The capabilities a publisher's release declares (`custom.oncl.capabilities`); `None`
+    /// for the owner's index, whose packages are checked against their manifest alone.
+    #[serde(skip)]
+    pub capabilities: Option<DeclaredCapabilities>,
 }
 
 /// The symbolic name and version exposed to sites as an installed original bundle.
@@ -88,8 +99,9 @@ pub fn plugin_bucket(install_id: &[u8; 16], id: &str, version: &Version) -> u8 {
     (u16::from(digest[0]) * 100 / 256) as u8
 }
 
-/// What to do with an installed plugin after accepting a new channel index.
+/// What to do with an installed plugin after accepting a new catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PluginChoice<'a> {
     /// Leave the installed version alone.
     Keep,
@@ -99,6 +111,24 @@ pub enum PluginChoice<'a> {
     Downgrade(&'a PluginRelease),
     /// The installed version is revoked and no eligible replacement exists.
     Withdrawn,
+    /// The plugin's publisher is revoked: the caller turns it off as if withdrawn.
+    PublisherRevoked(&'a PublisherName),
+}
+
+/// Whether `release` may be offered to this installation: not revoked, compatible with
+/// `core`, not `bad` and rolled out to `install_id`.
+pub(crate) fn offerable(
+    release: &PluginRelease,
+    core: &Version,
+    install_id: &[u8; 16],
+    bad: &BTreeMap<String, BTreeSet<Version>>,
+) -> bool {
+    !release.revoked
+        && release.min_core <= *core
+        && !bad
+            .get(&release.id)
+            .is_some_and(|versions| versions.contains(&release.version))
+        && plugin_bucket(install_id, &release.id, &release.version) < release.rollout
 }
 
 /// Chooses a plugin update compatible with `core` and not known to fail here.
@@ -107,21 +137,34 @@ pub enum PluginChoice<'a> {
 /// getting off the withdrawn version takes precedence, including by downgrade. If no
 /// safe replacement exists the caller must unload it. An unlisted current version alone
 /// never causes a downgrade or removal.
+///
+/// A publisher's plugin is [`PluginChoice::PublisherRevoked`] once its publisher is revoked.
+/// While its publisher is retired or unavailable it is kept as it is, unless the owner
+/// revoked its version in `publishers.json`: then it is [`PluginChoice::Withdrawn`]. A
+/// version the owner revoked is revoked even if its publisher no longer lists it.
 pub fn choose_plugin<'a>(
-    index: &'a Index,
+    catalog: &'a Catalog,
     id: &str,
     current: &Version,
     core: &Version,
     install_id: &[u8; 16],
     bad: &BTreeSet<Version>,
 ) -> PluginChoice<'a> {
-    let revoked = index
-        .plugins
-        .iter()
-        .any(|r| r.id == id && r.version == *current && r.revoked);
-    let candidate = index
-        .plugins
-        .iter()
+    if let Some(publisher) = catalog.publisher_of(id) {
+        match catalog.publisher_state(publisher) {
+            PublisherState::Active => {}
+            PublisherState::Retired | PublisherState::Unavailable
+                if catalog.is_revoked(id, current) =>
+            {
+                return PluginChoice::Withdrawn;
+            }
+            PublisherState::Retired | PublisherState::Unavailable => return PluginChoice::Keep,
+            PublisherState::Revoked => return PluginChoice::PublisherRevoked(publisher),
+        }
+    }
+    let revoked = catalog.is_revoked(id, current);
+    let candidate = catalog
+        .releases()
         .filter(|r| {
             r.id == id
                 && !r.revoked
@@ -139,26 +182,23 @@ pub fn choose_plugin<'a>(
 }
 
 /// Finds the newest compatible, non-revoked offered release matching a module or bundle.
+/// A port a publisher replaces is not offered once its replacement is
+/// ([`Catalog::replacement`]).
 ///
 /// `pick` supplies the lookup, for example a `replaces.symname` or a `modules` member.
 pub fn offer<'a>(
-    index: &'a Index,
+    catalog: &'a Catalog,
     core: &Version,
     install_id: &[u8; 16],
     bad: &BTreeMap<String, BTreeSet<Version>>,
     pick: impl Fn(&PluginRelease) -> bool,
 ) -> Option<&'a PluginRelease> {
-    index
-        .plugins
-        .iter()
+    catalog
+        .releases()
         .filter(|r| {
-            !r.revoked
-                && r.min_core <= *core
-                && !bad
-                    .get(&r.id)
-                    .is_some_and(|versions| versions.contains(&r.version))
-                && plugin_bucket(install_id, &r.id, &r.version) < r.rollout
+            offerable(r, core, install_id, bad)
                 && pick(r)
+                && catalog.replacement(&r.id, core, install_id, bad).is_none()
         })
         .max_by(|a, b| a.version.cmp(&b.version).then_with(|| b.id.cmp(&a.id)))
 }

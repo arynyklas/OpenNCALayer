@@ -510,6 +510,8 @@ pub fn add_plugins(
             },
             rollout,
             revoked: false,
+            publisher: None,
+            capabilities: None,
         });
     }
     check_asset_urls(&index)

@@ -66,6 +66,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # A test or check whose oracle program is missing fails instead of skipping.
+  ONCL_REQUIRE_ORACLES: "1"
 
 jobs:
   # The timestamp of the TUF repository, signed with the online key (see the header). It
