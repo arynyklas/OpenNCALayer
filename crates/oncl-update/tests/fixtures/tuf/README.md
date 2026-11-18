@@ -15,8 +15,8 @@
 - `keys.json` — id, публичные ключи и сиды всех **синтетических тестовых ключей** (шесть репозитория
   `valid/` и шесть делегированных репозиториев). Они сгенерированы только для тестов, нигде не
   используются и не имеют отношения к реальным ключам проекта: `seed = sha256("oncl-tuf-oracle-v1/" + имя)`.
-- `delegated-*/` и `cross-repo/` — репозитории с делегированными ролями издателей (раздел
-  «Делегированные векторы» ниже).
+- `delegated-*/` — репозитории с делегированными ролями издателей (раздел «Делегированные
+  векторы» ниже).
 
 ## Контракт, который воспроизводят векторы
 
@@ -102,9 +102,10 @@ python3 -m venv /mnt/d/oncl-tuf-venv        # WSL Ubuntu
 
 ## Делегированные векторы
 
-Раскладка `tuf/v2` из `docs/design/publishers.md`. Свой корень (`delegated-valid/metadata/1.root.json`,
-он же доверенный якорь каждого делегированного вектора): ключи `v2-root`, `v2-snapshot`,
-`v2-timestamp` и общий с `valid/` ключ `targets`. Верхний `targets` версии 1 перечисляет оба индекса
+Раскладка `tuf/v1` с делегированиями из `docs/design/publishers.md`. Свой корень
+(`delegated-valid/metadata/1.root.json`, он же доверенный якорь каждого делегированного вектора):
+ключи `v2-root`, `v2-snapshot`, `v2-timestamp` (имена остались от схемы с отдельным репозиторием
+`tuf/v2`, от которой отказались) и общий с `valid/` ключ `targets`. Верхний `targets` версии 1 перечисляет оба индекса
 и `publishers.json` и делегирует `pub-alpha` (ключ `pub-alpha`, `paths: ["plugins/alpha/*/*"]`) и
 `pub-beta` (ключ `pub-beta`, `plugins/beta/*/*`), обе роли `terminating`, порог 1. Роль `pub-alpha`
 версии 2 перечисляет `plugins/alpha/kz.alpha.signer/1.0.0.onclp`, `pub-beta` версии 1 —
@@ -136,7 +137,6 @@ python-tuf: модель не построила бы повтор имени р
 | `delegated-glob-depth` (лишний сегмент пути) | цель с лишним сегментом не найдена | `pub-alpha` недоступна (цель вне путей) |
 | `delegated-duplicate-role` | `refresh`: `DeserializationError` (`ValueError: Duplicate role pub-beta`) | `refresh` отказывает на targets (`Malformed`) |
 | `delegated-top-level-name` (роль `timestamp`) | `refresh`: `DeserializationError` (`ValueError: Delegated roles cannot be empty or use top-level role names`) | `refresh` отказывает на targets (`Malformed`) |
-| `cross-repo` (файлы `valid/` за корнем `delegated-valid`) | `refresh`: `UnsignedMetadataError` на timestamp | `refresh` отказывает по подписи timestamp, до сохранения |
 
 Что векторы установили о python-tuf 7.0.1:
 

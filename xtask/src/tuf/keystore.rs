@@ -10,12 +10,11 @@
 //!   one computed from the decrypted seed.
 //! - the `timestamp` key is **not** encrypted, one line `oncl-tuf-ed25519-seed-v1:<64 hex>`:
 //!   it is pasted into the GitHub secret `TUF_TIMESTAMP_KEY` (an environment secret CI uses
-//!   unattended), so a passphrase would protect nothing. In `tuf/v2` the `snapshot` key is
-//!   such an online line too (`TUF_V2_SNAPSHOT_KEY`, `docs/design/publishers.md`, Р8).
+//!   unattended), so a passphrase would protect nothing. Once the snapshot is online
+//!   ([`SnapshotMode::Online`]) the `snapshot` key is such a line too (`TUF_SNAPSHOT_KEY`,
+//!   `docs/design/publishers.md`, Р8).
 //!
-//! The keys of `tuf/v2` are named `v2-<role>.key` ([`file_name_in`]) and may share the
-//! directory with those of `tuf/v1`: a key is picked by its id, never by its file name. The
-//! two repositories share the targets key, the one of `tuf/v1`.
+//! A key is picked by its id, never by its file name.
 //!
 //! Key files are written only where git would not commit them and never
 //! over an existing file.
@@ -31,7 +30,7 @@ use oncl_update::tuf::{KeyId, Role, SigningKey};
 use zeroize::Zeroizing;
 
 use super::PassphraseSource;
-use super::repo::Layout;
+use super::repo::SnapshotMode;
 
 /// The length of a serialized minisign secret key: signature algorithm, KDF algorithm,
 /// checksum algorithm (2 bytes each), KDF salt (32), scrypt ops and memory limits (8 each),
@@ -52,21 +51,12 @@ pub fn file_name(role: Role, root_version: Option<u64>) -> String {
     }
 }
 
-/// The file name of a role's key in the repository of `layout`: [`file_name`] in `tuf/v1`,
-/// `v2-<role>.key` or `v2-<role>.v<N>.key` in `tuf/v2`.
-pub fn file_name_in(layout: Layout, role: Role, root_version: Option<u64>) -> String {
-    match layout {
-        Layout::V1 => file_name(role, root_version),
-        Layout::V2 => format!("v2-{}", file_name(role, root_version)),
-    }
-}
-
-/// Whether the key of `role` in the repository of `layout` is an online key: one
-/// unencrypted line that CI signs with ([`generate_seed`]).
-pub fn is_online(layout: Layout, role: Role) -> bool {
-    match (layout, role) {
-        (_, Role::Timestamp) | (Layout::V2, Role::Snapshot) => true,
-        (_, Role::Root | Role::Targets) | (Layout::V1, Role::Snapshot) => false,
+/// Whether the key of `role` is an online key: one unencrypted line that CI signs with
+/// ([`generate_seed`]). The snapshot key is one once the snapshot is online.
+pub fn is_online(mode: SnapshotMode, role: Role) -> bool {
+    match (mode, role) {
+        (_, Role::Timestamp) | (SnapshotMode::Online, Role::Snapshot) => true,
+        (_, Role::Root | Role::Targets) | (SnapshotMode::Offline, Role::Snapshot) => false,
     }
 }
 
