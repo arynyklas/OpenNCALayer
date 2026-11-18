@@ -10,10 +10,14 @@
 //!   `keys/root.json`), and without one the updater is off;
 //! - [`choose()`]: the version to move to, with the staged rollout, revoked versions and
 //!   versions that failed locally;
-//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs.
+//! - [`state`]: `<data>/update/state.json`, what the updater keeps between runs;
+//! - [`catalog`]: the plugin catalog, the owner's index plus the releases of third-party
+//!   publishers ([`Catalog`]), which [`choose_plugin()`] and [`offer()`] read.
 //!
 //! The format is described in `docs/design/update-index.md`, the authentication in
-//! `docs/design/tuf.md`.
+//! `docs/design/tuf.md`, the publishers in `docs/design/publishers.md`.
+
+pub mod catalog;
 
 pub mod choose;
 mod contents;
@@ -24,6 +28,10 @@ pub mod plugins;
 pub mod state;
 pub mod tuf;
 
+pub use catalog::{
+    Catalog, CatalogBuilder, CatalogError, DeclaredCapabilities, EntryRejected, EntryRejection,
+    PublisherPolicy, PublisherRelease, PublisherState,
+};
 pub use choose::{Choice, Target, choose, rollout_bucket};
 pub use contents::contents_sha256;
 pub use index::{
@@ -129,6 +137,17 @@ impl UpdateError {
                 )
         )
     }
+
+    /// Whether the repository could not be read at all: no answer, a bad status, or a file
+    /// of it missing. Unlike [`UpdateError::retry_soon`] it says nothing of the local state,
+    /// and unlike a refusal it says nothing of what the repository holds: what it offers
+    /// now is not known.
+    pub fn unreachable(&self) -> bool {
+        matches!(
+            self,
+            UpdateError::Tuf(TufError::Fetch(_) | TufError::NotFound(_))
+        )
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +215,30 @@ mod tests {
         assert!(!UpdateError::NotPublished(Channel::Beta).retry_soon());
         assert!(!UpdateError::Rollback { seq: 1, last: 2 }.retry_soon());
         assert!(UpdateError::Io(std::io::Error::other("disk")).retry_soon());
+    }
+
+    #[test]
+    fn only_a_repository_that_could_not_be_read_is_unreachable() {
+        let unreachable = |e| UpdateError::from_tuf(e, Channel::Beta).unreachable();
+        assert!(unreachable(TufError::Fetch("no answer".into())));
+        assert!(unreachable(TufError::NotFound(
+            "metadata/timestamp.json".into()
+        )));
+        // Local trouble, a long chain of roots, and what the repository answered and the
+        // client refused are not.
+        assert!(!unreachable(TufError::Store(std::io::Error::other("disk"))));
+        assert!(!unreachable(TufError::StateTooLarge(1)));
+        assert!(!unreachable(TufError::RootChainTooLong(128)));
+        assert!(!unreachable(TufError::Rollback {
+            what: "timestamp".into(),
+            found: 1,
+            trusted: 2,
+        }));
+        assert!(!unreachable(TufError::Hash {
+            what: "indexes/beta.json".into(),
+        }));
+        assert!(!UpdateError::NotPublished(Channel::Beta).unreachable());
+        assert!(!UpdateError::Rollback { seq: 1, last: 2 }.unreachable());
+        assert!(!UpdateError::Io(std::io::Error::other("disk")).unreachable());
     }
 }

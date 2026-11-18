@@ -303,6 +303,29 @@ jobs:
             diff -r updates _site/updates
           fi
           cargo xtask registry check _site
+      # The Firefox update manifest (`/firefox/updates.json`, the add-on's `update_url`): the
+      # published releases from 0.1.1 on whose `.xpi` carries AMO's signature
+      # (`META-INF/mozilla.rsa`), each with its checksum from the release's SHA256SUMS. A
+      # release that cannot be downloaded is left out with a warning; with none the list is
+      # empty, which is a valid file.
+      - name: Firefox update manifest
+        run: |
+          assets="$RUNNER_TEMP/firefox"
+          mkdir -p "$assets"
+          releases="$RUNNER_TEMP/site/releases.jsonl"
+          args=(--assets "$assets" --repo "$GITHUB_REPOSITORY" --out _site/firefox/updates.json)
+          if [ -f "$releases" ]; then
+            args+=(--releases "$releases")
+            for tag in $(jq -r 'select(.draft == false and .prerelease == false and (.tag_name | test("^v[0-9]+[.][0-9]+[.][0-9]+$"))) | select(any(.assets[]; .name | test("^openncalayer-firefox-.*[.]xpi$"))) | .tag_name' "$releases"); do
+              if ! gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$assets/$tag" \
+                --pattern 'openncalayer-firefox-*.xpi' --pattern SHA256SUMS; then
+                echo "::warning::$tag: the Firefox add-on could not be downloaded, it is left out of the update manifest"
+                rm -rf "${assets:?}/$tag"
+              fi
+            done
+          fi
+          cargo xtask ext updates "${args[@]}"
+          cat _site/firefox/updates.json
       # The TUF repository, from a copy: the committed tree gets no timestamp. The copy with
       # the signed timestamp of the `timestamp` job is verified as the client would read it,
       # and the run is red when targets or snapshot are about to expire (the owner's monthly

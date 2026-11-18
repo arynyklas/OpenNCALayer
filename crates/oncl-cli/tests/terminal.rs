@@ -246,11 +246,14 @@ fn control_a_terminal_program_that_echoes_shows_typed_characters_in_the_harness(
 }
 #[test]
 fn interactive_secret_is_read_without_echo_and_the_console_mode_is_restored() {
-    // The console-mode probe needs Python; its absence is a failure, not a skip.
-    assert!(
-        Command::new("python").arg("--version").output().is_ok(),
-        "python is required for the console-mode probe"
-    );
+    // The console-mode probe runs `python` by that name through cmd.exe; its absence is a
+    // failure, not a skip.
+    let python = oncl_testkit::tool::Tool {
+        names: &["python"],
+        env: None,
+        provides: "Python 3 (any version) with `python` on PATH: the probe runs it by that name",
+    };
+    python.spawned(Command::new("python").arg("--version").output());
     let w = world();
     // The probe prints the console input mode before and after; oncl runs between.
     let probe = "python -c \"import ctypes;m=ctypes.c_uint32();ctypes.windll.kernel32.GetConsoleMode(ctypes.windll.kernel32.GetStdHandle(-10),ctypes.byref(m));print('MODE=%x'%m.value)\"";

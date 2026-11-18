@@ -591,20 +591,21 @@ fn a_plain_root_is_a_renewal_with_the_same_keys() {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@example.com",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .args(args)
-        .output()
-        .unwrap();
+    let out = oncl_testkit::tool::GIT.spawned(
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@example.com",
+                "-c",
+                "commit.gpgsign=false",
+            ])
+            .args(args)
+            .output(),
+    );
     assert!(
         out.status.success(),
         "git {args:?}: {}",
@@ -1224,3 +1225,6 @@ fn a_timestamp_key_with_the_line_end_of_a_secret_still_signs() {
             .unwrap_or_else(|e| panic!("{end:?}: {e:#}"));
     }
 }
+
+#[path = "tuf/v2.rs"]
+mod v2;

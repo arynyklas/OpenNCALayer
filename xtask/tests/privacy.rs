@@ -55,22 +55,23 @@ impl Repo {
     }
 
     fn git(&self, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(self.root())
-            .args([
-                "-c",
-                "core.autocrlf=false",
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .output()
-            .unwrap();
+        let out = oncl_testkit::tool::GIT.spawned(
+            Command::new("git")
+                .arg("-C")
+                .arg(self.root())
+                .args([
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .output(),
+        );
         assert!(
             out.status.success(),
             "git {args:?}: {}",

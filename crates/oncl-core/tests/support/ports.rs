@@ -17,7 +17,8 @@
 //!
 //! Environment: `ONCL_PLUGIN_WASM_DIR` (the directory of the built `oncl_port_*.wasm`; unset,
 //! the tests build `plugins/` themselves into `<target>/plugin-ports`), `ONCL_OPENSSL`,
-//! `ONCL_PYHANKO_PYTHON` (a Python with `lxml` and `cryptography`; else `python3`/`python`).
+//! `ONCL_PYHANKO_PYTHON` (a Python with `lxml` and `cryptography`; else `python`, `python3`
+//! or `py`). A missing program fails with `oncl_testkit::tool`'s message.
 //!
 //! A test file includes it with `#[path = "support/ports.rs"] mod ports;`.
 #![allow(dead_code)]
@@ -44,7 +45,7 @@ use oncl_pki::{
     validation::NetworkPolicy,
 };
 use oncl_plugin::{DEFAULT_OCSP, DEFAULT_TSA, Manifest, NCA_PKI_HOSTS};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub use oncl_pki::key::AppliedState;
@@ -477,54 +478,6 @@ pub mod oracle {
     use super::*;
     use std::process::Command;
 
-    /// OpenSSL: `ONCL_OPENSSL`, `openssl` on the path, Git for Windows' copy.
-    pub fn openssl() -> String {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Ok(explicit) = std::env::var("ONCL_OPENSSL") {
-            candidates.push(explicit);
-        }
-        candidates.push("openssl".to_owned());
-        if cfg!(windows) {
-            for var in ["ProgramFiles", "ProgramW6432"] {
-                if let Some(base) = std::env::var_os(var) {
-                    candidates.push(
-                        Path::new(&base)
-                            .join("Git/usr/bin/openssl.exe")
-                            .to_string_lossy()
-                            .into_owned(),
-                    );
-                }
-            }
-        }
-        candidates
-            .into_iter()
-            .find(|c| {
-                Command::new(c)
-                    .arg("version")
-                    .output()
-                    .is_ok_and(|o| o.status.success())
-            })
-            .expect("OpenSSL oracle unavailable: install OpenSSL or set ONCL_OPENSSL")
-    }
-
-    /// A Python with `lxml` and `cryptography`.
-    pub fn python() -> String {
-        let mut candidates: Vec<String> = Vec::new();
-        if let Ok(explicit) = std::env::var("ONCL_PYHANKO_PYTHON") {
-            candidates.push(explicit);
-        }
-        candidates.extend(["python3".to_owned(), "python".to_owned()]);
-        candidates
-            .into_iter()
-            .find(|c| {
-                Command::new(c)
-                    .args(["-c", "import lxml.etree, cryptography"])
-                    .output()
-                    .is_ok_and(|o| o.status.success())
-            })
-            .expect("XML oracle unavailable: a Python with lxml and cryptography (set ONCL_PYHANKO_PYTHON)")
-    }
-
     fn run(mut command: Command) -> std::process::Output {
         let name = format!("{command:?}");
         command
@@ -573,7 +526,7 @@ pub mod oracle {
         std::fs::write(&cms_path, cms).unwrap();
         std::fs::write(&content_path, content).unwrap();
         std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
-        let mut command = Command::new(openssl());
+        let mut command = Command::new(oncl_testkit::tool::openssl());
         command
             .args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify"])
             .arg("-in")
@@ -599,7 +552,7 @@ pub mod oracle {
         // openssl must also refuse another content.
         if !attached {
             std::fs::write(&content_path, b"another content").unwrap();
-            let mut command = Command::new(openssl());
+            let mut command = Command::new(oncl_testkit::tool::openssl());
             command
                 .args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify"])
                 .arg("-in")
@@ -653,7 +606,7 @@ pub mod oracle {
         std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
         std::fs::write(&data_path, data).unwrap();
         std::fs::write(&sig_path, signature).unwrap();
-        let mut command = Command::new(openssl());
+        let mut command = Command::new(oncl_testkit::tool::openssl());
         command
             .args(["x509", "-inform", "DER", "-pubkey", "-noout"])
             .arg("-in")
@@ -661,7 +614,7 @@ pub mod oracle {
         let output = run(command);
         assert!(output.status.success(), "openssl x509");
         std::fs::write(&pub_path, output.stdout).unwrap();
-        let mut command = Command::new(openssl());
+        let mut command = Command::new(oncl_testkit::tool::openssl());
         command
             .args([
                 "pkeyutl", "-verify", "-pubin", "-rawin", "-digest", "sha256",
@@ -706,7 +659,9 @@ pub mod oracle {
         std::fs::write(&xml_path, signed).unwrap();
         std::fs::write(&cert_path, cert.to_der().unwrap()).unwrap();
         let script = root().join("crates/oncl-core/tests/support/oracle/xmldsig_verify.py");
-        let mut command = Command::new(python());
+        let mut command = Command::new(oncl_testkit::tool::require_python(
+            "lxml.etree, cryptography",
+        ));
         command.arg(script).arg(&xml_path).arg(&cert_path);
         let output = run(command);
         let text = format!(

@@ -5,8 +5,9 @@ use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
 
+const MODULES: &str = "lxml, cryptography";
 fn python() -> Option<String> {
-    python_with("lxml, cryptography")
+    oncl_testkit::tool::python_with(MODULES)
 }
 fn trust(w: &World) -> Vec<&str> {
     vec![
@@ -61,7 +62,8 @@ fn lxml_oracle(w: &World, signed: &Path) -> Option<String> {
     let Some(python) = python() else {
         assert!(
             std::env::var_os("ONCL_ALLOW_NO_ORACLE").is_some(),
-            "python with lxml+cryptography is required (set ONCL_ALLOW_NO_ORACLE=1 to skip explicitly)"
+            "{} To skip this check explicitly, set ONCL_ALLOW_NO_ORACLE=1.",
+            oncl_testkit::tool::python_missing_message(MODULES)
         );
         return None;
     };
@@ -174,10 +176,7 @@ fn xades_lt_carries_the_trust_anchor_and_the_verifier_does_not_claim_lt_without_
 
     // Independent structure oracle (Python ElementTree, no oncl code): the carried
     // certificates, compared with the root DER the loopback PKI really uses.
-    let python = ["python", "python3", "py"]
-        .into_iter()
-        .find(|c| Command::new(c).arg("--version").output().is_ok())
-        .expect("python");
+    let python = oncl_testkit::tool::python();
     let script = w.dir.path().join("lt_values.py");
     std::fs::write(
         &script,
@@ -194,7 +193,7 @@ fn xades_lt_carries_the_trust_anchor_and_the_verifier_does_not_claim_lt_without_
     let root_der = w.dir.path().join("root.der");
     std::fs::write(&root_der, w.pki.root.cert.to_der().unwrap()).unwrap();
     let structure = |file: &Path| {
-        let out = Command::new(python)
+        let out = Command::new(&python)
             .args([path(&script), path(file), path(&root_der)])
             .output()
             .unwrap();

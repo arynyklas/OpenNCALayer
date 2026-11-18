@@ -24,8 +24,13 @@
 //! An index that cannot be downloaded is tried again quietly within hours; one that fails
 //! its checks (an expired or rolled-back TUF role, a signature or hash that does not match,
 //! an older `seq`) is logged, shown in the settings window, and tried again at the next
-//! check: no notification is sent for either. Every change of the state file is a
-//! read-modify-write under one lock.
+//! check: no notification is sent for either. The check just before an update is applied
+//! that cannot reach the repository does not drop a downloaded update: the index of the last
+//! check is verified again against the saved TUF state offline, and the update is applied if
+//! that state has not expired, has not been outrun by newer metadata the failed refresh
+//! saw, is no older than a week since the repository was last read, and still offers it
+//! under the saved settings; a repository that answers without offering it, or refuses,
+//! withdraws it. Every change of the state file is a read-modify-write under one lock.
 
 pub mod installer;
 
@@ -36,7 +41,9 @@ use std::time::{Duration, Instant, SystemTime};
 
 use oncl_desktop::UpdateSettings;
 use oncl_ui::settings_view::{UpdateStatus, Updates};
-use oncl_update::{Choice, Flavor, PendingHealth, State, Target, UpdateError, Version, choose};
+use oncl_update::{
+    Channel, Choice, Flavor, Index, PendingHealth, State, Target, UpdateError, Version, choose,
+};
 use time::OffsetDateTime;
 use tracing::{error, info, warn};
 
@@ -83,6 +90,11 @@ pub const CRASHES_TO_ROLL_BACK: u32 = 2;
 pub const ROLLBACK_ATTEMPTS: u32 = 3;
 /// A waiting update looks whether the daemon is idle this often.
 pub const IDLE_POLL: Duration = Duration::from_secs(15);
+/// The saved state stands in for an unreachable repository at the last check before an
+/// update is applied for this long after the index was read from the repository: the
+/// lifetime of the timestamp in the repository's design (`docs/design/tuf.md`), which is how
+/// long the repository's word that the index is current holds.
+const OFFLINE_FRESH: time::Duration = time::Duration::days(7);
 /// The longest sleep of the schedule: the wall clock is compared at least this often, so
 /// a computer's sleep does not delay a check by the length of the sleep.
 const WAKE_EVERY: Duration = hours(1);
@@ -260,6 +272,18 @@ struct Checked {
     plan: Option<Plan>,
     /// The index could not be downloaded: try again within [`RETRY_AFTER`].
     retry_soon: bool,
+    /// The repository could not be reached or read (as opposed to refusing or withdrawing
+    /// the index): what it says is not known, and the saved state may still vouch for the
+    /// index of the last check ([`Updater::still_offered`]).
+    unreachable: bool,
+}
+
+/// The bytes of the last index the repository vouched for.
+struct Kept {
+    channel: Channel,
+    bytes: Vec<u8>,
+    /// When the repository was last read for it.
+    verified: OffsetDateTime,
 }
 
 /// Work handed to the updater's thread.
@@ -296,6 +320,9 @@ pub struct Updater {
     /// Notices from before the windows' event loop; [`Updater::tell_deferred`] tells them
     /// once it runs, or at once when the daemon has no event loop.
     deferred: Mutex<Vec<Notice>>,
+    /// The last index read through the repository: what the saved TUF state is asked about
+    /// when the repository cannot be reached ([`Updater::still_offered`]).
+    kept: Mutex<Option<Kept>>,
 }
 
 impl Updater {
@@ -317,6 +344,7 @@ impl Updater {
             queue: Mutex::new(Queue::default()),
             wake: Condvar::new(),
             deferred: Mutex::new(Vec::new()),
+            kept: Mutex::new(None),
         }
     }
 
@@ -622,6 +650,7 @@ impl Updater {
                 status: self.status(),
                 plan: None,
                 retry_soon: false,
+                unreachable: false,
             };
         }
         let channel = settings.channel;
@@ -672,9 +701,9 @@ impl Updater {
     /// state not read or saved); [`UpdateError::NotPublished`] is not tried again soon.
     fn verified_index(
         &self,
-        channel: oncl_update::Channel,
+        channel: Channel,
         timeout: Duration,
-    ) -> Result<oncl_update::Index, (UpdateError, bool)> {
+    ) -> Result<Index, (UpdateError, bool)> {
         let state_error = |e: std::io::Error| {
             warn!(error = %e, "cannot read or save the updater's state");
             (UpdateError::Io(e), true)
@@ -682,20 +711,25 @@ impl Updater {
         let last_seq = self
             .try_update_state(|s| s.last_seq.get(&channel).copied())
             .map_err(state_error)?;
-        let index = self
+        let verified = self
             .repository
             .index(channel, last_seq, timeout)
             .map_err(|e| {
                 let soon = e.retry_soon();
                 (e, soon)
-            })?
-            .index;
+            })?;
+        let index = verified.index;
         // Only ever raised: the state is read again under the lock.
         self.try_update_state(|s| {
             let seq = s.last_seq.entry(channel).or_insert(index.seq);
             *seq = (*seq).max(index.seq);
         })
         .map_err(state_error)?;
+        *lock(&self.kept) = Some(Kept {
+            channel,
+            bytes: verified.bytes,
+            verified: OffsetDateTime::now_utc(),
+        });
         Ok(index)
     }
 
@@ -705,6 +739,7 @@ impl Updater {
             status,
             plan,
             retry_soon: false,
+            unreachable: false,
         }
     }
 
@@ -715,6 +750,7 @@ impl Updater {
             status,
             plan: None,
             retry_soon,
+            unreachable: e.unreachable(),
         }
     }
 
@@ -825,7 +861,7 @@ impl Updater {
                     thread::sleep(self.config.idle_poll);
                 }
                 if !plan.rollback && !self.still_offered(plan) {
-                    info!(%version, "the update is no longer offered; it is not applied");
+                    info!(%version, "the update is no longer offered, or not vouched for any more; it is not applied");
                     return Installed::NotApplied;
                 }
                 if self.host.hold() {
@@ -897,11 +933,98 @@ impl Updater {
     }
 
     /// Whether the saved settings still enable updates and the index still offers `plan`
-    /// after the wait.
+    /// after the wait. If the repository cannot be reached for that, what it says now is
+    /// not known, and the answer is the saved, verified state's
+    /// ([`Updater::offered_by_saved_state`]): a flaky network does not drop an update that
+    /// was downloaded and verified. The wait itself is not bounded here: every time the
+    /// daemon is idle the repository is asked again, and the saved state stands in for it
+    /// only for [`OFFLINE_FRESH`] after the index was last read from the repository.
     fn still_offered(&self, plan: &Plan) -> bool {
-        self.check(true, None)
-            .plan
-            .is_some_and(|now| now.target == plan.target)
+        let checked = self.check(true, None);
+        match checked.plan {
+            Some(now) => now.target == plan.target,
+            None => {
+                let offered = checked.unreachable && self.offered_by_saved_state(plan);
+                if offered {
+                    // The failed check left "failed" in the settings window: the update
+                    // goes on.
+                    *lock(&self.status) = UpdateStatus::Available {
+                        version: plan.target.version.to_string(),
+                        installing: true,
+                    };
+                }
+                offered
+            }
+        }
+    }
+
+    /// Whether the index of the last check, checked again offline against the saved TUF
+    /// state (still signed by the chain from the root built in, not expired, and what the
+    /// saved targets list), still offers `plan` under the saved settings. Not if updates
+    /// are off now, the channel is not the one that index is of, the index was read from
+    /// the repository more than [`OFFLINE_FRESH`] ago, the saved state does not vouch for it
+    /// (expired, or the repository was refreshed since), the failed refresh accepted newer
+    /// timestamp or snapshot metadata than it could complete
+    /// ([`Repository::newer_metadata_seen`]: the repository has published something that
+    /// may withdraw the update), or it no longer offers `plan` (a version marked bad
+    /// meanwhile, for one).
+    fn offered_by_saved_state(&self, plan: &Plan) -> bool {
+        let version = &plan.target.version;
+        let settings = self.settings();
+        if !settings.enabled {
+            return false;
+        }
+        let channel = settings.channel;
+        let kept = lock(&self.kept);
+        let Some(kept) = kept.as_ref().filter(|k| k.channel == channel) else {
+            return false;
+        };
+        let now = OffsetDateTime::now_utc();
+        if now - kept.verified > OFFLINE_FRESH {
+            warn!(%version, "cannot reach the update repository, and the update was last confirmed too long ago; it is not applied");
+            return false;
+        }
+        if let Err(why) = self.repository.verify_kept(channel, &kept.bytes, now) {
+            warn!(%version, %why, "cannot reach the update repository, and the saved state does not vouch for the update");
+            return false;
+        }
+        match self.repository.newer_metadata_seen() {
+            Ok(false) => {}
+            Ok(true) => {
+                warn!(%version, "the update repository has published newer metadata that could not be read; the update is not applied");
+                return false;
+            }
+            Err(why) => {
+                warn!(%version, %why, "cannot read the saved update metadata");
+                return false;
+            }
+        }
+        let found = self.try_update_state(|s| {
+            (
+                s.last_seq.get(&channel).copied(),
+                s.install_id,
+                s.bad.clone(),
+            )
+        });
+        let (last_seq, install_id, bad) = match found {
+            Ok(found) => found,
+            Err(e) => {
+                warn!(error = %e, "cannot read the updater's state");
+                return false;
+            }
+        };
+        let Ok(index) = Index::accept(&kept.bytes, channel, last_seq) else {
+            return false;
+        };
+        let current = self.installer.current();
+        let offered = match choose(&index, &current, self.config.flavor, install_id, &bad) {
+            Choice::Update(target) | Choice::Downgrade(target) => target == plan.target,
+            Choice::UpToDate => false,
+        };
+        if offered {
+            info!(%version, "cannot reach the update repository; the saved, verified index still offers the update");
+        }
+        offered
     }
 
     /// The `updates` of `settings.json`.

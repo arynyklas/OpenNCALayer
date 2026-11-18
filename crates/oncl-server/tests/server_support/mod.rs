@@ -11,7 +11,7 @@ use std::{
 use zeroize::Zeroizing;
 
 pub fn sandbox() -> tempfile::TempDir {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target-task23/runtime");
+    let root = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("runtime");
     std::fs::create_dir_all(&root).unwrap();
     tempfile::tempdir_in(root).unwrap()
 }

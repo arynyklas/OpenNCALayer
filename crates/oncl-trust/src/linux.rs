@@ -391,9 +391,7 @@ mod tests {
                 command.arg("-f").arg(file)
             }
         };
-        let status = command
-            .status()
-            .expect("certutil (libnss3-tools) is installed");
+        let status = oncl_testkit::tool::CERTUTIL.spawned(command.status());
         assert!(status.success());
     }
 

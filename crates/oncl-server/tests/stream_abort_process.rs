@@ -212,7 +212,7 @@ fn the_abort_log_line_carries_no_user_data() {
         "scratch",
         "audit",
         "127.0.0.1",
-        "target-task23",
+        env!("CARGO_TARGET_TMPDIR"),
     ] {
         assert!(
             !stderr.contains(canary),

@@ -195,13 +195,14 @@ impl Setup {
     }
 
     fn git(&self, dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .output()
-            .unwrap();
+        let out = oncl_testkit::tool::GIT.spawned(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(self.env.iter().map(|(k, v)| (k, v)))
+                .output(),
+        );
         assert!(
             out.status.success(),
             "git {args:?}: {}",
@@ -211,13 +212,14 @@ impl Setup {
     }
 
     fn try_git(&self, dir: &Path, args: &[&str]) -> Option<String> {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .envs(self.env.iter().map(|(k, v)| (k, v)))
-            .output()
-            .unwrap();
+        let out = oncl_testkit::tool::GIT.spawned(
+            Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .envs(self.env.iter().map(|(k, v)| (k, v)))
+                .output(),
+        );
         out.status
             .success()
             .then(|| String::from_utf8(out.stdout).unwrap())
