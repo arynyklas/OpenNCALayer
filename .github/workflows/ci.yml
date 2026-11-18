@@ -573,7 +573,8 @@ jobs:
         with:
           name: builtins
           path: target/builtins
-      # nextest does not run doctests.
+      # nextest does not run doctests. Linux runs them here on every run with Rust changes;
+      # Windows and macOS in `doctests`, in full runs.
       - name: Doctests
         run: cargo test --locked --workspace --all-features --doc
       # The daemon as releases build it (no `e2e-prompter`, no `token-emulator`): the token
@@ -610,6 +611,37 @@ jobs:
           cargo xtask plugin-ops-check --require-wasm --wasm-dir target/plugin-ports/wasm32-unknown-unknown/plugin-test
       - name: Plugin versions bumped
         run: cargo xtask plugin-version-check
+
+  # The doctests on Windows and macOS (nextest does not run them): full runs only (main,
+  # nightly, manual `full`, `full-ci`). Linux runs them in `linux-checks` on every run.
+  doctests:
+    needs: [changes, fmt, privacy, prepare]
+    if: needs.changes.outputs.full == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, macos-15]
+    name: doctests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      ONCL_BUILTINS_DIR: ${{ github.workspace }}/target/builtins
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/pinned-toolchains
+      # The test build's dependencies on this OS (saved by `test-build`).
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: tests-${{ matrix.os }}
+          save-if: false
+      - uses: actions/download-artifact@v5
+        with:
+          name: builtins
+          path: target/builtins
+      - name: Doctests
+        run: cargo test --locked --workspace --all-features --doc
 
   # The built-in modules' limits in a 32-bit process, where their memory is smallest.
   builtins-x86:
@@ -1123,6 +1155,7 @@ jobs:
       - windows-package
       - macos-universal
       - linux-appimage
+      - doctests
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -1173,6 +1206,7 @@ jobs:
           expect site "$SITE"
           for job in builtins-x86 win7 windows-package linux-appimage; do expect "$job" "$APP"; done
           expect macos-universal "$FULL"
+          expect doctests "$FULL"
           # A job added to `needs` without an expectation here fails the check.
           while IFS= read -r job; do
             if ! printf '%s\n' "${listed[@]}" | grep -qxF "$job"; then

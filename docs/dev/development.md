@@ -324,9 +324,9 @@ Workflow `.github/workflows/ci.yml`. Обязательная проверка �
 Как идут тесты:
 
 - `prepare` один раз на Linux собирает встроенные модули (`cargo xtask builtins build`) и скачивает тестовые данные NCANode. Остальные задания берут модули из артефакта через `ONCL_BUILTINS_DIR`, как `release.yml`. Модули принимаются, только если собраны из тех же исходников тем же тулчейном.
-- `test-build` на каждой ОС собирает все тесты один раз (`cargo nextest archive`). Задания `test (<ОС>, N/3)` запускают из архива по трети тестов (`--partition slice:N/3`).
+- `test-build` на каждой ОС собирает все тесты один раз (`cargo nextest archive`). Задания `test (<ОС>, N/3)` запускают из архива по трети тестов (`--partition slice:N/3`). В архив не попадают файлы PDB, поэтому у упавшего в CI теста на Windows в backtrace нет номеров строк.
 - Настройки [cargo-nextest](https://nexte.st) лежат в `.config/nextest.toml`, профиль `ci`. Упавший тест перезапускается до двух раз. Если потом он прошёл, nextest помечает его FLAKY, а запуск всё равно красный. Тест дольше 30 минут снимается. Отчёт JUnit сохраняется артефактом `junit-<ОС>-<N>-<попытка>`.
-- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check`, `plugin-version-check`, `interop-openssl`.
+- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check`, `plugin-version-check`, `interop-openssl`. На Windows и macOS doctest-ы идут только в полном запуске, в задании `doctests`.
 - В `main` и ночью `plugins-release` прогоняет тесты портов с `ONCL_PLUGIN_PROFILE=release`, то есть на модулях, собранных так же, как они выходят.
 - CI задаёт `ONCL_REQUIRE_ORACLES=1`: тест, которому не хватает внешней программы, в CI падает, а не пропускается.
 
