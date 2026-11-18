@@ -292,7 +292,7 @@ Workflow запускается:
 | `file-modified`, `file-removed`, `version-rollback`, `no-version-bump` | относительно `--base`: опубликованный файл изменён или удалён, версия уменьшилась, файлы добавлены без роста версии |
 | `expired`, `expiring` | срок истёк или осталось меньше `--min-days` (targets, snapshot) или `--min-root-days` (root) дней; с `--fail-on-expiring` это ошибка, иначе предупреждение |
 | `snapshot-committed`, `unexpected-timestamp` | `tuf/v2`: snapshot лежит в дереве; timestamp есть до проверки снимка |
-| `delegation-refused`, `key-reused` | `tuf/v2`: делегирование нарушает профиль; ключ роли издателя совпадает с ключом root |
+| `delegation-refused`, `key-reused`, `delegations-missing` | `tuf/v2`: делегирование нарушает профиль; ключ роли издателя совпадает с ключом root; в targets нет поля `delegations` (клиент `0.1.2` его не требует, а `tuf/v2` без него не собирается) |
 | `role` | `tuf/v2`: клиент не принимает последнюю версию роли делегированного издателя (подпись, версия, вложенные делегирования, цель вне путей) |
 | `role-gap`, `role-not-delegated`, `too-large` | `tuf/v2`: пропущена версия роли; файлы роли есть, а делегирования ей не было ни в одном targets; файл роли больше, чем клиент читает (128 КиБ) |
 | `snapshot-role-missing`, `snapshot-role-stale`, `snapshot-meta-incomplete`, `snapshot-rollback` | `tuf/v2`, страж онлайн-снимка: снимок не перечисляет роль, у которой есть файлы (и отозванного издателя); перечисляет не последнюю версию; запись без длины и sha256; более старый снимок рядом перечислял файл, который новый выкинул, или версию выше |

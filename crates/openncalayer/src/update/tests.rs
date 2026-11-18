@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use time::Duration as TimeDuration;
 
-use crate::repository::tests::{BASE, Server, timestamp_url, url};
+use crate::repository::tests::{BASE, Server, delegations_members, timestamp_url, url};
 
 /// Something done while a request is being answered.
 type Hook = Box<dyn FnOnce() + Send>;
@@ -446,6 +446,19 @@ fn an_update_is_found_downloaded_and_applied_once_the_daemon_is_idle() {
     // The same version found again is not told again.
     assert_eq!(u.check(false, None).status, available("0.2.0", true));
     assert_eq!(s.events(), []);
+}
+
+#[test]
+fn the_updater_finds_its_version_whatever_the_delegations_of_tuf_v1() {
+    for (what, delegations) in delegations_members() {
+        let s = Sandbox::new();
+        s.server.repo().delegations = Some(delegations);
+        s.publish(3, two_releases());
+        let u = s.updater("0.1.0", 0);
+        let checked = u.check(false, None);
+        assert_eq!(checked.status, available("0.2.0", true), "{what}");
+        assert!(checked.plan.is_some(), "{what}");
+    }
 }
 
 #[test]

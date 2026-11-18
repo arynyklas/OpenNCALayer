@@ -63,6 +63,8 @@ struct Publisher {
     signers: Vec<SigningKey>,
     /// How many targets its role lists.
     targets: usize,
+    /// The snapshot lists its role's file by version only.
+    unhashed: bool,
 }
 
 fn publisher(name: &str, seed: u8) -> Publisher {
@@ -72,6 +74,7 @@ fn publisher(name: &str, seed: u8) -> Publisher {
         threshold: 1,
         signers: vec![key(seed)],
         targets: 1,
+        unhashed: false,
     }
 }
 
@@ -112,7 +115,12 @@ fn publish(repo: &MemoryFetcher, k: &Top, version: u64, publishers: &[Publisher]
         let signers: Vec<&SigningKey> = p.signers.iter().collect();
         let file = build::sign(&role, &signers).unwrap();
         let name = RoleName::parse(&format!("pub-{}", p.name)).unwrap();
-        snapshot_meta.insert(name.meta_name(), meta(version, &file));
+        let listed = if p.unhashed {
+            json!({ "version": version })
+        } else {
+            meta(version, &file)
+        };
+        snapshot_meta.insert(name.meta_name(), listed);
         repo.put(layout::delegated_path(version, &name), file);
     }
     let targets = json!({
@@ -274,31 +282,110 @@ fn a_rotation_of_the_keys_forgets_the_role_versions() {
     assert_eq!(c.store().state.delegated[&role("pub-ecc")].version, 2);
 }
 
-#[test]
-fn the_legacy_profile_has_no_delegated_step() {
-    let k = top(1);
+const INDEX: &str = "indexes/stable.json";
+const INDEX_BODY: &[u8] = b"[]";
+
+/// A repository whose targets list the index [`INDEX`] and have `delegations`, if any, as
+/// their member, whatever it is; the snapshot lists the targets by version only.
+fn plain_repository(k: &Top, delegations: Option<Value>) -> (MemoryFetcher, Vec<u8>) {
     let repo = MemoryFetcher::new();
-    let anchor = root_file(1, &k, &[&k.root]);
+    let anchor = root_file(1, k, &[&k.root]);
     repo.put(layout::root_path(1), anchor.clone());
-    let targets = build::targets(1, T0 + Duration::days(30), &[]).unwrap();
+    let files: [(&str, &[u8]); 1] = [(INDEX, INDEX_BODY)];
+    let mut targets = build::targets(1, T0 + Duration::days(30), &files).unwrap();
+    if let Some(delegations) = delegations {
+        targets["delegations"] = delegations;
+    }
     let targets = build::sign(&targets, &[&k.targets]).unwrap();
-    let snapshot = build::snapshot(1, T0 + Duration::days(30), 1, &targets).unwrap();
+    let snapshot = json!({
+        "_type": "snapshot", "spec_version": SPEC_VERSION, "version": 1,
+        "expires": format_expires(T0 + Duration::days(30)).unwrap(),
+        "meta": {"targets.json": {"version": 1}},
+    });
     let snapshot = build::sign(&snapshot, &[&k.snapshot]).unwrap();
     let timestamp = build::timestamp(1, T0 + Duration::days(7), 1, &snapshot).unwrap();
+    for (path, content) in build::target_files(&files).unwrap() {
+        repo.put(path, content);
+    }
     repo.put(layout::targets_path(1), targets);
     repo.put(layout::snapshot_path(1), snapshot);
     repo.put(
         layout::TIMESTAMP_PATH,
         build::sign(&timestamp, &[&k.timestamp]).unwrap(),
     );
+    (repo, anchor)
+}
+
+#[test]
+fn the_legacy_profile_delegates_to_no_role() {
+    let k = top(1);
+    let (repo, anchor) = plain_repository(&k, None);
     let mut c = TufClient::new(&anchor, &repo, MemoryStore::default(), Limits::default()).unwrap();
     assert_eq!(c.profile(), Profile::Legacy);
     let trusted = c.refresh(T0).unwrap();
-    assert!(matches!(
-        c.delegated(&trusted, T0),
-        Err(TufError::DelegationsMissing)
-    ));
+    assert_eq!(c.delegated(&trusted, T0).unwrap().roles().count(), 0);
     assert!(c.store().state.delegated.is_empty());
+}
+
+#[test]
+fn no_delegations_means_no_publishers() {
+    let k = top(1);
+    let (repo, anchor) = plain_repository(&k, None);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    assert_eq!(c.delegated(&trusted, T0).unwrap().roles().count(), 0);
+    assert!(c.store().state.delegated.is_empty());
+    let e = c
+        .verify_cached_role(&role("pub-ecc"), b"{}", T0)
+        .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            TufError::Delegation {
+                error: DelegationError::NotDelegated,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+}
+
+#[test]
+fn the_program_updates_through_targets_whose_delegations_it_cannot_read() {
+    let k = top(1);
+    let (repo, anchor) = plain_repository(&k, Some(json!({"keys": {}, "roles": 7})));
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    let index = c.download_target(&trusted, INDEX, 1 << 20, T0).unwrap();
+    assert_eq!(index, INDEX_BODY);
+    c.verify_cached_target(INDEX, &index, T0).unwrap();
+    let e = c.delegated(&trusted, T0).unwrap_err();
+    assert!(matches!(e, TufError::Malformed { .. }), "{e:?}");
+    assert!(c.store().state.delegated.is_empty());
+    let e = c
+        .verify_cached_role(&role("pub-ecc"), b"{}", T0)
+        .unwrap_err();
+    assert!(matches!(e, TufError::Malformed { .. }), "{e:?}");
+}
+
+#[test]
+fn a_role_listed_without_length_and_sha256_is_refused() {
+    let k = top(1);
+    let mut unhashed = publisher("bare", 60);
+    unhashed.unhashed = true;
+    let (repo, anchor) = repository(&k, &[publisher("ecc", 50), unhashed]);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    let delegated = c.delegated(&trusted, T0).unwrap();
+    assert!(delegated.role(&role("pub-ecc")).unwrap().is_ok());
+    assert!(matches!(
+        delegated.role(&role("pub-bare")),
+        Some(Err(TufError::Delegation {
+            error: DelegationError::Unhashed,
+            ..
+        }))
+    ));
+    assert!(!c.store().state.delegated.contains_key(&role("pub-bare")));
 }
 
 #[test]

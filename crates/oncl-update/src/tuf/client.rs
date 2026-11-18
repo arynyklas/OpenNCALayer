@@ -30,11 +30,14 @@
 //!   cannot be compared with those of roots it does not chain from);
 //! - the targets file accepted is saved beside its version, so that a target kept from an
 //!   earlier download can be checked again offline ([`TufClient::verify_cached_target`]);
-//! - in the legacy profile ([`Profile::Legacy`]) there are no delegations: step 5.6.7 is only
-//!   the top-level targets;
-//! - in the delegating profile ([`Profile::Delegating`]) every entry of the snapshot's `meta`
-//!   must list its length and sha256, and step 5.6.7 is [`TufClient::delegated`], kept apart
-//!   from [`TufClient::refresh`] (the updater of the program never needs a publisher's role).
+//! - the profile ([`Profile`]) only says how the top-level targets are read: in
+//!   [`Profile::Legacy`], the model of the clients released before delegations, a
+//!   `delegations` member refuses them; in [`Profile::Delegating`] the member is kept unread,
+//!   so the program's updates ([`TufClient::refresh`], step 5.6.7 in the top-level targets
+//!   only) never depend on it;
+//! - the delegations are read apart, by [`TufClient::delegated`] (the updater of the program
+//!   never needs a publisher's role); a role's file must be listed by the snapshot with its
+//!   length and sha256 ([`DelegationError::Unhashed`]), other entries need not be.
 //!   Step 5.6.7 searches for one target; the plugin catalog needs every target of every
 //!   publisher, so `delegated` visits every delegated role with the same bounds: in order,
 //!   each name once, at most [`Limits::max_delegations`], every target inside the role's
@@ -611,24 +614,6 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         }
         // 5.5.6: a freeze attack.
         ensure_fresh(Role::Snapshot, snapshot.expires, now)?;
-        // The delegating profile: every file listed by its length and sha256, so that the
-        // targets key shared with another repository cannot bring a file of that one here.
-        match self.profile {
-            Profile::Legacy => {}
-            Profile::Delegating => {
-                if let Some(name) = snapshot
-                    .meta
-                    .iter()
-                    .find(|(_, meta)| meta.length.is_none() || meta.sha256.is_none())
-                    .map(|(name, _)| name)
-                {
-                    return Err(TufError::malformed(
-                        "snapshot",
-                        format!("{name} is listed without its length and sha256"),
-                    ));
-                }
-            }
-        }
         // 5.5.7: persist.
         state.snapshot = Some(SnapshotState {
             version: snapshot.version,
@@ -689,8 +674,8 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         state.targets = Some(targets.version);
         state.targets_file = Some(file);
         *state = self.store.save(state)?;
-        // 5.6.7: the search for a target is in the top-level targets only: delegations are
-        // refused when the targets are read.
+        // 5.6.7: the search for a target is in the top-level targets only; the delegations,
+        // if any, are read apart ([`TufClient::delegated`]).
         Ok(targets)
     }
 
@@ -819,34 +804,35 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         Ok(Some((root, targets, state)))
     }
 
-    /// Step 5.6.7 in the delegating profile: every delegated role of `trusted`'s top-level
-    /// targets, in order, each name once, at most [`Limits::max_delegations`]. A role is
-    /// trusted if its delegation keeps the profile, none of its keys is a key of the root, the
-    /// snapshot lists its file, the file is exactly the length and sha256 listed, signed by a
-    /// threshold of the delegation's keys, the version listed and not below the version saved,
-    /// not expired, without delegations of its own, and lists only targets inside its paths.
+    /// Step 5.6.7, apart from the program's updates: every delegated role of `trusted`'s
+    /// top-level targets, in order, each name once, at most [`Limits::max_delegations`]. A
+    /// role is trusted if its delegation keeps the profile, none of its keys is a key of the
+    /// root, the snapshot lists its file by its length and sha256, the file is exactly those,
+    /// signed by a threshold of the delegation's keys, the version listed and not below the
+    /// version saved, not expired, without delegations of its own, and lists only targets
+    /// inside its paths.
     /// The version of each role trusted is saved, never lowered.
     ///
     /// A role that is not trusted is in the result with its error; it touches neither the
     /// other roles nor `trusted`.
     ///
+    /// Top-level targets without a `delegations` member (always so in [`Profile::Legacy`])
+    /// delegate to no role: the result is empty.
+    ///
     /// # Errors
     ///
-    /// [`TufError::Expired`] if `trusted` is no longer fresh at `now`,
-    /// [`TufError::DelegationsMissing`] if its targets have no delegations (the legacy
-    /// profile), and the errors of [`Store::load`] and [`Store::save`]: the state of the
-    /// roles is all or nothing.
+    /// [`TufError::Expired`] if `trusted` is no longer fresh at `now`, the errors of
+    /// [`Targets::delegations`] if its `delegations` member cannot be read, and the errors of
+    /// [`Store::load`] and [`Store::save`]: the state of the roles is all or nothing.
     pub fn delegated(
         &mut self,
         trusted: &Trusted,
         now: OffsetDateTime,
     ) -> Result<Delegated, TufError> {
         trusted.ensure_fresh(now)?;
-        let delegations = trusted
-            .targets
-            .delegations
-            .as_ref()
-            .ok_or(TufError::DelegationsMissing)?;
+        let Some(delegations) = trusted.targets.delegations()? else {
+            return Ok(Delegated { roles: Vec::new() });
+        };
         // The state is read here and saved once below, merged under the store's lock. If
         // another process rotates the keys in between (a refresh that forgets every version),
         // the merge keeps the newer epoch, so the versions saved below are dropped, not
@@ -874,7 +860,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             } else {
                 self.fetch_role(
                     trusted,
-                    delegations,
+                    &delegations,
                     entry.as_ref(),
                     state.delegated.get(name).map(|accepted| accepted.version),
                     now,
@@ -917,6 +903,11 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             .meta
             .get(&meta_name)
             .ok_or_else(|| delegation_error(name, DelegationError::NotInSnapshot))?;
+        // A role's file is listed by its length and sha256, so that the targets key, if it
+        // also signs elsewhere, cannot bring a file of another repository here.
+        if listed.length.is_none() || listed.sha256.is_none() {
+            return Err(delegation_error(name, DelegationError::Unhashed));
+        }
         // 5.6.1-5.6.2: at most the listed length (and the limit), then exactly the listed
         // length and sha256, before the signature.
         let body = self.get_listed(
@@ -953,10 +944,10 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
     ///
     /// # Errors
     ///
-    /// The errors of [`TufClient::verify_cached_target`] for the saved targets;
-    /// [`TufError::DelegationsMissing`] if they have no delegations;
-    /// [`TufError::Delegation`] if they do not delegate to `role`
-    /// ([`DelegationError::NotDelegated`]), no version of it was accepted
+    /// The errors of [`TufClient::verify_cached_target`] for the saved targets, and of
+    /// [`Targets::delegations`] for their `delegations` member;
+    /// [`TufError::Delegation`] if they do not delegate to `role` (no `delegations` member,
+    /// or no entry for it: [`DelegationError::NotDelegated`]), no version of it was accepted
     /// ([`DelegationError::NotAccepted`]), or for the rules of [`TufClient::delegated`]; and
     /// [`TufError::Hash`] if `bytes` are not the file accepted; [`TufError::Signature`] or
     /// the errors of [`Envelope::parse`] for `bytes`.
@@ -970,9 +961,8 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             return Err(delegation_error(role, DelegationError::NotAccepted));
         };
         let delegations = targets
-            .delegations
-            .as_ref()
-            .ok_or(TufError::DelegationsMissing)?;
+            .delegations()?
+            .ok_or_else(|| delegation_error(role, DelegationError::NotDelegated))?;
         let entry = delegations
             .role(role)
             .ok_or_else(|| delegation_error(role, DelegationError::NotDelegated))?;
@@ -990,7 +980,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         }
         let role_targets = check_role_file(
             delegated,
-            delegations,
+            &delegations,
             bytes,
             &self.limits,
             accepted.version,

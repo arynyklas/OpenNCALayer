@@ -40,8 +40,9 @@ use anyhow::Context;
 use oncl_update::tuf::ed25519::verify_role;
 use oncl_update::tuf::model::TARGETS_META;
 use oncl_update::tuf::{
-    DelegationError, Digest, Envelope, KeyId, Limits, MemoryStore, Profile, Role, RoleName,
-    RoleState, Root, Snapshot, Targets, Timestamp, TrustState, TufClient, TufError, layout,
+    DelegationError, Delegations, Digest, Envelope, KeyId, Limits, MemoryStore, Profile, Role,
+    RoleName, RoleState, Root, Snapshot, Targets, Timestamp, TrustState, TufClient, TufError,
+    layout,
 };
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -357,7 +358,7 @@ fn read_capped(path: &Path, limit: u64) -> std::io::Result<Option<Vec<u8>>> {
 fn role_files(
     dir: &Path,
     listing: &Listing,
-    targets: &Targets,
+    delegations: &Delegations,
 ) -> Result<BTreeMap<RoleName, RoleFile>, Problem> {
     let limit = Limits::default().delegated;
     let mut roles = BTreeMap::new();
@@ -375,10 +376,7 @@ fn role_files(
             .ok()
             .and_then(|env| Targets::from_signed(&env.signed, Profile::Legacy).ok())
             .map(|t| t.expires);
-        let delegated = targets
-            .delegations
-            .as_ref()
-            .is_some_and(|d| d.role(&name).is_some());
+        let delegated = delegations.role(&name).is_some();
         roles.insert(
             name,
             RoleFile {
@@ -500,6 +498,16 @@ fn verify_inner(
         .map_err(|e| malformed(&targets_path, &e))?;
     let top_targets = Targets::from_signed(&targets_file.signed, Profile::Delegating)
         .map_err(|e| malformed(&targets_path, &e))?;
+    // Clients keep the member unread with the targets; `tuf/v2` must have one, readable.
+    let top_delegations = top_targets
+        .delegations()
+        .map_err(|e| malformed(&targets_path, &e))?
+        .ok_or_else(|| {
+            problem(
+                "delegations-missing",
+                format!("{targets_path} has no delegations member"),
+            )
+        })?;
     let delegations = targets_file
         .signed
         .get("delegations")
@@ -521,7 +529,7 @@ fn verify_inner(
     } else {
         None
     };
-    let roles = role_files(dir, listing, &top_targets)?;
+    let roles = role_files(dir, listing, &top_delegations)?;
     let earliest = [
         Some(top_root.expires),
         Some(top_targets.expires),
@@ -543,28 +551,26 @@ fn verify_inner(
         .fold(client_now, OffsetDateTime::min);
 
     // The delegations: every entry keeps the profile, no key of a role is a key of the root.
-    if let Some(delegations) = &top_targets.delegations {
-        for entry in delegations.roles() {
-            match entry {
-                Err(refused) => problems.push(problem(
-                    "delegation-refused",
-                    format!(
-                        "{targets_path}: the delegation to {} breaks the profile: {}",
-                        refused.name, refused.error
-                    ),
-                )),
-                Ok(role) => {
-                    if let Some(id) = role
-                        .keys()
-                        .keyids
-                        .iter()
-                        .find(|id| top_root.keys.contains_key(id))
-                    {
-                        problems.push(problem(
-                            "key-reused",
-                            format!("the key {id} of {} is a key of the root", role.name()),
-                        ));
-                    }
+    for entry in top_delegations.roles() {
+        match entry {
+            Err(refused) => problems.push(problem(
+                "delegation-refused",
+                format!(
+                    "{targets_path}: the delegation to {} breaks the profile: {}",
+                    refused.name, refused.error
+                ),
+            )),
+            Ok(role) => {
+                if let Some(id) = role
+                    .keys()
+                    .keyids
+                    .iter()
+                    .find(|id| top_root.keys.contains_key(id))
+                {
+                    problems.push(problem(
+                        "key-reused",
+                        format!("the key {id} of {} is a key of the root", role.name()),
+                    ));
                 }
             }
         }
@@ -724,10 +730,10 @@ fn verify_inner(
     let mut ever_delegated = BTreeSet::new();
     let mut listed = BTreeSet::new();
     for version in &listing.targets {
+        let path = layout::targets_path(*version);
         let targets = if *version == last_targets {
             top_targets.clone()
         } else {
-            let path = layout::targets_path(*version);
             match parse_file(dir, &path, limits.targets).and_then(|file| {
                 Targets::from_signed(&file.signed, Profile::Delegating)
                     .map_err(|e| malformed(&path, &e))
@@ -739,13 +745,20 @@ fn verify_inner(
                 }
             }
         };
-        if let Some(delegations) = &targets.delegations {
-            for entry in delegations.roles() {
-                ever_delegated.insert(match entry {
-                    Ok(role) => role.name().clone(),
-                    Err(refused) => refused.name.clone(),
-                });
+        match targets.delegations() {
+            Ok(Some(delegations)) => {
+                for entry in delegations.roles() {
+                    ever_delegated.insert(match entry {
+                        Ok(role) => role.name().clone(),
+                        Err(refused) => refused.name.clone(),
+                    });
+                }
             }
+            Ok(None) => problems.push(problem(
+                "delegations-missing",
+                format!("{path} has no delegations member"),
+            )),
+            Err(e) => problems.push(malformed(&path, &e)),
         }
         for (target, entry) in &targets.targets {
             listed.insert(layout::target_file_path(target, &entry.sha256));

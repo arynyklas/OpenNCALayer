@@ -192,6 +192,10 @@ pub fn verify_published_v2<F: Fetcher>(
     let Some(active) = active else {
         anyhow::bail!("the targets of tuf/v2 do not list {}", publishers::TARGET);
     };
+    // Clients keep the member unread with the targets; `tuf/v2` must have one.
+    if !matches!(trusted.targets().delegations(), Ok(Some(_))) {
+        anyhow::bail!("the targets of tuf/v2 have no readable delegations");
+    }
     let delegated = client
         .delegated(&trusted, now)
         .map_err(|e| anyhow::anyhow!("the delegated roles: {e}"))?;
