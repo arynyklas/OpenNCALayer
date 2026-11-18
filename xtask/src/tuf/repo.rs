@@ -1,14 +1,47 @@
 //! The repository as a directory: which files are there ([`Listing`]), reading them for the
 //! client ([`DirFetcher`]) and writing new ones.
+//!
+//! Two repositories share the layout of consistent snapshots ([`Layout`]): `tuf/v1`, whose
+//! top-level targets list the update indexes and nothing else, and `tuf/v2`, which also has
+//! the target `publishers.json` and the files of the publishers' delegated roles,
+//! `metadata/<N>.pub-<name>.json`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use oncl_update::Channel;
-use oncl_update::tuf::{Fetcher, Response, TufError};
+use oncl_update::tuf::{Fetcher, Profile, Response, RoleName, TufError};
+
+/// Which of the two repositories a directory is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum Layout {
+    /// `tuf/v1`: no delegations; the repository of every client released before them.
+    V1,
+    /// `tuf/v2`: its own chain of roots, top-level targets with delegations to the
+    /// publishers, and their roles.
+    V2,
+}
+
+impl Layout {
+    /// The profile the client reads the repository in.
+    pub fn profile(self) -> Profile {
+        match self {
+            Layout::V1 => Profile::Legacy,
+            Layout::V2 => Profile::Delegating,
+        }
+    }
+
+    /// `tuf/v1` or `tuf/v2`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Layout::V1 => "tuf/v1",
+            Layout::V2 => "tuf/v2",
+        }
+    }
+}
 
 /// What a path of the repository is.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,6 +56,16 @@ pub enum Kind {
     Timestamp,
     /// `targets/indexes/<sha256>.<channel>.json`.
     Target,
+    /// `metadata/<N>.pub-<name>.json`: a version of a publisher's delegated role
+    /// (`tuf/v2` only).
+    Delegated {
+        /// The version.
+        version: u64,
+        /// The role.
+        role: RoleName,
+    },
+    /// `targets/<sha256>.publishers.json` (`tuf/v2` only).
+    Publishers,
     /// Anything else.
     Stray,
 }
@@ -31,6 +74,11 @@ pub enum Kind {
 fn version(text: &str) -> Option<u64> {
     let v: u64 = text.parse().ok()?;
     (v >= 1 && v.to_string() == text).then_some(v)
+}
+
+/// Whether `hash` is 64 lowercase hex digits.
+fn is_sha256(hash: &str) -> bool {
+    hash.len() == 64 && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// What the relative path `path` (with `/`) is.
@@ -49,18 +97,26 @@ pub fn classify(path: &str) -> Kind {
             "root.json" => Kind::Root(v),
             "targets.json" => Kind::Targets(v),
             "snapshot.json" => Kind::Snapshot(v),
-            _ => Kind::Stray,
+            _ => match role.strip_suffix(".json").map(RoleName::parse) {
+                Some(Ok(role)) => Kind::Delegated { version: v, role },
+                _ => Kind::Stray,
+            },
         };
     }
     if let Some(name) = path.strip_prefix("targets/indexes/")
         && let Some((hash, rest)) = name.split_once('.')
-        && hash.len() == 64
-        && hash.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        && is_sha256(hash)
         && Channel::ALL
             .iter()
             .any(|c| rest == format!("{}.json", c.as_str()))
     {
         return Kind::Target;
+    }
+    if let Some(name) = path.strip_prefix("targets/")
+        && let Some((hash, "publishers.json")) = name.split_once('.')
+        && is_sha256(hash)
+    {
+        return Kind::Publishers;
     }
     Kind::Stray
 }
@@ -76,8 +132,10 @@ pub struct Listing {
     pub snapshots: BTreeSet<u64>,
     /// Whether `metadata/timestamp.json` is there.
     pub timestamp: bool,
-    /// The files of `targets/indexes/`.
+    /// The files of `targets/`.
     pub target_files: BTreeSet<String>,
+    /// The versions of each delegated role (`tuf/v2`).
+    pub delegated: BTreeMap<RoleName, BTreeSet<u64>>,
     /// Every other file.
     pub strays: Vec<String>,
     /// Every file, whatever it is.
@@ -85,38 +143,58 @@ pub struct Listing {
 }
 
 impl Listing {
-    /// The listing of the relative paths `files`.
+    /// The listing of the relative paths `files` of `tuf/v1`.
     pub fn of(files: impl IntoIterator<Item = String>) -> Listing {
+        Listing::of_layout(files, Layout::V1)
+    }
+
+    /// The listing of the relative paths `files` of a repository of `layout`: in `tuf/v1`
+    /// the files only `tuf/v2` has are strays.
+    pub fn of_layout(files: impl IntoIterator<Item = String>, layout: Layout) -> Listing {
         let mut listing = Listing::default();
         for path in files {
-            match classify(&path) {
-                Kind::Root(v) => {
+            match (classify(&path), layout) {
+                (Kind::Root(v), _) => {
                     listing.roots.insert(v);
                 }
-                Kind::Targets(v) => {
+                (Kind::Targets(v), _) => {
                     listing.targets.insert(v);
                 }
-                Kind::Snapshot(v) => {
+                (Kind::Snapshot(v), _) => {
                     listing.snapshots.insert(v);
                 }
-                Kind::Timestamp => listing.timestamp = true,
-                Kind::Target => {
+                (Kind::Timestamp, _) => listing.timestamp = true,
+                (Kind::Target, _) | (Kind::Publishers, Layout::V2) => {
                     listing.target_files.insert(path.clone());
                 }
-                Kind::Stray => listing.strays.push(path.clone()),
+                (Kind::Delegated { version, role }, Layout::V2) => {
+                    listing.delegated.entry(role).or_default().insert(version);
+                }
+                (Kind::Delegated { .. } | Kind::Publishers, Layout::V1) | (Kind::Stray, _) => {
+                    listing.strays.push(path.clone());
+                }
             }
             listing.all.insert(path);
         }
         listing
     }
 
-    /// The listing of the directory `dir`.
+    /// The listing of the directory `dir` of `tuf/v1`.
     ///
     /// # Errors
     ///
     /// If a directory cannot be read.
     pub fn read(dir: &Path) -> anyhow::Result<Listing> {
-        Ok(Listing::of(walk(dir)?))
+        Listing::read_layout(dir, Layout::V1)
+    }
+
+    /// The listing of the directory `dir` of a repository of `layout`.
+    ///
+    /// # Errors
+    ///
+    /// If a directory cannot be read.
+    pub fn read_layout(dir: &Path, layout: Layout) -> anyhow::Result<Listing> {
+        Ok(Listing::of_layout(walk(dir)?, layout))
     }
 
     /// The highest root, targets and snapshot versions, 0 for none.
@@ -126,6 +204,14 @@ impl Listing {
             self.targets.last().copied().unwrap_or(0),
             self.snapshots.last().copied().unwrap_or(0),
         )
+    }
+
+    /// The newest version of each delegated role.
+    pub fn newest_roles(&self) -> BTreeMap<RoleName, u64> {
+        self.delegated
+            .iter()
+            .filter_map(|(role, versions)| versions.last().map(|v| (role.clone(), *v)))
+            .collect()
     }
 }
 
@@ -284,6 +370,49 @@ mod tests {
         ] {
             assert_eq!(classify(stray), Kind::Stray, "{stray}");
         }
+    }
+
+    #[test]
+    fn the_files_of_tuf_v2_are_classified_and_are_strays_in_tuf_v1() {
+        let hash = "ab".repeat(32);
+        let role = RoleName::parse("pub-ecc").unwrap();
+        assert_eq!(
+            classify("metadata/4.pub-ecc.json"),
+            Kind::Delegated {
+                version: 4,
+                role: role.clone()
+            }
+        );
+        let publishers = format!("targets/{hash}.publishers.json");
+        assert_eq!(classify(&publishers), Kind::Publishers);
+        for stray in [
+            "metadata/0.pub-ecc.json",
+            "metadata/1.pub-ecc.json.bak",
+            "metadata/1.pub-root.json",
+            "metadata/1.pub-EC.json",
+            "metadata/1.ecc.json",
+            "metadata/pub-ecc.json",
+            "targets/publishers.json",
+            &format!("targets/indexes/{hash}.publishers.json"),
+            &format!("targets/{hash}.publishers.json.bak"),
+        ] {
+            assert_eq!(classify(stray), Kind::Stray, "{stray}");
+        }
+        let files = || {
+            [
+                "metadata/1.root.json".to_owned(),
+                "metadata/4.pub-ecc.json".to_owned(),
+                "metadata/3.pub-ecc.json".to_owned(),
+                publishers.clone(),
+            ]
+        };
+        let v2 = Listing::of_layout(files(), Layout::V2);
+        assert!(v2.strays.is_empty());
+        assert_eq!(v2.newest_roles(), BTreeMap::from([(role, 4)]));
+        assert!(v2.target_files.contains(&publishers));
+        let v1 = Listing::of(files());
+        assert_eq!(v1.strays.len(), 3, "{:?}", v1.strays);
+        assert!(v1.delegated.is_empty() && v1.target_files.is_empty());
     }
 
     #[test]
