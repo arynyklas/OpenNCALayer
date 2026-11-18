@@ -27,9 +27,10 @@
 //! check: no notification is sent for either. The check just before an update is applied
 //! that cannot reach the repository does not drop a downloaded update: the index of the last
 //! check is verified again against the saved TUF state offline, and the update is applied if
-//! that state has not expired and still offers it under the saved settings; a repository
-//! that answers without offering it withdraws it. Every change of the state file is a
-//! read-modify-write under one lock.
+//! that state has not expired, has not been outrun by newer metadata the failed refresh
+//! saw, is no older than a week since the repository was last read, and still offers it
+//! under the saved settings; a repository that answers without offering it, or refuses,
+//! withdraws it. Every change of the state file is a read-modify-write under one lock.
 
 pub mod installer;
 
@@ -40,7 +41,6 @@ use std::time::{Duration, Instant, SystemTime};
 
 use oncl_desktop::UpdateSettings;
 use oncl_ui::settings_view::{UpdateStatus, Updates};
-use oncl_update::tuf::TufError;
 use oncl_update::{
     Channel, Choice, Flavor, Index, PendingHealth, State, Target, UpdateError, Version, choose,
 };
@@ -90,6 +90,11 @@ pub const CRASHES_TO_ROLL_BACK: u32 = 2;
 pub const ROLLBACK_ATTEMPTS: u32 = 3;
 /// A waiting update looks whether the daemon is idle this often.
 pub const IDLE_POLL: Duration = Duration::from_secs(15);
+/// The saved state stands in for an unreachable repository at the last check before an
+/// update is applied for this long after the index was read from the repository: the
+/// lifetime of the timestamp in the repository's design (`docs/design/tuf.md`), which is how
+/// long the repository's word that the index is current holds.
+const OFFLINE_FRESH: time::Duration = time::Duration::days(7);
 /// The longest sleep of the schedule: the wall clock is compared at least this often, so
 /// a computer's sleep does not delay a check by the length of the sleep.
 const WAKE_EVERY: Duration = hours(1);
@@ -277,6 +282,8 @@ struct Checked {
 struct Kept {
     channel: Channel,
     bytes: Vec<u8>,
+    /// When the repository was last read for it.
+    verified: OffsetDateTime,
 }
 
 /// Work handed to the updater's thread.
@@ -721,6 +728,7 @@ impl Updater {
         *lock(&self.kept) = Some(Kept {
             channel,
             bytes: verified.bytes,
+            verified: OffsetDateTime::now_utc(),
         });
         Ok(index)
     }
@@ -742,10 +750,7 @@ impl Updater {
             status,
             plan: None,
             retry_soon,
-            unreachable: matches!(
-                e,
-                UpdateError::Tuf(TufError::Fetch(_) | TufError::NotFound(_))
-            ),
+            unreachable: e.unreachable(),
         }
     }
 
@@ -931,21 +936,38 @@ impl Updater {
     /// after the wait. If the repository cannot be reached for that, what it says now is
     /// not known, and the answer is the saved, verified state's
     /// ([`Updater::offered_by_saved_state`]): a flaky network does not drop an update that
-    /// was downloaded and verified.
+    /// was downloaded and verified. The wait itself is not bounded here: every time the
+    /// daemon is idle the repository is asked again, and the saved state stands in for it
+    /// only for [`OFFLINE_FRESH`] after the index was last read from the repository.
     fn still_offered(&self, plan: &Plan) -> bool {
         let checked = self.check(true, None);
         match checked.plan {
             Some(now) => now.target == plan.target,
-            None => checked.unreachable && self.offered_by_saved_state(plan),
+            None => {
+                let offered = checked.unreachable && self.offered_by_saved_state(plan);
+                if offered {
+                    // The failed check left "failed" in the settings window: the update
+                    // goes on.
+                    *lock(&self.status) = UpdateStatus::Available {
+                        version: plan.target.version.to_string(),
+                        installing: true,
+                    };
+                }
+                offered
+            }
         }
     }
 
     /// Whether the index of the last check, checked again offline against the saved TUF
     /// state (still signed by the chain from the root built in, not expired, and what the
     /// saved targets list), still offers `plan` under the saved settings. Not if updates
-    /// are off now, the channel is not the one that index is of, the saved state does not
-    /// vouch for it (expired, or the repository was refreshed since), or it no longer
-    /// offers `plan` (a version marked bad meanwhile, for one).
+    /// are off now, the channel is not the one that index is of, the index was read from
+    /// the repository more than [`OFFLINE_FRESH`] ago, the saved state does not vouch for it
+    /// (expired, or the repository was refreshed since), the failed refresh accepted newer
+    /// timestamp or snapshot metadata than it could complete
+    /// ([`Repository::newer_metadata_seen`]: the repository has published something that
+    /// may withdraw the update), or it no longer offers `plan` (a version marked bad
+    /// meanwhile, for one).
     fn offered_by_saved_state(&self, plan: &Plan) -> bool {
         let version = &plan.target.version;
         let settings = self.settings();
@@ -957,12 +979,25 @@ impl Updater {
         let Some(kept) = kept.as_ref().filter(|k| k.channel == channel) else {
             return false;
         };
-        if let Err(why) =
-            self.repository
-                .verify_kept(channel, &kept.bytes, OffsetDateTime::now_utc())
-        {
+        let now = OffsetDateTime::now_utc();
+        if now - kept.verified > OFFLINE_FRESH {
+            warn!(%version, "cannot reach the update repository, and the update was last confirmed too long ago; it is not applied");
+            return false;
+        }
+        if let Err(why) = self.repository.verify_kept(channel, &kept.bytes, now) {
             warn!(%version, %why, "cannot reach the update repository, and the saved state does not vouch for the update");
             return false;
+        }
+        match self.repository.newer_metadata_seen() {
+            Ok(false) => {}
+            Ok(true) => {
+                warn!(%version, "the update repository has published newer metadata that could not be read; the update is not applied");
+                return false;
+            }
+            Err(why) => {
+                warn!(%version, %why, "cannot read the saved update metadata");
+                return false;
+            }
         }
         let found = self.try_update_state(|s| {
             (

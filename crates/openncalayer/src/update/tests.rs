@@ -3,6 +3,7 @@
 
 use super::*;
 use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
+use oncl_update::tuf::testing::Repo;
 use oncl_update::{Channel, CoreRelease, FlavorPackage, Index, Package, Sha256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -494,6 +495,8 @@ fn a_network_failure_at_the_final_check_applies_what_the_saved_state_still_vouch
     );
     let pending = s.state().pending_health.unwrap();
     assert_eq!((pending.from, pending.to), (v("0.1.0"), v("0.2.0")));
+    // The failed check's "failed" is not what the settings window keeps showing.
+    assert_eq!(u.status(), available("0.2.0", true));
 }
 
 #[test]
@@ -587,6 +590,87 @@ fn a_network_failure_at_the_final_check_does_not_apply_a_version_marked_bad_mean
         Installed::NotApplied
     );
     assert!(!applied(&s));
+}
+
+#[test]
+fn a_refresh_that_failed_after_newer_metadata_was_accepted_is_not_a_fallback() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    assert_eq!(u.repository.newer_metadata_seen(), Ok(false));
+    // A new publication (the same releases): its timestamp is read, then its snapshot
+    // cannot be. What the saved state vouches for may be what that publication withdrew.
+    s.publish(4, two_releases());
+    s.transport
+        .reply(&url("metadata/2.snapshot.json"), 503, b"");
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert_eq!(u.repository.newer_metadata_seen(), Ok(true));
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_refusal_at_the_final_check_never_becomes_the_fallback() {
+    let s = Sandbox::new();
+    s.publish(7, two_releases());
+    let old = s
+        .server
+        .repo()
+        .get("metadata/timestamp.json")
+        .unwrap()
+        .to_vec();
+    s.publish(8, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    s.events();
+
+    // The repository serves the older timestamp again: a rollback, refused.
+    s.transport.serve(&timestamp_url(), &old);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(matches!(u.status(), UpdateStatus::Failed(e) if e.contains("was trusted before")));
+    assert!(!applied(&s));
+
+    // A repository of other keys than the root built in: a signature that does not hold.
+    let hostile = Server::new();
+    *hostile.repo() = Repo::with_seed(41);
+    hostile.publish(
+        &s.transport,
+        Channel::Stable,
+        &crate::repository::tests::index(Channel::Stable, 9),
+    );
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(matches!(u.status(), UpdateStatus::Failed(e) if e.contains("signatures")));
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_network_failure_long_after_the_index_was_last_read_does_not_apply() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    network_down(&s);
+    // The repository's word that the index is current is a timestamp's lifetime old.
+    lock(&u.kept).as_mut().unwrap().verified = OffsetDateTime::now_utc() - TimeDuration::days(8);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+    // Within it, the fallback holds.
+    lock(&u.kept).as_mut().unwrap().verified = OffsetDateTime::now_utc() - TimeDuration::days(6);
+    assert_eq!(u.install(&plan, true, DOWNLOAD_TIMEOUT), Installed::Applied);
 }
 
 #[test]
