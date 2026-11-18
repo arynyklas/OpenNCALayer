@@ -40,13 +40,24 @@ pub fn run(args: &[&str], input: &[u8]) -> Output {
     run_env(args, input, &[])
 }
 pub fn run_env(args: &[&str], input: &[u8], env: &[(&str, &str)]) -> Output {
+    spawn(None, args, input, env)
+}
+/// `run` with `dir` as the working directory (the default temporary store).
+pub fn run_in(dir: &Path, args: &[&str], input: &[u8]) -> Output {
+    spawn(Some(dir), args, input, &[])
+}
+fn spawn(dir: Option<&Path>, args: &[&str], input: &[u8], env: &[(&str, &str)]) -> Output {
     // argv must never carry a secret value.
     for argument in args {
         for secret in SECRETS {
             assert!(!argument.contains(secret), "argv carries a secret value");
         }
     }
-    let mut child = Command::new(env!("CARGO_BIN_EXE_oncl"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_oncl"));
+    if let Some(dir) = dir {
+        command.current_dir(dir);
+    }
+    let mut child = command
         .args(args)
         .envs(env.iter().copied())
         .env_remove("DISPLAY")
