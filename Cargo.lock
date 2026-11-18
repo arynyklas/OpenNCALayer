@@ -729,7 +729,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
- "zeroize",
 ]
 
 [[package]]
@@ -1508,7 +1507,6 @@ dependencies = [
  "const-oid 0.10.2",
  "crypto-common 0.2.2",
  "ctutils",
- "zeroize",
 ]
 
 [[package]]
@@ -2320,7 +2318,8 @@ dependencies = [
 [[package]]
 name = "hmac"
 version = "0.13.0"
-source = "git+https://github.com/arynyklas/MACs?rev=062e38d40e71236dcf49275ab7f9bd491b033c1c#062e38d40e71236dcf49275ab7f9bd491b033c1c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
 ]
@@ -4302,6 +4301,7 @@ dependencies = [
  "hmac 0.13.0",
  "oncl-testkit",
  "streebog",
+ "subtle",
  "thiserror 2.0.21",
  "x509-cert",
  "zeroize",
@@ -6404,10 +6404,10 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "streebog"
 version = "0.11.0"
-source = "git+https://github.com/arynyklas/hashes?rev=7f67647379b26e89068874cfe8cf3bf0c8e72b69#7f67647379b26e89068874cfe8cf3bf0c8e72b69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "942b8aca83a17a387b90643abe15430abd0aabc91d6db511e85827e7060746ef"
 dependencies = [
  "digest 0.11.3",
- "subtle",
 ]
 
 [[package]]
