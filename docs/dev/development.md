@@ -248,7 +248,7 @@ cargo test --workspace --all-features -- --ignored live_
 
 #### Что собирается внутри сборки и тестов
 
-Встроенные модули (WebAssembly) собирает скрипт сборки `openncalayer` и `oncl-builtin-tests`. Сборка одна на весь каталог `target`: модули лежат в `target/builtins-target` (или в `$CARGO_TARGET_DIR/builtins-target`), и оба крейта, все профили и `cargo check` берут их оттуда. Если два скрипта сборки запустились одновременно, второй ждёт первого. Пересобираются модули, только когда меняются `crates/oncl-pdk`, `crates/oncl-protocol`, `crates/oncl-builtin-*`, корневые `Cargo.toml`, `Cargo.lock` или `rust-toolchain.toml`.
+Встроенные модули (WebAssembly) собирает скрипт сборки `openncalayer` и `oncl-builtin-tests`. Сборка одна на весь каталог `target`: модули лежат в `target/builtins-target` (или в `$CARGO_TARGET_DIR/builtins-target`), и оба крейта, все профили и `cargo check` берут их оттуда. Если два скрипта сборки запустились одновременно, второй ждёт первого. Пересобираются модули, только когда меняются `src`, `Cargo.toml` или `plugin.toml` в `crates/oncl-pdk`, `crates/oncl-protocol` и `crates/oncl-builtin-*` (кроме `crates/oncl-builtin-tests`), корневые `Cargo.toml`, `Cargo.lock` или `rust-toolchain.toml`. `cargo xtask builtins build` собирает в тот же `builtins-target`. Если файл блокировки взять нельзя (файловая система без блокировок), сборка идёт без неё и Cargo выводит предупреждение.
 
 Модули можно собрать один раз и не собирать больше вовсе:
 
