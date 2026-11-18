@@ -4,6 +4,7 @@
 pub mod builtins;
 pub mod e2e;
 pub mod ext;
+pub mod ext_updates;
 pub mod fetch;
 pub mod files;
 pub mod fixtures;

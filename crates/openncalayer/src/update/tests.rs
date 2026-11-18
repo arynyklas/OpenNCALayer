@@ -3,6 +3,7 @@
 
 use super::*;
 use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
+use oncl_update::tuf::testing::Repo;
 use oncl_update::{Channel, CoreRelease, FlavorPackage, Index, Package, Sha256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -461,6 +462,215 @@ fn an_update_no_longer_offered_after_the_wait_is_not_applied() {
     assert_ne!(u.install(&plan, true, DOWNLOAD_TIMEOUT), Installed::Applied);
     assert!(!s.events().iter().any(|e| matches!(e, Event::Apply(_))));
     assert_eq!(s.state().pending_health, None);
+}
+
+/// The repository cannot be reached: nothing answers its timestamp.
+fn network_down(s: &Sandbox) {
+    s.transport.reply(&timestamp_url(), 503, b"");
+}
+
+fn applied(s: &Sandbox) -> bool {
+    s.events().iter().any(|e| matches!(e, Event::Apply(_)))
+}
+
+#[test]
+fn a_network_failure_at_the_final_check_applies_what_the_saved_state_still_vouches_for() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 1);
+    let plan = u.check(false, None).plan.unwrap();
+    s.events();
+    // The network fails after the download, while the update waits for an idle daemon.
+    network_down(&s);
+    assert_eq!(u.install(&plan, true, DOWNLOAD_TIMEOUT), Installed::Applied);
+    assert_eq!(
+        s.events(),
+        [
+            Event::Download(v("0.2.0"), false),
+            Event::Busy,
+            Event::Busy,
+            Event::Hold,
+            Event::Apply(v("0.2.0")),
+        ]
+    );
+    let pending = s.state().pending_health.unwrap();
+    assert_eq!((pending.from, pending.to), (v("0.1.0"), v("0.2.0")));
+    // The failed check's "failed" is not what the settings window keeps showing.
+    assert_eq!(u.status(), available("0.2.0", true));
+}
+
+#[test]
+fn a_network_failure_at_the_final_check_with_expired_saved_state_does_not_apply() {
+    let s = Sandbox::new();
+    // The targets that vouch for the index hold for 3 s only.
+    s.server.repo().lifetimes.targets = TimeDuration::seconds(3);
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    s.events();
+    network_down(&s);
+    thread::sleep(Duration::from_millis(3200));
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_network_failure_does_not_undo_a_withdrawal_the_repository_announced() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    // A newer index no longer offers 0.2.0: the final check reads it.
+    s.publish(4, vec![release("0.1.0", 100, false)]);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+    // What the saved state vouches for now is that newer index, whatever the network does.
+    network_down(&s);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_network_failure_at_the_final_check_still_honours_the_settings() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    network_down(&s);
+
+    // Updates turned off while the update waited.
+    s.settings(false);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+
+    // Another channel chosen: the index kept is of the stable one.
+    std::fs::write(
+        s.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": true, "channel": "beta"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+
+    // Back to what it was: the update goes on.
+    s.settings(true);
+    assert_eq!(u.install(&plan, true, DOWNLOAD_TIMEOUT), Installed::Applied);
+    assert!(applied(&s));
+}
+
+#[test]
+fn a_network_failure_at_the_final_check_does_not_apply_a_version_marked_bad_meanwhile() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    network_down(&s);
+    let mut state = s.state();
+    state.bad.insert(v("0.2.0"));
+    state.save(s.dir.path()).unwrap();
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+}
+
+#[test]
+fn a_refresh_that_failed_after_newer_metadata_was_accepted_is_not_a_fallback() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    assert_eq!(u.repository.newer_metadata_seen(), Ok(false));
+    // A new publication (the same releases): its timestamp is read, then its snapshot
+    // cannot be. What the saved state vouches for may be what that publication withdrew.
+    s.publish(4, two_releases());
+    s.transport
+        .reply(&url("metadata/2.snapshot.json"), 503, b"");
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert_eq!(u.repository.newer_metadata_seen(), Ok(true));
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_refusal_at_the_final_check_never_becomes_the_fallback() {
+    let s = Sandbox::new();
+    s.publish(7, two_releases());
+    let old = s
+        .server
+        .repo()
+        .get("metadata/timestamp.json")
+        .unwrap()
+        .to_vec();
+    s.publish(8, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    s.events();
+
+    // The repository serves the older timestamp again: a rollback, refused.
+    s.transport.serve(&timestamp_url(), &old);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(matches!(u.status(), UpdateStatus::Failed(e) if e.contains("was trusted before")));
+    assert!(!applied(&s));
+
+    // A repository of other keys than the root built in: a signature that does not hold.
+    let hostile = Server::new();
+    *hostile.repo() = Repo::with_seed(41);
+    hostile.publish(
+        &s.transport,
+        Channel::Stable,
+        &crate::repository::tests::index(Channel::Stable, 9),
+    );
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(matches!(u.status(), UpdateStatus::Failed(e) if e.contains("signatures")));
+    assert!(!applied(&s));
+    assert_eq!(s.state().pending_health, None);
+}
+
+#[test]
+fn a_network_failure_long_after_the_index_was_last_read_does_not_apply() {
+    let s = Sandbox::new();
+    s.publish(3, two_releases());
+    let u = s.updater("0.1.0", 0);
+    let plan = u.check(false, None).plan.unwrap();
+    network_down(&s);
+    // The repository's word that the index is current is a timestamp's lifetime old.
+    lock(&u.kept).as_mut().unwrap().verified = OffsetDateTime::now_utc() - TimeDuration::days(8);
+    assert_eq!(
+        u.install(&plan, true, DOWNLOAD_TIMEOUT),
+        Installed::NotApplied
+    );
+    assert!(!applied(&s));
+    // Within it, the fallback holds.
+    lock(&u.kept).as_mut().unwrap().verified = OffsetDateTime::now_utc() - TimeDuration::days(6);
+    assert_eq!(u.install(&plan, true, DOWNLOAD_TIMEOUT), Installed::Applied);
 }
 
 #[test]

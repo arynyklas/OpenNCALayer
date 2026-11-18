@@ -750,6 +750,22 @@ enum PluginCommand {
 enum ExtCommand {
     /// Build the unpacked extensions and their zip/xpi into `target/extension/`.
     Build,
+    /// Write the Firefox update manifest (`firefox/updates.json`) from the releases and their
+    /// downloaded `.xpi` files.
+    Updates {
+        /// The releases, JSON Lines as `gh api …/releases` gives them (none: an empty list).
+        #[arg(long)]
+        releases: Option<std::path::PathBuf>,
+        /// Directory with `v<version>/openncalayer-firefox-<version>.xpi` and `SHA256SUMS`.
+        #[arg(long)]
+        assets: std::path::PathBuf,
+        /// The repository the releases belong to, `owner/name`.
+        #[arg(long)]
+        repo: String,
+        /// The file to write.
+        #[arg(long)]
+        out: std::path::PathBuf,
+    },
 }
 
 fn registry(command: RegistryCommand) -> anyhow::Result<()> {
@@ -804,6 +820,15 @@ fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Command::Package { command } => package(command),
+        Command::Ext {
+            command:
+                ExtCommand::Updates {
+                    releases,
+                    assets,
+                    repo,
+                    out,
+                },
+        } => xtask::ext_updates::write(releases.as_deref(), &assets, &repo, &out),
         Command::Ext {
             command: ExtCommand::Build,
         } => {

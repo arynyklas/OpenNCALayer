@@ -2,7 +2,7 @@
 
 Расширение перехватывает на странице `WebSocket` к `127.0.0.1`, `localhost` и `[::1]` на портах 13579–13679 и передаёт сообщения OpenNCALayer через native messaging. Браузер запускает небольшой relay `nmhost`, а relay запускает демон (`openncalayer run --allow-no-wss`), если тот ещё не работает. Сертификат и порт 13579 для этого не нужны. `wss` и установленный CA нужны только сайтам в браузерах без расширения.
 
-Готовые файлы расширения лежат в [Releases](https://github.com/arynyklas/OpenNCALayer/releases): `openncalayer-chromium-<версия>.zip` и `openncalayer-firefox-<версия>.xpi`. XPI не подписан, поэтому в Firefox ставится только временно (см. ниже). Расширение можно собрать и из исходников:
+Готовые файлы расширения лежат в [Releases](https://github.com/arynyklas/OpenNCALayer/releases): `openncalayer-chromium-<версия>.zip` и `openncalayer-firefox-<версия>.xpi`. `.xpi` обычного релиза (версия без суффикса, например `0.1.1`) подписан Mozilla, и Firefox ставит его насовсем, если при сборке релиза были ключи AMO. `.xpi` предварительной версии (`-alpha`, `-beta`, `-rc`) не подписан и ставится только временно. Расширение можно и собрать из исходников:
 
 ```sh
 cargo build --release -p openncalayer -p oncl-nmhost
@@ -19,7 +19,7 @@ cargo xtask ext build   # → target/extension/
 
    Сертификаты команда не трогает. Проверить регистрацию можно командой `openncalayer nm status` (код 1, если чего-то не хватает), удалить командой `openncalayer nm uninstall` (каталог данных остаётся).
 2. Chrome, Edge, Yandex Browser: откройте страницу расширений (`chrome://extensions`, `edge://extensions`), включите «Режим разработчика», нажмите «Загрузить распакованное расширение» и выберите каталог `target/extension/chromium` или распакованный `openncalayer-chromium-<версия>.zip`. Id расширения должен быть `cmdaoegbcpdhoamhgmibpgpnlojopcal`, расширение с другим id хост не принимает.
-3. Firefox 115 и новее, в том числе ESR 115 (последний Firefox для Windows 7): пока доступна только временная установка. Откройте `about:debugging`, затем «Этот Firefox», «Загрузить временное дополнение…» и выберите `target/extension/firefox/manifest.json`. После перезапуска Firefox дополнение пропадает. Постоянно ставится только XPI, подписанный в AMO (unlisted), неподписанный `.xpi` Firefox не установит.
+3. Firefox (115 и новее, в том числе ESR 115 — последний Firefox для Windows 7): скачайте `openncalayer-firefox-<версия>.xpi` обычного релиза из Releases и откройте его в Firefox: перетащите файл на окно браузера или выберите `about:addons` → значок шестерёнки → «Установить дополнение из файла…». Файл подписан Mozilla как unlisted-дополнение (в каталоге addons.mozilla.org его нет), поэтому дополнение остаётся после перезапуска Firefox. Подписанные версии обновляются сами: Firefox проверяет `https://arynyklas.github.io/OpenNCALayer/firefox/updates.json` и берёт новый подписанный `.xpi` из Releases. Firefox не установит `.xpi` предварительной версии, локальной сборки и релиза, вышедшего без ключей AMO. Для них остаётся временная установка: `about:debugging` → «Этот Firefox» → «Загрузить временное дополнение…» → `target/extension/firefox/manifest.json`; такое дополнение пропадает при перезапуске Firefox.
 4. Перезагрузите открытые вкладки сайтов.
 
 Что нужно знать:

@@ -19,6 +19,7 @@
 
 - Authenticode через SignPath: секрет `SIGNPATH_API_TOKEN`, переменные `SIGNPATH_ORGANIZATION_ID`, `SIGNPATH_PROJECT_SLUG`, `SIGNPATH_SIGNING_POLICY_SLUG`.
 - Apple: секреты `APPLE_CERTIFICATE_P12` (base64), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGN_IDENTITY`, `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` нужны для подписи и нотаризации `.app` (пакет обновления, `.zip`, содержимое `.pkg`). Сам `.pkg` подписывается и нотаризуется, только если задан ещё `APPLE_INSTALL_IDENTITY`, идентичность «Developer ID Installer» из того же `APPLE_CERTIFICATE_P12`.
+- Mozilla AMO (unlisted): секреты `AMO_JWT_ISSUER` и `AMO_JWT_SECRET` (ключи API со страницы addons.mozilla.org/developers/addon/api/key/). С ними job `extension` подписывает `.xpi` обычного релиза (тег без суффикса), и подписанный файл идёт в релиз, `SHA256SUMS`, аттестацию и индекс под прежним именем. `.xpi` предварительной версии остаётся неподписанным. `web-ext` ставится из `extension/sign/package-lock.json` командой `npm ci --ignore-scripts` в шаге без секретов; версию меняют там же (`npm install --package-lock-only --ignore-scripts`) вместе с `package.json`. AMO подписывает версию один раз: если после успешной подписи упал другой job, запускайте «Re-run failed jobs», а не «Re-run all jobs», иначе понадобится новый тег.
 
 Также необязателен секрет `PRIVACY_DENYLIST` для шага denylist в `privacy.yml` (раздел 12).
 
@@ -160,6 +161,8 @@ cargo xtask index check updates/v1 --base origin/main
 ## 9. Сайт проекта на Pages
 
 `pages.yml` публикует одним артефактом сайт проекта (`site/`, `cargo xtask registry build`: каталог портов, загрузка, история оригинала) и рядом с ним каталог `updates/`. Индексы копируются в артефакт после сборки сайта байт в байт. У сайта нет своего пути `updates`: workflow проверяет это и сверяет копию командой `diff -r updates _site/updates`.
+
+Там же `pages.yml` кладёт `firefox/updates.json`, файл обновлений Firefox (`update_url` в манифесте расширения). Шаг «Firefox update manifest» берёт опубликованные релизы от `0.1.1` и выше, скачивает их `.xpi` и `SHA256SUMS` и включает версию, только если в `.xpi` есть подпись AMO (`META-INF/mozilla.rsa`); `update_hash` берётся из `SHA256SUMS` и сверяется с файлом (`cargo xtask ext updates`). Предварительные версии, черновики и неподписанные `.xpi` в файл не попадают, а релиз с битыми файлами пропускается с предупреждением. Без подписанных версий список пуст, и это допустимый файл. Файл обновляется при ближайшем запуске Pages после публикации релиза.
 
 Workflow запускается:
 
