@@ -1082,3 +1082,65 @@ fn verify_published_reads_a_local_copy() {
     fs::write(&path, bytes).unwrap();
     assert!(verify(&site).is_err());
 }
+
+/// Pages publishing the served `tuf/v2` again: the copy is older than the tree (new indexes
+/// since), so it is checked without the tree's indexes and `publishers/` and without the
+/// same-index rule against `tuf/v1`; the rest still holds, and the strict check refuses it.
+#[test]
+fn a_served_copy_older_than_the_tree_passes_the_check_of_a_republication() {
+    let w = v2_world();
+    let now = t0() + Duration::hours(1);
+    let served = w.publish("served", now, None);
+    fs::write(w.indexes().join("stable.json"), index("stable", 2)).unwrap();
+    w.update(now, false).unwrap();
+
+    let strict = codes(&w.check(&served, Stage::Published, now, None));
+    assert!(strict.contains(&"index-mismatch"), "{strict:?}");
+
+    let report = match check_v2::check(&check_v2::Options {
+        dir: &served,
+        index: None,
+        publishers: None,
+        anchor: Some(&w.v2_anchor()),
+        now,
+        stage: Stage::Published,
+        expiry: Expiry {
+            min_days: 3,
+            min_root_days: 3,
+            fail: true,
+        },
+        base: None,
+    })
+    .unwrap()
+    {
+        check_v2::Outcome::Checked(report) => *report,
+        check_v2::Outcome::NoRepository => panic!("no repository"),
+    };
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+
+    let check::Outcome::Checked(v1) = check::check(&check::Options {
+        dir: &w.v1(),
+        index: Some(&w.indexes()),
+        anchor: Some(&w.anchor()),
+        now,
+        timestamp: TimestampMode::Absent,
+        expiry: Expiry {
+            min_days: 0,
+            min_root_days: 0,
+            fail: false,
+        },
+        base: None,
+    })
+    .unwrap() else {
+        panic!("tuf/v1");
+    };
+    let v1_roots = check::committed_chain(&w.v1()).unwrap();
+    let (v1, v2) = (
+        v1.verified.as_ref().unwrap(),
+        report.verified.as_ref().unwrap(),
+    );
+    let (same, _) = check_v2::cross_with(v1, &v1_roots, v2, check_v2::Indexes::Same);
+    assert!(same.iter().any(|p| p.code == "index-diverged"), "{same:?}");
+    let (may_differ, _) = check_v2::cross_with(v1, &v1_roots, v2, check_v2::Indexes::MayDiffer);
+    assert!(may_differ.is_empty(), "{may_differ:?}");
+}

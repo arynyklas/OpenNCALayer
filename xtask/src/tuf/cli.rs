@@ -280,6 +280,12 @@ pub enum TufCommand {
         /// snapshot.
         #[arg(long)]
         no_timestamp: bool,
+        /// The `tuf/v2` directory is a copy of the served `tuf/v2` that Pages publishes again
+        /// unchanged: it may be older than the tree, so it is not compared with the indexes
+        /// and `publishers/` of the tree, nor its indexes with those of `tuf/v1`; everything
+        /// else (the client, expiry, the keys the two chains share) is checked.
+        #[arg(long, conflicts_with = "no_timestamp")]
+        served_v2: bool,
     },
     /// The client over HTTPS against the published site (the smoke check after a
     /// deployment): the whole chain, and every index target. With `--repo v2` also
@@ -763,6 +769,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             fail_on_expiring,
             base,
             no_timestamp,
+            served_v2,
         } => {
             let dir = workspace(dir, REPO_DIR);
             let v2_dir = v2_dir.unwrap_or_else(|| sibling(&dir, "v2"));
@@ -809,8 +816,8 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             if matches!(repo, Repos::V2 | Repos::Both) {
                 let outcome = check_v2::check(&check_v2::Options {
                     dir: &v2_dir,
-                    index: Some(&index),
-                    publishers: Some(&publishers),
+                    index: (!served_v2).then_some(index.as_path()),
+                    publishers: (!served_v2).then_some(publishers.as_path()),
                     anchor: v2_anchor.as_deref(),
                     now,
                     stage: if no_timestamp {
@@ -833,7 +840,16 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
                             print_report(label, &report.notes, &report.warnings, &report.problems);
                         if let (Some(v1), Some(v2)) = (&v1_verified, &report.verified) {
                             let (problems, warnings) = match check::committed_chain(&dir) {
-                                Ok(v1_roots) => check_v2::cross(v1, &v1_roots, v2),
+                                Ok(v1_roots) => check_v2::cross_with(
+                                    v1,
+                                    &v1_roots,
+                                    v2,
+                                    if served_v2 {
+                                        check_v2::Indexes::MayDiffer
+                                    } else {
+                                        check_v2::Indexes::Same
+                                    },
+                                ),
                                 Err(e) => {
                                     (vec![Problem::new("client", format!("{e:#}"))], Vec::new())
                                 }

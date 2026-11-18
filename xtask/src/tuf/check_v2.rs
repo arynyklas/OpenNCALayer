@@ -1086,14 +1086,33 @@ pub fn shared_keys(v1: &[Root], v2: &[Root]) -> Vec<Problem> {
         .collect()
 }
 
-/// `tuf/v1` against `tuf/v2`: the chains of roots share no key but the targets key
-/// ([`shared_keys`], over `v1_roots`, every root of `tuf/v1`, and `v2.roots`), no
-/// publisher's key is a key of any root of either, and the index targets are the same files.
-/// Returns the problems and the warnings.
+/// Whether [`cross_with`] requires the two repositories to list the same indexes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Indexes {
+    /// Both list the same index files (the tree, a new publication).
+    Same,
+    /// `tuf/v2` is the served copy published again: it may list older indexes.
+    MayDiffer,
+}
+
+/// [`cross_with`] the index targets compared ([`Indexes::Same`]).
 pub fn cross(
     v1: &check::Verified,
     v1_roots: &[Root],
     v2: &Verified,
+) -> (Vec<Problem>, Vec<Problem>) {
+    cross_with(v1, v1_roots, v2, Indexes::Same)
+}
+
+/// `tuf/v1` against `tuf/v2`: the chains of roots share no key but the targets key
+/// ([`shared_keys`], over `v1_roots`, every root of `tuf/v1`, and `v2.roots`), no
+/// publisher's key is a key of any root of either, and with [`Indexes::Same`] the index
+/// targets are the same files. Returns the problems and the warnings.
+pub fn cross_with(
+    v1: &check::Verified,
+    v1_roots: &[Root],
+    v2: &Verified,
+    compare: Indexes,
 ) -> (Vec<Problem>, Vec<Problem>) {
     let mut problems = shared_keys(v1_roots, &v2.roots);
     let mut warnings = Vec::new();
@@ -1132,7 +1151,7 @@ pub fn cross(
             .map(|(path, t)| (path.as_str().to_owned(), (t.length, t.sha256)))
             .collect()
     };
-    if indexes(&v1.targets) != indexes(&v2.targets) {
+    if compare == Indexes::Same && indexes(&v1.targets) != indexes(&v2.targets) {
         problems.push(problem(
             "index-diverged",
             format!(
