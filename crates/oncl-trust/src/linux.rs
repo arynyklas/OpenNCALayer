@@ -376,8 +376,9 @@ mod tests {
     use super::*;
     use crate::tests::{ca_and_leaf, ca_and_leaf_at, nca_rsa, noncanonical, write};
 
-    /// Creates an empty NSS database in `dir` with `certutil -N`.
-    fn create_db(dir: &Path, password: Option<&str>) {
+    /// Creates an empty NSS database in `dir` with `certutil -N`; `None` after the skip line
+    /// when there is no `certutil`.
+    fn create_db(dir: &Path, password: Option<&str>) -> Option<()> {
         let mut command = Command::new(CERTUTIL);
         command
             .arg("-N")
@@ -391,15 +392,17 @@ mod tests {
                 command.arg("-f").arg(file)
             }
         };
-        let status = oncl_testkit::tool::CERTUTIL.spawned(command.status());
+        let status = oncl_testkit::tool::CERTUTIL.spawned_or_skip(command.status())?;
         assert!(status.success());
+        Some(())
     }
 
-    /// An empty NSS database in a temporary directory.
-    fn new_db(password: Option<&str>) -> tempfile::TempDir {
+    /// An empty NSS database in a temporary directory; `None` after the skip line when there is
+    /// no `certutil`.
+    fn new_db(password: Option<&str>) -> Option<tempfile::TempDir> {
         let dir = tempfile::tempdir().unwrap();
-        create_db(dir.path(), password);
-        dir
+        create_db(dir.path(), password)?;
+        Some(dir)
     }
 
     fn certutil(dir: &Path) -> Certutil<'static> {
@@ -424,7 +427,9 @@ mod tests {
 
     #[test]
     fn nss_db_install_contains_remove() {
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (ca, _) = ca_and_leaf("one@host");
         assert!(!db.contains(&ca).unwrap());
@@ -446,7 +451,9 @@ mod tests {
 
     #[test]
     fn nca_roots_have_their_own_nicknames() {
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (root, issuing) = nca_rsa();
         let (ours, _) = ca_and_leaf("ours@host");
@@ -479,7 +486,9 @@ mod tests {
     fn an_nca_root_installs_next_to_one_with_the_same_name() {
         // The 2015 root shares `rcarsa20`'s CN but not its subject, imported by hand under
         // the bare CN: NSS refuses that nickname for another subject.
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (root, _) = nca_rsa();
         let old =
@@ -506,7 +515,9 @@ mod tests {
 
     #[test]
     fn nss_db_remove_leaves_other_certificates() {
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (ours, _) = ca_and_leaf("ours@host");
         let (other, _) = ca_and_leaf("other@host");
@@ -536,7 +547,9 @@ mod tests {
         assert_eq!(subject(&ours), subject(&sibling));
 
         // The sibling is trusted; ours was imported without trust.
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         assert_eq!(db.install(&sibling).unwrap(), InstallOutcome::Installed);
         import(dir.path(), "Imported by hand", ours.der(), ",,");
@@ -562,7 +575,9 @@ mod tests {
 
     #[test]
     fn nss_db_with_a_certificate_x509_cert_rejects() {
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (stranger, _) = ca_and_leaf("odd@host");
         let odd = noncanonical(&stranger);
@@ -587,7 +602,9 @@ mod tests {
 
     #[test]
     fn nss_db_install_trusts_a_present_untrusted_certificate() {
-        let dir = new_db(None);
+        let Some(dir) = new_db(None) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (ca, _) = ca_and_leaf("untrusted@host");
         import(dir.path(), "Imported", ca.der(), ",,");
@@ -605,7 +622,9 @@ mod tests {
 
     #[test]
     fn nss_db_with_a_password_fails_clearly_and_leaves_nothing() {
-        let dir = new_db(Some("secret"));
+        let Some(dir) = new_db(Some("secret")) else {
+            return;
+        };
         let db = NssDb(dir.path().to_owned());
         let (ca, _) = ca_and_leaf("locked@host");
         let err = db.install(&ca).unwrap_err();
@@ -703,7 +722,9 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let chrome = home.path().join(".pki/nssdb");
         std::fs::create_dir_all(&chrome).unwrap();
-        create_db(&chrome, None);
+        if create_db(&chrome, None).is_none() {
+            return;
+        }
         let (ca, _) = ca_and_leaf("report@host");
         let with: &OsStr = CERTUTIL.as_ref();
         let without: &OsStr = "/nonexistent/certutil".as_ref();

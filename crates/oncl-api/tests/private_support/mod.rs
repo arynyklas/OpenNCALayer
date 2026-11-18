@@ -671,13 +671,19 @@ pub fn artifact<'a>(parts: &'a [(String, Option<String>, Vec<u8>)], id: &str) ->
 }
 
 /// Independent oracle: OpenSSL CMS signature verification (embedded signer cert,
-/// no chain: the synthetic chain uses GOST CAs OpenSSL cannot validate).
-pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) -> Option<Vec<u8>> {
+/// no chain: the synthetic chain uses GOST CAs OpenSSL cannot validate). `openssl` is
+/// `oncl_testkit::tool::openssl_or_skip`'s.
+pub fn openssl_cms_verify(
+    openssl: &str,
+    signature: &[u8],
+    content: Option<&[u8]>,
+    dir: &Path,
+) -> Option<Vec<u8>> {
     let sig = dir.join("oracle.p7s");
     std::fs::write(&sig, signature).unwrap();
     let out = dir.join("oracle.out");
     let _ = std::fs::remove_file(&out);
-    let mut command = std::process::Command::new(oncl_testkit::tool::openssl());
+    let mut command = std::process::Command::new(openssl);
     command
         .args([
             "cms",

@@ -34,7 +34,7 @@ mod keys;
 #[allow(dead_code)]
 mod model;
 #[path = "src/tuf/names.rs"]
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 mod names;
 
 /// The most a root file may be: `tuf::Limits::default().root`.

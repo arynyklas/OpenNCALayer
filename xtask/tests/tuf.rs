@@ -590,22 +590,22 @@ fn a_plain_root_is_a_renewal_with_the_same_keys() {
     assert_eq!(in_force.expires, expired + Duration::days(365));
 }
 
+/// Runs `git`; the test has checked [`has_git`] first.
 fn git(dir: &Path, args: &[&str]) {
-    let out = oncl_testkit::tool::GIT.spawned(
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "user.name=t",
-                "-c",
-                "user.email=t@example.com",
-                "-c",
-                "commit.gpgsign=false",
-            ])
-            .args(args)
-            .output(),
-    );
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         out.status.success(),
         "git {args:?}: {}",
@@ -613,8 +613,16 @@ fn git(dir: &Path, args: &[&str]) {
     );
 }
 
+/// Whether `git` is there; prints the skip line when it is not.
+fn has_git() -> bool {
+    oncl_testkit::tool::GIT.or_skip(&["--version"]).is_some()
+}
+
 #[test]
 fn history_is_kept_against_the_base_revision() {
+    if !has_git() {
+        return;
+    }
     let w = world();
     // A second version, committed as the base.
     let later = t0() + Duration::days(1);
@@ -981,6 +989,9 @@ fn fresh_world(channels: &[&str]) -> World {
 
 #[test]
 fn a_missing_and_a_removed_repository_are_told_apart() {
+    if !has_git() {
+        return;
+    }
     let w = world();
     // The anchor is there, the directory is not.
     let report = match check::check(&Options {
@@ -1083,6 +1094,9 @@ fn an_anchor_that_is_not_a_root_of_the_repository_and_a_gap_in_the_roots_are_det
 
 #[test]
 fn files_without_a_version_an_unlisted_index_and_a_foreign_target_are_detected() {
+    if !has_git() {
+        return;
+    }
     // Files added against the base and no version higher.
     let w = world();
     git(w.dir.path(), &["init", "-q"]);

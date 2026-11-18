@@ -7,10 +7,14 @@ name: Privacy
 # private list), also no line that matches it; the list itself never enters the repository,
 # and the check prints only `file:line`. Forks and pull requests from them have no secrets:
 # there the denylist step leaves a notice and passes.
+#
+# Called by ci.yml (job `privacy`, on every pull request and every run on main), which passes
+# the secret by name; the heavy jobs of ci.yml wait for it.
 on:
-  push:
-    branches: [main]
-  pull_request:
+  workflow_call:
+    secrets:
+      PRIVACY_DENYLIST:
+        required: false
 
 permissions:
   contents: read
@@ -30,10 +34,11 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/pinned-toolchains
+      # xtask's build, saved by ci.yml's `prepare` job.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-          cache-on-failure: true
+          shared-key: linux-dev
+          save-if: false
       - name: The range
         id: range
         env:

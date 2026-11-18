@@ -2,9 +2,9 @@
 //! These names do not assert a KZ CMS/envelope or recipient-certificate profile.
 //! Verified RFC errata 6197–6201 apply: validate peer, never hash the identity.
 
+use crate::streebog_secret::{SecretStreebog, Streebog256Secret, Streebog512Secret};
 use crate::{CurveId, SigningKey, VerifyingKey};
 use crypto_bigint::{BoxedUint, Limb};
-use streebog::{Digest, Streebog256Secret, Streebog512Secret};
 use zeroize::Zeroizing;
 
 /// Explicit primitive identities, not interchangeable KZ signature algorithms.
@@ -128,10 +128,9 @@ impl SecretHashState {
     }
 }
 
-fn hash_into<D: Digest>(mut state: D, input: &[u8], output: &mut [u8]) {
-    Digest::update(&mut state, input);
-    let destination: &mut streebog::digest::Output<D> =
-        output.try_into().expect("profile digest output width");
+fn hash_into<const N: usize>(mut state: SecretStreebog<N>, input: &[u8], output: &mut [u8]) {
+    state.update(input);
+    let destination: &mut [u8; N] = output.try_into().expect("profile digest output width");
     state.finalize_into(destination);
 }
 

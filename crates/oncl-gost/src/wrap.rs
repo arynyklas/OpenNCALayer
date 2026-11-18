@@ -1,9 +1,8 @@
 //! CEK-only RFC 7836 §4.6 wrap: KDF, GOST28147 TC26-Z ECB and IMIT.
 //! Not RFC4357 plain/CryptoPro wrap, nor a proven KZ CMS profile.
 
+use crate::secret_hmac::SecretHmac;
 use crypto_bigint::CtEq;
-use hmac::{HmacSecret, KeyInit, Mac};
-use streebog::Streebog256Secret;
 use zeroize::{Zeroize, Zeroizing};
 
 /// Explicit wrap primitive identity.
@@ -124,17 +123,12 @@ pub fn unwrap_cek(
 }
 
 fn kdf_into(key: &[u8; 32], seed: &[u8], destination: &mut [u8; 32]) {
-    let mut state = <HmacSecret<Streebog256Secret> as KeyInit>::new_from_slice(key)
-        .expect("HMAC permits a fixed 32-byte key");
+    let mut state = SecretHmac::<32>::new(key);
     // RFC7836 §4.5: counter || label || 00 || seed || L_be, R=1,L=256.
-    Mac::update(&mut state, &[1, 0x26, 0xbd, 0xb8, 0x78, 0]);
-    Mac::update(&mut state, seed);
-    Mac::update(&mut state, &[1, 0]);
-    let output: &mut hmac::digest::Output<HmacSecret<Streebog256Secret>> = destination
-        .as_mut_slice()
-        .try_into()
-        .expect("fixed KDF output width");
-    hmac::digest::FixedOutput::finalize_into(state, output);
+    state.update(&[1, 0x26, 0xbd, 0xb8, 0x78, 0]);
+    state.update(seed);
+    state.update(&[1, 0]);
+    state.finalize_into(destination);
 }
 
 // Exact primary RFC7836 Appendix C columns K1..K8. No KZ/Russian alias guess.

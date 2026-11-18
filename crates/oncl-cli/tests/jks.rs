@@ -18,10 +18,11 @@ fn trust(w: &World) -> Vec<&str> {
         "1793620800",
     ]
 }
-fn keytool(args: &[&str]) -> std::process::Output {
-    oncl_testkit::tool::KEYTOOL.spawned(Command::new("keytool").args(args).output())
+fn keytool(keytool: &str, args: &[&str]) -> std::process::Output {
+    Command::new(keytool).args(args).output().unwrap()
 }
-fn jks(w: &World, alias: &str) -> PathBuf {
+/// The JKS of `support/jks_write.py`, run by `python`.
+fn jks(python: &str, w: &World, alias: &str) -> PathBuf {
     let script = w.dir.path().join("jks_write.py");
     std::fs::write(&script, include_str!("support/jks_write.py")).unwrap();
     let (pkcs8, leaf, root) = (
@@ -33,7 +34,7 @@ fn jks(w: &World, alias: &str) -> PathBuf {
     std::fs::write(&leaf, w.pki.rsa.cert.to_der().unwrap()).unwrap();
     std::fs::write(&root, w.pki.root.cert.to_der().unwrap()).unwrap();
     let out = w.dir.path().join("signer.jks");
-    let status = Command::new(oncl_testkit::tool::python())
+    let status = Command::new(python)
         .args([
             path(&script),
             path(&out),
@@ -50,8 +51,14 @@ fn jks(w: &World, alias: &str) -> PathBuf {
 }
 #[test]
 fn strict_jks_sign_then_valid_zero_with_openssl_and_wrong_password_refused() {
+    let (Some(python), Some(openssl)) = (
+        oncl_testkit::tool::python_or_skip(),
+        oncl_testkit::tool::openssl_or_skip(),
+    ) else {
+        return;
+    };
     let w = world();
-    let container = jks(&w, "jks-signer");
+    let container = jks(&python, &w, "jks-signer");
     // The writer's output is a JKS the SDK reader accepts, with the right entry.
     let bytes = std::fs::read(&container).unwrap();
     assert!(oncl_pki::jks::is_jks(&bytes));
@@ -106,7 +113,6 @@ fn strict_jks_sign_then_valid_zero_with_openssl_and_wrong_password_refused() {
         (Some("Valid"), Some("StrictOnline"))
     );
     // Independent oracle: OpenSSL verifies the produced CMS against the loopback root.
-    let openssl = oncl_testkit::tool::openssl();
     let root_pem = w.dir.path().join("root.pem");
     assert!(
         Command::new(&openssl)
@@ -203,18 +209,27 @@ fn strict_jks_sign_then_valid_zero_with_openssl_and_wrong_password_refused() {
 
 #[test]
 fn java_keytool_reads_the_test_writer_output_and_its_own_jks_signs_strictly() {
+    let (Some(python), Some(keytool_path)) = (
+        oncl_testkit::tool::python_or_skip(),
+        oncl_testkit::tool::keytool_or_skip(),
+    ) else {
+        return;
+    };
     let w = world();
-    let written = jks(&w, "jks-signer");
+    let written = jks(&python, &w, "jks-signer");
     // Independent reader: keytool lists one private-key entry with the issued chain
     // and can decrypt the protected key (it converts it to PKCS#12).
-    let listing = keytool(&[
-        "-list",
-        "-v",
-        "-keystore",
-        path(&written),
-        "-storepass",
-        PASSWORD,
-    ]);
+    let listing = keytool(
+        &keytool_path,
+        &[
+            "-list",
+            "-v",
+            "-keystore",
+            path(&written),
+            "-storepass",
+            PASSWORD,
+        ],
+    );
     let text = String::from_utf8_lossy(&listing.stdout);
     assert!(
         listing.status.success(),
@@ -226,22 +241,25 @@ fn java_keytool_reads_the_test_writer_output_and_its_own_jks_signs_strictly() {
         "{text}"
     );
     let converted = w.dir.path().join("converted.p12");
-    let import = keytool(&[
-        "-importkeystore",
-        "-srckeystore",
-        path(&written),
-        "-srcstoretype",
-        "JKS",
-        "-srcstorepass",
-        PASSWORD,
-        "-destkeystore",
-        path(&converted),
-        "-deststoretype",
-        "PKCS12",
-        "-deststorepass",
-        PASSWORD,
-        "-noprompt",
-    ]);
+    let import = keytool(
+        &keytool_path,
+        &[
+            "-importkeystore",
+            "-srckeystore",
+            path(&written),
+            "-srcstoretype",
+            "JKS",
+            "-srcstorepass",
+            PASSWORD,
+            "-destkeystore",
+            path(&converted),
+            "-deststoretype",
+            "PKCS12",
+            "-deststorepass",
+            PASSWORD,
+            "-noprompt",
+        ],
+    );
     assert!(
         import.status.success(),
         "{} {}",
@@ -256,22 +274,25 @@ fn java_keytool_reads_the_test_writer_output_and_its_own_jks_signs_strictly() {
     );
     // A JKS written by keytool itself (from the world's PKCS#12) signs strictly.
     let java_jks = w.dir.path().join("java.jks");
-    let made = keytool(&[
-        "-importkeystore",
-        "-srckeystore",
-        path(&w.rsa_key),
-        "-srcstoretype",
-        "PKCS12",
-        "-srcstorepass",
-        PASSWORD,
-        "-destkeystore",
-        path(&java_jks),
-        "-deststoretype",
-        "JKS",
-        "-deststorepass",
-        PASSWORD,
-        "-noprompt",
-    ]);
+    let made = keytool(
+        &keytool_path,
+        &[
+            "-importkeystore",
+            "-srckeystore",
+            path(&w.rsa_key),
+            "-srcstoretype",
+            "PKCS12",
+            "-srcstorepass",
+            PASSWORD,
+            "-destkeystore",
+            path(&java_jks),
+            "-deststoretype",
+            "JKS",
+            "-deststorepass",
+            PASSWORD,
+            "-noprompt",
+        ],
+    );
     assert!(
         made.status.success(),
         "{}",

@@ -41,10 +41,12 @@ fn sign_xml_signs_the_whole_document() {
     assert_eq!(run.summary.content.len, XML.len() as u64);
     let signed = response_object(&run);
     let signed = signed.as_str().unwrap();
-    let facts = oracle::verify_xml(signed.as_bytes(), &run.cert, 1);
-    assert_eq!(facts.referenced_nodes(), ["r"], "{:?}", facts.json);
     assert_eq!(without_signature(signed), XML, "the document is as it was");
     assert!(!signed.starts_with("<?xml"), "no declaration");
+    // The independent oracle part; skipped (with its line) without the oracle's Python.
+    if let Some(facts) = oracle::verify_xml(signed.as_bytes(), &run.cert, 1) {
+        assert_eq!(facts.referenced_nodes(), ["r"], "{:?}", facts.json);
+    }
     // The oracle can say no.
     oracle::assert_xml_rejected(signed.replace("actual", "forged!").as_bytes(), &run.cert);
 }
@@ -68,11 +70,13 @@ fn sign_xml_element_signs_the_element_into_the_parent() {
     assert_eq!(profile.parent, Some(Source::Fixed("/r/s".to_owned())));
     let signed = response_object(&run);
     let signed = signed.as_str().unwrap();
-    let facts = oracle::verify_xml(signed.as_bytes(), &run.cert, 1);
-    assert_eq!(facts.referenced_nodes(), ["data"], "{:?}", facts.json);
     // The signature is the child of `s`, not of the document element.
     assert!(signed.contains("<s><ds:Signature"), "{signed}");
     assert_eq!(without_signature(signed), XML);
+    // The independent oracle part; skipped (with its line) without the oracle's Python.
+    if let Some(facts) = oracle::verify_xml(signed.as_bytes(), &run.cert, 1) {
+        assert_eq!(facts.referenced_nodes(), ["data"], "{:?}", facts.json);
+    }
 }
 
 fn cms_run(operation: &str, attached: bool, timestamped: bool) {

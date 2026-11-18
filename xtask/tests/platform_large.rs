@@ -1,7 +1,8 @@
 //! Small deterministic cases of `cargo xtask platform-proof`: the reference generator, the
 //! operating-system measurement and the result parsing. They never run the full-size matrix:
 //! that is the separate acceptance gate (docs/dev/platform-acceptance.md). The oracle test
-//! needs lxml, pyHanko and friends (`ONCL_PYHANKO_PYTHON`) and fails, never skips, without them.
+//! needs lxml, pyHanko and friends (`ONCL_PYHANKO_PYTHON`); without them it is skipped with a
+//! line on stderr, and fails under `ONCL_REQUIRE_ORACLES=1`.
 
 use std::{io::Read, path::Path, time::Duration};
 use xtask::platform::{
@@ -206,11 +207,12 @@ fn stored_zlib_streams_decode_with_a_real_inflater() {
 /// the whole document, and pyHanko/qpdf/pypdf/pdfminer on the PDF structure.
 #[test]
 fn reference_generator_agrees_with_lxml_and_pyhanko() {
-    let python = std::env::var("ONCL_PYHANKO_PYTHON")
-        .expect("ONCL_PYHANKO_PYTHON must name a Python with lxml, cryptography, asn1crypto and pyHanko (never skipped)");
+    let Some(python) = oncl_testkit::tool::pyhanko_python_or_skip() else {
+        return;
+    };
     let dir = scratch();
     let evidence = xtask::platform::large::validate_reference(
-        Path::new(&python),
+        &python,
         std::env::var_os("ONCL_PY_TOOLS")
             .map(std::path::PathBuf::from)
             .as_deref(),

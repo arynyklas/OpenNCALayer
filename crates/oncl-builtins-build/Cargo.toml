@@ -16,6 +16,6 @@ toml.workspace = true
 [dev-dependencies]
 # `BUILTIN_ID_PREFIX`, compared with this crate's copy.
 oncl-plugin = { workspace = true, features = ["distribution"] }
-# `tool::GIT`: the message for a missing `git`.
+# `tool::GIT`: the build test is skipped without `git`.
 oncl-testkit.workspace = true
 tempfile.workspace = true

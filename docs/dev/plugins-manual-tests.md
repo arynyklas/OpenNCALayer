@@ -13,7 +13,7 @@ cargo xtask plugin-ports-manual [--wasm-dir <каталог>] [--no-build] [фи
 2. `plugin-ops-check --require-wasm`: импорты каждой операции сверяются с импортами модуля.
 3. `cargo test -p oncl-core --features plugins --test plugin_ports_manual -- --ignored [фильтр…]` с `ONCL_PLUGIN_WASM_DIR`. Фильтр задаёт часть имени теста (`rating1c`, `network`).
 
-Тесты помечены `#[ignore = "needs the built port wasm…"]`: без модулей они бессмысленны, а обычный `cargo test` не должен собирать 34 модуля. В CI они выполняются: задача `test` запускает `cargo test --workspace --all-features -- --include-ignored`, и если `ONCL_PLUGIN_WASM_DIR` не задан, тесты сами собирают `plugins/` в `target/plugin-ports` (как `oncl-port-tests`). Затем шаг «Plugin operations lint» проверяет импорты этих модулей с `--require-wasm`. Если модулей нет, тест падает с сообщением.
+Тесты помечены `#[ignore = "needs the built port wasm…"]`: без модулей они бессмысленны, а обычный `cargo test` не должен собирать 34 модуля. В CI они выполняются: задания `test` в `ci.yml` запускают все тесты с `--run-ignored all`, и если `ONCL_PLUGIN_WASM_DIR` не задан, тесты сами собирают `plugins/` в `target/plugin-ports` (как `oncl-port-tests`; профиль задаёт `ONCL_PORTS_PROFILE`, по умолчанию `plugin-test`). Импорты модулей проверяет `plugin-ops-check --require-wasm` в заданиях `linux-checks` (модули `plugin-test`) и `plugins-release` (модули `release`). Если модулей нет, тест падает с сообщением.
 
 ## Окружение
 

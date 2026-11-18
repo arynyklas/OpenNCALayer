@@ -642,6 +642,9 @@ fn a_role_the_client_would_refuse_fails_the_check_and_the_snapshot() {
 
 #[test]
 fn a_role_version_is_history_against_the_base() {
+    if !super::has_git() {
+        return;
+    }
     let w = v2_world();
     git(&w.root_dir(), &["init", "-q"]);
     git(&w.root_dir(), &["add", "v2"]);

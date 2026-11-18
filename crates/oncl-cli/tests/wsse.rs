@@ -5,8 +5,8 @@ use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
 
-fn inspect(w: &World, signed: &Path) -> serde_json::Value {
-    let python = oncl_testkit::tool::require_python("lxml");
+/// The independent lxml view of `signed`; `python` is [`lxml`]'s.
+fn inspect(python: &str, w: &World, signed: &Path) -> serde_json::Value {
     let script = w.dir.path().join("wsse_inspect.py");
     std::fs::write(&script, include_str!("support/wsse_inspect.py")).unwrap();
     let out = Command::new(python)
@@ -19,6 +19,10 @@ fn inspect(w: &World, signed: &Path) -> serde_json::Value {
         String::from_utf8_lossy(&out.stderr)
     );
     serde_json::from_slice(&out.stdout).unwrap()
+}
+/// A Python with lxml, or `None` after the skip line.
+fn lxml() -> Option<String> {
+    oncl_testkit::tool::python_with_or_skip("lxml")
 }
 const SOAP11: &str = "http://schemas.xmlsoap.org/soap/envelope/";
 const SOAP12: &str = "http://www.w3.org/2003/05/soap-envelope";
@@ -86,6 +90,9 @@ fn stable_code(output: &std::process::Output) -> String {
 
 #[test]
 fn token_body_and_timestamp_options_appear_in_the_signed_soap() {
+    let Some(python) = lxml() else {
+        return;
+    };
     let w = world();
     let leaf_hex: String = w
         .pki
@@ -99,7 +106,7 @@ fn token_body_and_timestamp_options_appear_in_the_signed_soap() {
     // Default: NCANode key identifier, no BinarySecurityToken.
     let (signed, out) = sign(&w, "default", &envelope(SOAP11, ""), &[]);
     assert_eq!(signed.status.code(), Some(0), "{signed:?}");
-    let view = inspect(&w, &out);
+    let view = inspect(&python, &w, &out);
     assert_eq!(view["envelope_ns"], SOAP11);
     assert!(view.get("bst").is_none(), "{view}");
     assert!(
@@ -123,7 +130,7 @@ fn token_body_and_timestamp_options_appear_in_the_signed_soap() {
         ],
     );
     assert_eq!(signed.status.code(), Some(0), "{signed:?}");
-    let view = inspect(&w, &out);
+    let view = inspect(&python, &w, &out);
     assert_eq!(view["bst"]["id"], "tok-1", "{view}");
     assert_eq!(
         view["bst"]["value_type"],
@@ -163,7 +170,7 @@ fn token_body_and_timestamp_options_appear_in_the_signed_soap() {
         ],
     );
     assert_eq!(signed.status.code(), Some(0), "{signed:?}");
-    let view = inspect(&w, &out);
+    let view = inspect(&python, &w, &out);
     assert_eq!(view["timestamp"]["id"], "ts-1", "{view}");
     let created = view["timestamp"]["created"].as_str().unwrap();
     let expires = view["timestamp"]["expires"].as_str().unwrap();
@@ -210,6 +217,9 @@ fn token_body_and_timestamp_options_appear_in_the_signed_soap() {
 const REFUSED: &str = "oncl: InvalidInput; applied=NotApplied";
 #[test]
 fn soap_version_role_and_required_header_are_signed_and_enforced_with_exact_refusals() {
+    let Some(python) = lxml() else {
+        return;
+    };
     let w = world();
     let header = "<h:Custom wsu:Id=\"hdr-1\">x</h:Custom>";
     let (signed, plain) = sign(&w, "plain", &envelope(SOAP11, header), &[]);
@@ -237,17 +247,17 @@ fn soap_version_role_and_required_header_are_signed_and_enforced_with_exact_refu
     assert_eq!(signed.status.code(), Some(0));
     // Observed in the produced SOAP: only the requested header is referenced;
     // the role becomes `actor` (SOAP 1.1) or `role` (SOAP 1.2), never both.
-    let view = inspect(&w, &plain);
+    let view = inspect(&python, &w, &plain);
     assert_eq!(view["references"], serde_json::json!(["#oncl-body"]));
-    let view = inspect(&w, &hdr);
+    let view = inspect(&python, &w, &hdr);
     assert_eq!(
         view["references"],
         serde_json::json!(["#oncl-body", "#hdr-1"])
     );
-    let view = inspect(&w, &r11);
+    let view = inspect(&python, &w, &r11);
     assert_eq!(view["security_actor"], "urn:role");
     assert!(view["security_role"].is_null());
-    let view = inspect(&w, &r12);
+    let view = inspect(&python, &w, &r12);
     assert_eq!(view["envelope_ns"], SOAP12);
     assert_eq!(view["security_role"], "urn:role");
     assert!(view["security_actor"].is_null());

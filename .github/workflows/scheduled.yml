@@ -1,0 +1,78 @@
+name: Scheduled
+
+# The jobs that are not part of ci.yml's required `check`: the live tests against real NCA
+# services (Mondays and by hand) and the built-in modules' benchmarks (by hand only). No job
+# here is named `check`, so nothing here can stand for the required status.
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      run:
+        description: "live: the live tests and NCANode interop; bench: the benchmarks"
+        type: choice
+        options: [live, bench]
+        default: live
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  # A test whose oracle program is missing fails instead of skipping.
+  ONCL_REQUIRE_ORACLES: "1"
+
+jobs:
+  live:
+    if: github.event_name == 'schedule' || inputs.run == 'live'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/pinned-toolchains
+      # ci.yml's Linux test build (saved from main).
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: tests-ubuntu-24.04
+          save-if: false
+      - name: Fetch fixtures
+        run: cargo xtask fetch-fixtures
+      - name: Live tests
+        run: cargo test --workspace --all-features -- --ignored live_
+      # Docker comes with the runner image. Runs even if a live test failed: it does not
+      # depend on them.
+      - name: NCANode interop (XMLDSig, CMS)
+        if: ${{ !cancelled() }}
+        run: cargo xtask interop-ncanode
+
+  # The built-in modules' benchmarks and their thresholds (`bench_*`), in release, on the
+  # runner the thresholds are set for. By hand: they need a quiet machine.
+  bench:
+    if: github.event_name == 'workflow_dispatch' && inputs.run == 'bench'
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: ./.github/actions/pinned-toolchains
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: false
+      - name: Fetch fixtures
+        run: cargo xtask fetch-fixtures
+      - name: Benchmarks
+        run: cargo test --locked --release -p oncl-builtin-tests --test bench -- --ignored --test-threads=1
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: builtins-bench
+          path: target/builtins-bench.json
+          if-no-files-found: warn

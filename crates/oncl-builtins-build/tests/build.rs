@@ -12,14 +12,13 @@ fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-/// A copy of the workspace's tracked files in `dir`, as they are now.
-fn copy_workspace(dir: &Path) {
-    let listed = oncl_testkit::tool::GIT.spawned(
-        std::process::Command::new("git")
-            .current_dir(workspace())
-            .args(["ls-files", "-z"])
-            .output(),
-    );
+/// A copy of the workspace's tracked files in `dir`, as they are now, listed by `git`.
+fn copy_workspace(git: &str, dir: &Path) {
+    let listed = std::process::Command::new(git)
+        .current_dir(workspace())
+        .args(["ls-files", "-z"])
+        .output()
+        .unwrap();
     assert!(listed.status.success());
     for name in listed.stdout.split(|b| *b == 0).filter(|n| !n.is_empty()) {
         let name = std::str::from_utf8(name).unwrap();
@@ -59,6 +58,9 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 /// own: the same bytes, and no path of the machine in them.
 #[test]
 fn two_builds_are_identical() {
+    let Some(git) = oncl_testkit::tool::GIT.or_skip(&["--version"]) else {
+        return;
+    };
     let dir = tempfile::tempdir().unwrap();
     let first = build(
         &workspace(),
@@ -67,7 +69,7 @@ fn two_builds_are_identical() {
     )
     .unwrap();
     let copy = dir.path().join("elsewhere").join("workspace");
-    copy_workspace(&copy);
+    copy_workspace(&git, &copy);
     let second = build(
         &copy,
         &dir.path().join("target-2"),

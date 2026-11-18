@@ -6,25 +6,14 @@ use std::{path::Path, process::Command};
 use support::*;
 
 const MODULES: &str = "lxml, cryptography";
-fn python() -> Option<String> {
-    oncl_testkit::tool::python_with(MODULES)
-}
 /// Independent XML-DSig verification of `signed` against the RSA leaf.
 fn oracle(w: &World, signed: &Path) -> Option<String> {
     oracle_mode(w, signed, None)
 }
-/// The oracle is mandatory: its absence fails the test unless the operator
-/// explicitly opts out with `ONCL_ALLOW_NO_ORACLE=1`, which is then logged.
+/// `None` when there is no Python with lxml and cryptography: the oracle check is skipped
+/// with a line on stderr, or fails the test under `ONCL_REQUIRE_ORACLES=1`.
 fn oracle_mode(w: &World, signed: &Path, mode: Option<&str>) -> Option<String> {
-    let python = python().or_else(|| {
-        assert!(
-            std::env::var_os("ONCL_ALLOW_NO_ORACLE").is_some(),
-            "{} To skip this check explicitly, set ONCL_ALLOW_NO_ORACLE=1.",
-            oncl_testkit::tool::python_missing_message(MODULES)
-        );
-        eprintln!("ORACLE SKIPPED (explicit ONCL_ALLOW_NO_ORACLE)");
-        None
-    })?;
+    let python = oncl_testkit::tool::python_with_or_skip(MODULES)?;
     let script = w.dir.path().join("xmldsig_oracle.py");
     std::fs::write(&script, include_str!("support/xmldsig_oracle.py")).unwrap();
     let leaf = w.dir.path().join("oracle-leaf.der");
@@ -793,8 +782,10 @@ fn gost_xml_is_structurally_checked_not_independently_verified_and_legacy_gost_i
 }
 #[test]
 fn the_oracle_rejects_a_signature_without_references() {
+    let Some(python) = oncl_testkit::tool::python_with_or_skip(MODULES) else {
+        return;
+    };
     let w = world();
-    let python = oncl_testkit::tool::require_python(MODULES);
     let file = w.dir.path().join("empty.xml");
     std::fs::write(
         &file,
