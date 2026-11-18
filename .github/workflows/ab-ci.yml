@@ -89,6 +89,7 @@ jobs:
     outputs:
       seed: ${{ steps.plan.outputs.seed }}
       measure: ${{ steps.plan.outputs.measure }}
+      max_parallel: ${{ steps.plan.outputs.max_parallel }}
     steps:
       - name: Plan
         id: plan
@@ -96,9 +97,14 @@ jobs:
           VARIANT: ${{ inputs.variant }}
           REPS: ${{ inputs.reps }}
           LINUX: ${{ inputs.linux }}
+          MAX_PARALLEL: ${{ inputs.max_parallel }}
         run: |
           if ! [[ "$REPS" =~ ^[0-9]+$ ]] || [ "$REPS" -lt 1 ] || [ "$REPS" -gt 10 ]; then
             echo "::error::reps must be 1 to 10, not $REPS"
+            exit 1
+          fi
+          if ! [[ "$MAX_PARALLEL" =~ ^[0-9]+$ ]] || [ "$MAX_PARALLEL" -lt 1 ] || [ "$MAX_PARALLEL" -gt 20 ]; then
+            echo "::error::max_parallel must be 1 to 20, not $MAX_PARALLEL"
             exit 1
           fi
           windows="windows-2025"
@@ -121,6 +127,7 @@ jobs:
           {
             echo "seed=$seed"
             echo "measure=$measure"
+            echo "max_parallel=$MAX_PARALLEL"
           } | tee -a "$GITHUB_OUTPUT"
 
   # ci.yml's `prepare` without the fixtures (nothing here runs a test): the built-in modules'
@@ -299,7 +306,9 @@ jobs:
     if: ${{ !cancelled() && needs.ab-plan.result == 'success' && needs.ab-prepare.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: ${{ inputs.max_parallel }}
+      # A number through fromJSON: with `inputs.max_parallel` here GitHub dropped this job
+      # without an error (the runs ended `failure` right after the seeds).
+      max-parallel: ${{ fromJSON(needs.ab-plan.outputs.max_parallel) }}
       matrix: ${{ fromJSON(needs.ab-plan.outputs.measure) }}
     name: "ab ${{ inputs.variant }} ${{ matrix.mode }} ${{ matrix.kind }} #${{ matrix.rep }}"
     runs-on: ${{ matrix.os }}
