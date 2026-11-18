@@ -97,27 +97,26 @@ fn options(base: Option<&str>) -> CheckOptions<'_> {
 }
 
 fn git(dir: &Path, args: &[&str]) {
-    let status = oncl_testkit::tool::GIT.spawned(
-        Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args([
-                "-c",
-                "core.autocrlf=false",
-                "-c",
-                "user.name=Test",
-                "-c",
-                "user.email=test@example.invalid",
-                "-c",
-                "commit.gpgsign=false",
-                "-c",
-                "tag.gpgSign=false",
-                "-c",
-                "tag.forceSignAnnotated=false",
-            ])
-            .args(args)
-            .output(),
-    );
+    let status = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args([
+            "-c",
+            "core.autocrlf=false",
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "-c",
+            "tag.gpgSign=false",
+            "-c",
+            "tag.forceSignAnnotated=false",
+        ])
+        .args(args)
+        .output()
+        .unwrap();
     assert!(
         status.status.success(),
         "git {args:?}: {}",
@@ -137,7 +136,9 @@ impl Repo {
     }
 }
 
-fn empty_repo() -> Repo {
+/// `None` after the skip line when there is no `git`.
+fn empty_repo() -> Option<Repo> {
+    oncl_testkit::tool::GIT.or_skip(&["--version"])?;
     let repo = tempfile::tempdir().unwrap();
     git(repo.path(), &["init", "--quiet"]);
     let root = repo.path().join(index::TAG_ROOT);
@@ -149,17 +150,17 @@ fn empty_repo() -> Repo {
         git(repo.path(), &["tag", tag]);
     }
     let dir = repo.path().join("updates").join("v1");
-    Repo { repo, dir }
+    Some(Repo { repo, dir })
 }
 
 /// [`empty_repo`] whose next commit holds `updates/v1/beta.json` at seq 1 with [`TAG`].
-fn repository_with_index() -> (tempfile::TempDir, std::path::PathBuf) {
-    let Repo { repo, dir } = empty_repo();
+fn repository_with_index() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
+    let Repo { repo, dir } = empty_repo()?;
     let assets = release_assets(TAG, &[Flavor::WinX64], None);
     add(&dir, TAG, assets.path());
     git(repo.path(), &["add", "."]);
     git(repo.path(), &["commit", "--quiet", "-m", "index"]);
-    (repo, dir)
+    Some((repo, dir))
 }
 
 fn error_text(result: anyhow::Result<impl std::fmt::Debug>) -> String {
@@ -338,7 +339,9 @@ fn an_expired_index_is_refused() {
 
 #[test]
 fn seq_must_grow_from_the_base() {
-    let (repo, dir) = repository_with_index();
+    let Some((repo, dir)) = repository_with_index() else {
+        return;
+    };
     let path = dir.join("beta.json");
 
     // Unchanged: passes, nothing new.
@@ -419,7 +422,9 @@ fn pair(tag: &str, context: &str) -> (String, String) {
 
 #[test]
 fn network_checks_go_through_the_remote() {
-    let (_repo, dir) = repository_with_index();
+    let Some((_repo, dir)) = repository_with_index() else {
+        return;
+    };
     let assets = release_assets(NEXT_TAG, &[Flavor::WinX64, Flavor::Osx], None);
     add(&dir, NEXT_TAG, assets.path());
 
@@ -453,7 +458,9 @@ fn network_checks_go_through_the_remote() {
 
 #[test]
 fn check_conformance_required_for_new_stable() {
-    let repo = empty_repo();
+    let Some(repo) = empty_repo() else {
+        return;
+    };
     let stable = release_assets(STABLE_TAG, &[Flavor::WinX64], None);
     index::add(
         repo.path(),
@@ -498,7 +505,9 @@ fn check_conformance_required_for_new_stable() {
 
 #[test]
 fn check_conformance_not_required_for_beta() {
-    let (_repo, dir) = repository_with_index();
+    let Some((_repo, dir)) = repository_with_index() else {
+        return;
+    };
     let assets = release_assets(NEXT_TAG, &[Flavor::WinX64], None);
     add(&dir, NEXT_TAG, assets.path());
 
@@ -522,7 +531,9 @@ fn check_conformance_not_required_for_beta() {
 
 #[test]
 fn check_conformance_needs_network() {
-    let (_repo, dir) = repository_with_index();
+    let Some((_repo, dir)) = repository_with_index() else {
+        return;
+    };
     let gated = CheckOptions {
         conformance: true,
         ..options(Some("HEAD"))
@@ -608,7 +619,9 @@ fn urls_off_the_project_releases_are_refused() {
 
 #[test]
 fn refresh_bumps_seq_and_validity_only() {
-    let (repo, dir) = repository_with_index();
+    let Some((repo, dir)) = repository_with_index() else {
+        return;
+    };
     let path = dir.join("beta.json");
     let before = read(&path);
 
@@ -645,7 +658,9 @@ fn refresh_bumps_seq_and_validity_only() {
 
 #[test]
 fn no_index_published_yet_passes() {
-    let repo = empty_repo();
+    let Some(repo) = empty_repo() else {
+        return;
+    };
     assert!(!repo.path().exists(), "no updates/v1 in the tree");
     for base in [Some("HEAD"), None] {
         let checked = index::check(repo.path(), &options(base), None).unwrap();
@@ -695,7 +710,9 @@ fn no_index_published_yet_passes() {
     assert!(String::from_utf8_lossy(&relative.stdout).contains("no index is published yet"));
 
     // Once published, the directory may not go.
-    let (repo, dir) = repository_with_index();
+    let Some((repo, dir)) = repository_with_index() else {
+        return;
+    };
     fs::remove_dir_all(repo.path().join("updates")).unwrap();
     let result = index::check(&dir, &options(Some("HEAD")), None);
     assert!(error_text(result).contains("removed here"));
@@ -703,7 +720,9 @@ fn no_index_published_yet_passes() {
 
 #[test]
 fn a_version_tagged_without_the_tuf_root_is_refused() {
-    let repo = empty_repo();
+    let Some(repo) = empty_repo() else {
+        return;
+    };
     // Retag NEXT_TAG on a commit without the root.
     let root = repo.repo.path().join(index::TAG_ROOT);
     fs::remove_file(&root).unwrap();

@@ -57,7 +57,7 @@ pub(super) fn run(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(out.join("altered.bin"), b"L01 altered document")?;
     let oracle =
         |name: &str, args: &[&str], success: bool| -> Result<(), Box<dyn std::error::Error>> {
-            let output = std::process::Command::new(oncl_testkit::tool::openssl())
+            let output = std::process::Command::new(oncl_testkit::tool::openssl()?)
                 .current_dir(&out)
                 .args(args)
                 .output()?;

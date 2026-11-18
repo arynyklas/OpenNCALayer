@@ -75,12 +75,15 @@ fn exit(output: &Output) -> i32 {
 
 #[test]
 fn hash_streams_a_client_file_and_stdin_and_matches_openssl_and_local() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let remote = Remote::start(&pki);
     let session = Session::new(&remote);
     let data = payload(3 * 1024 * 1024 + 17);
     let file = session.file("big.bin", &data);
-    let expected = openssl_sha256(&data, session.dir.path());
+    let expected = openssl_sha256(&openssl, &data, session.dir.path());
     for (input, stdin) in [(path(&file), Vec::new()), ("-", data.clone())] {
         let output = session.run_with(
             &["hash", "--algorithm", "sha256", "--input", input, "--json"],
@@ -114,6 +117,9 @@ fn hash_streams_a_client_file_and_stdin_and_matches_openssl_and_local() {
 
 #[test]
 fn sign_verify_extract_round_trip_with_client_files_and_a_different_server_directory() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let remote = Remote::start(&pki);
     let session = Session::new(&remote);
@@ -144,7 +150,7 @@ fn sign_verify_extract_round_trip_with_client_files_and_a_different_server_direc
     assert_eq!(report["bytes_out"], sig_bytes.len());
     // Independent oracle: OpenSSL verifies the attached CMS the *server* produced.
     assert_eq!(
-        openssl_cms_verify(&sig_bytes, None, session.dir.path()).as_deref(),
+        openssl_cms_verify(&openssl, &sig_bytes, None, session.dir.path()).as_deref(),
         Some(content.as_slice())
     );
     assert_eq!((remote.audit_begins(), remote.audit_finals()), (1, 1));
@@ -465,7 +471,8 @@ mod remote {
         assert_eq!(exit(&output), 0);
         assert_eq!(
             json(&output)["digest"],
-            openssl_sha256(b"client bytes, not the canary", session.dir.path())
+            // SHA-256 of b"client bytes, not the canary".
+            "9f51aba6bfa52eb8a10a80e8fdea0ab0ee3db88a29ffc480281c6e46a633ab60"
         );
         // A path that exists only on the server is a *client* error before any network use.
         let proxy = Proxy::start(
@@ -1284,6 +1291,8 @@ fn token_sources_and_preflight_refusals_need_no_network() {
 
 #[test]
 fn inline_key_mode_sends_the_container_only_when_explicit_and_never_spools_it() {
+    // OpenSSL checks the signature at the end; without it only that check is skipped.
+    let openssl = oncl_testkit::tool::openssl_or_skip();
     let pki = Pki::start();
     let remote = Remote::start(&pki);
     let session = Session::new(&remote);
@@ -1358,15 +1367,18 @@ fn inline_key_mode_sends_the_container_only_when_explicit_and_never_spools_it() 
         !hit.load(std::sync::atomic::Ordering::SeqCst),
         "a secret reached the spool"
     );
-    assert_eq!(
-        openssl_cms_verify(
-            &std::fs::read(&signature).unwrap(),
-            None,
-            session.dir.path()
-        )
-        .as_deref(),
-        Some(b"inline key payload".as_slice())
-    );
+    if let Some(openssl) = &openssl {
+        assert_eq!(
+            openssl_cms_verify(
+                openssl,
+                &std::fs::read(&signature).unwrap(),
+                None,
+                session.dir.path()
+            )
+            .as_deref(),
+            Some(b"inline key payload".as_slice())
+        );
+    }
     assert_eq!((remote.audit_begins(), remote.audit_finals()), (1, 1));
     assert_clean(&signed, session.dir.path(), &remote);
     // Inspecting the container (also an explicit, secret-bearing mode).
@@ -1456,7 +1468,8 @@ fn https_with_a_private_ca_and_no_way_to_skip_verification() {
     assert_eq!(exit(&ok), 0, "{}", text(&ok.stderr));
     assert_eq!(
         json(&ok)["digest"],
-        openssl_sha256(b"tls payload", session.dir.path())
+        // SHA-256 of b"tls payload".
+        "1726b13052401e1119646d0af3058d262edf1fa1b5f983aac40218d4cb413fcc"
     );
     // The same CA as DER also works.
     use der::Decode as _;
@@ -1511,6 +1524,9 @@ fn p(path: &Path) -> String {
 
 #[test]
 fn batch_runs_on_the_server_and_publishes_each_finished_output_on_the_client() {
+    let Some(openssl) = oncl_testkit::tool::openssl_or_skip() else {
+        return;
+    };
     let pki = Pki::start();
     let remote = Remote::start(&pki);
     let session = Session::new(&remote);
@@ -1561,7 +1577,7 @@ fn batch_runs_on_the_server_and_publishes_each_finished_output_on_the_client() {
     let status = |id: &str| rows.iter().find(|r| r["id"] == id).unwrap();
     assert_eq!(
         status("h")["digest"]["hex"],
-        openssl_sha256(b"batch document", session.dir.path())
+        openssl_sha256(&openssl, b"batch document", session.dir.path())
     );
     assert_eq!(status("s")["applied"], "Applied");
     assert_eq!(status("s")["published"], true);
@@ -1571,7 +1587,13 @@ fn batch_runs_on_the_server_and_publishes_each_finished_output_on_the_client() {
     assert_eq!(remote.audit_begins(), begins + 1);
     assert_eq!(std::fs::read(&out_x).unwrap(), b"batch document");
     assert_eq!(
-        openssl_cms_verify(&std::fs::read(&out_sig).unwrap(), None, session.dir.path()).as_deref(),
+        openssl_cms_verify(
+            &openssl,
+            &std::fs::read(&out_sig).unwrap(),
+            None,
+            session.dir.path()
+        )
+        .as_deref(),
         Some(b"batch document".as_slice())
     );
     // A lost terminal record: nothing new is published, an earlier file is untouched and

@@ -952,13 +952,19 @@ pub fn path(path: &Path) -> &str {
 }
 
 /// Independent oracle: OpenSSL CMS signature verification (embedded signer certificate, no
-/// chain: the synthetic chain uses GOST CAs OpenSSL cannot validate).
-pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) -> Option<Vec<u8>> {
+/// chain: the synthetic chain uses GOST CAs OpenSSL cannot validate). `openssl` is
+/// `oncl_testkit::tool::openssl_or_skip`'s.
+pub fn openssl_cms_verify(
+    openssl: &str,
+    signature: &[u8],
+    content: Option<&[u8]>,
+    dir: &Path,
+) -> Option<Vec<u8>> {
     let sig = dir.join("oracle.p7s");
     std::fs::write(&sig, signature).unwrap();
     let out = dir.join("oracle.out");
     let _ = std::fs::remove_file(&out);
-    let mut command = Command::new(oncl_testkit::tool::openssl());
+    let mut command = Command::new(openssl);
     command
         .args([
             "cms",
@@ -984,10 +990,10 @@ pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) 
         .then(|| std::fs::read(&out).unwrap())
 }
 /// OpenSSL's SHA-256 of `bytes`, lowercase hex.
-pub fn openssl_sha256(bytes: &[u8], dir: &Path) -> String {
+pub fn openssl_sha256(openssl: &str, bytes: &[u8], dir: &Path) -> String {
     let file = dir.join("oracle.sha");
     std::fs::write(&file, bytes).unwrap();
-    let out = Command::new(oncl_testkit::tool::openssl())
+    let out = Command::new(openssl)
         .args(["dgst", "-sha256", "-r"])
         .arg(&file)
         .output()
