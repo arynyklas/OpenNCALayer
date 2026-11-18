@@ -217,7 +217,7 @@ Workflow запускается:
 
    Пароль не короче 12 символов вводится дважды, без эха. Он один для всех трёх зашифрованных ключей: команды открывают root, targets и snapshot одним паролем, и ключи с разными паролями они не откроют. Команда печатает идентификаторы ключей, пишет четыре файла ключей, `tuf/v1/metadata/1.root.json` (подписан ключом root, срок 365 дней, `consistent_snapshot: true`, четыре различных ключа, пороги 1) и его копию `crates/oncl-update/keys/root.json`. Существующие файлы она не перезаписывает.
 
-2. Создать окружение GitHub и секрет. Через веб-интерфейс: Settings → Environments → New environment `tuf-timestamp` → Deployment branches and tags → Selected branches and tags → Add `main`. Или командами:
+2. Создать окружение GitHub и секрет. Окружение может уже существовать: GitHub создаёт его сам, без ограничения веток, как только его называет задание (`pages.yml` называет `tuf-timestamp` при каждом запуске на `main`). Поэтому политику веток задают и проверяют всегда, даже если окружение уже есть. Через веб-интерфейс: Settings → Environments → `tuf-timestamp` (или New environment) → Deployment branches and tags → Selected branches and tags → Add `main`. Или командами:
 
    ```sh
    gh api -X PUT repos/arynyklas/OpenNCALayer/environments/tuf-timestamp \
@@ -225,6 +225,11 @@ Workflow запускается:
      -F 'deployment_branch_policy[custom_branch_policies]=true'
    gh api -X POST repos/arynyklas/OpenNCALayer/environments/tuf-timestamp/deployment-branch-policies \
      -f name=main -f type=branch
+   # Перед секретом: должно быть {"protected_branches":false,"custom_branch_policies":true}
+   gh api repos/arynyklas/OpenNCALayer/environments/tuf-timestamp --jq .deployment_branch_policy
+   # и ровно одна строка ["main","branch"]; лишние политики удалить в Settings → Environments
+   gh api repos/arynyklas/OpenNCALayer/environments/tuf-timestamp/deployment-branch-policies \
+     --jq '.branch_policies[] | [.name, .type]'
    gh secret set TUF_TIMESTAMP_KEY --env tuf-timestamp < <каталог>/timestamp.key
    ```
 
@@ -266,6 +271,7 @@ Workflow запускается:
    - Упало задание `snapshot` (снимок онлайн): «the secret TUF_SNAPSHOT_KEY is not set», ошибка `tuf snapshot` или «tuf/v1.toml is not one line …». Что делать, описано в конце раздела «Онлайн-снимок».
 2. Пока запуск красный, Pages отдаёт прежний сайт. Его timestamp действует до 7 дней, после чего клиенты перестают принимать обновления (`docs/design/tuf.md`, «Сбои»). Установленные версии продолжают работать, ничего не откатывается, и клиенты снова получают обновления, как только Pages опубликует свежий timestamp.
 3. Если Pages не публикуется потому, что GitHub отключил расписание после 60 дней без активности, включите его в Actions заново.
+4. Упавший запуск Pages перезапускают целиком (Re-run all jobs) или новым `gh workflow run pages.yml --ref main`, но не «Re-run failed jobs»: так переиспользуются выходы прежних заданий `snapshot` и `timestamp`, а между запусками сайт мог уже получить более новый снимок или timestamp. Опубликованные с меньшей версией, они выглядят для клиентов как откат, и те не обновляются до следующего запуска.
 
 ### Ротация (команды)
 
@@ -323,7 +329,7 @@ Workflow запускается:
 
 Порядок важен: сначала в `main` сливается PR с заданием `snapshot` в `pages.yml` (`ci(pages): online snapshot of tuf/v1`), и только потом PR ротации. Пока `tuf/v1.toml` нет или в нём `snapshot = "offline"`, задание ничего не делает, и опубликованные байты не меняются. Если слить ротацию раньше, `snapshot = "online"` окажется в `main` без задания, которое подписывает снимок: `tuf timestamp` откажет (последний снимок дерева подписан ключом, которого в новом корне нет), и Pages не опубликует ничего, пока задание не появится.
 
-1. Создать окружение `tuf-snapshot` с веткой развёртывания `main` (как `tuf-timestamp` в разделе «Церемония»). Через веб-интерфейс: Settings → Environments → New environment `tuf-snapshot` → Deployment branches and tags → Selected branches and tags → Add `main`. Или командами:
+1. Подготовить окружение `tuf-snapshot` с веткой развёртывания `main` (как `tuf-timestamp` в разделе «Церемония»). После слияния задания `snapshot` окружение уже существует: GitHub создаёт его сам при первом запуске, **без ограничения веток**, поэтому его надо настроить, а не только создать. Через веб-интерфейс: Settings → Environments → `tuf-snapshot` → Deployment branches and tags → Selected branches and tags → Add `main`. Или командами:
 
    ```sh
    gh api -X PUT repos/arynyklas/OpenNCALayer/environments/tuf-snapshot \
@@ -331,12 +337,17 @@ Workflow запускается:
      -F 'deployment_branch_policy[custom_branch_policies]=true'
    gh api -X POST repos/arynyklas/OpenNCALayer/environments/tuf-snapshot/deployment-branch-policies \
      -f name=main -f type=branch
+   # Проверка перед шагом 4: {"protected_branches":false,"custom_branch_policies":true}
+   gh api repos/arynyklas/OpenNCALayer/environments/tuf-snapshot --jq .deployment_branch_policy
+   # и ровно одна строка ["main","branch"]; лишние политики удалить в Settings → Environments
+   gh api repos/arynyklas/OpenNCALayer/environments/tuf-snapshot/deployment-branch-policies \
+     --jq '.branch_policies[] | [.name, .type]'
    ```
 
    Требований к проверяющим у окружения нет: задание подписывает при каждой публикации, в том числе по расписанию.
 2. `cargo xtask tuf root --keys <каталог> --rotate-snapshot --online`. Команда пишет корень `N+1` с новым ключом snapshot, сам ключ строкой `oncl-tuf-ed25519-seed-v1:<hex>` в `<каталог>/snapshot.v<N+1>.key` и `snapshot = "online"` в `tuf/v1.toml`. Корень и `tuf/v1.toml` коммитятся одним PR, `tuf update` после этого не нужен: закоммиченные снимки остаются как есть, это история.
 3. На ветке PR проверить ключ и продолжение опубликованного снимка так, как это сделает задание `snapshot`, но с файлом ключа: скопировать `tuf/v1` во временный каталог вне репозитория и выполнить `cargo xtask tuf snapshot --out <копия> --previous https://arynyklas.github.io/OpenNCALayer/tuf/v1/ --key-file <каталог>/snapshot.v<N+1>.key`. Команда проверяет, что ключ назван в корне `N+1` и что новый снимок продолжает последний офлайн-снимок, подписанный ключом корня `N`. Копию с подписанным снимком после проверки удалить: она нужна только для лаборатории (шаг 5) и не публикуется.
-4. До слияния положить ключ в секрет окружения и удалить файл: `gh secret set TUF_SNAPSHOT_KEY --env tuf-snapshot < <каталог>/snapshot.v<N+1>.key` (в PowerShell `Get-Content -Raw <каталог>\snapshot.v<N+1>.key | gh secret set --env tuf-snapshot TUF_SNAPSHOT_KEY`). Пока в `main` старый корень и офлайн-снимок, задание `snapshot` секрет не читает. Секрет должен быть только в окружении: если он нашёлся среди секретов репозитория, его удаляют (`gh secret delete TUF_SNAPSHOT_KEY`).
+4. Только после проверки из шага 1 положить ключ в секрет окружения и удалить файл: `gh secret set TUF_SNAPSHOT_KEY --env tuf-snapshot < <каталог>/snapshot.v<N+1>.key` (в PowerShell `Get-Content -Raw <каталог>\snapshot.v<N+1>.key | gh secret set --env tuf-snapshot TUF_SNAPSHOT_KEY`). Это делается до слияния PR ротации: пока в `main` старый корень и офлайн-снимок, задание `snapshot` секрет не читает. Секрет должен быть только в окружении: если он нашёлся среди секретов репозитория, его удаляют (`gh secret delete TUF_SNAPSHOT_KEY`).
 5. До слияния проверить в лаборатории, что `0.1.0`, `0.1.1` и `0.1.2` проходят новый корень и первый онлайн-снимок (копия из шага 3). Pages на ветке PR задания с ключами не запускает, они работают только на `main`. Корень после публикации назад не взять.
 6. После слияния Pages запускается сам (пуш меняет `tuf/`). Задание `snapshot` выполняет `cargo xtask tuf snapshot --out <копия tuf/v1> --previous https://arynyklas.github.io/OpenNCALayer/tuf/v1/`: первый онлайн-снимок продолжает последний офлайн-снимок владельца, подписанный ключом прежнего корня. Затем `timestamp`, `build`, `oracle`, `deploy` и `verify`. Проверьте, что запуск зелёный.
 

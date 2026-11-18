@@ -25,12 +25,14 @@ case "${1:-}" in
   pack)
     [ "$#" -eq 3 ] || fail "usage: pack <tree metadata> <copy metadata>"
     count=0
+    shopt -s nullglob dotglob
     for file in "$3"/*; do
       name="${file##*/}"
-      if [ -e "$2/$name" ]; then
+      if [ -e "$2/$name" ] || [ -L "$2/$name" ]; then
         continue
       fi
       [[ "$name" =~ $NAME ]] || fail "the copy has a new file that is not <N>.snapshot.json"
+      { [ -f "$file" ] && [ ! -L "$file" ]; } || fail "$name is not a regular file"
       size=$(stat -c %s -- "$file")
       [ "$size" -le "$MAX" ] || fail "$name is $size bytes, more than $MAX"
       printf '%s %s\n' "$name" "$(base64 -w0 -- "$file")"
@@ -45,13 +47,16 @@ case "${1:-}" in
     mapfile -t lines <<< "$SNAPSHOTS"
     { [ "${#lines[@]}" -ge 1 ] && [ "${#lines[@]}" -le 2 ]; } || fail "${#lines[@]} lines, not one or two"
     staged=$(mktemp -d)
+    trap 'rm -rf -- "$staged"' EXIT
     names=()
     for line in "${lines[@]}"; do
       name="${line%% *}"
       data="${line#* }"
       { [[ "$name" =~ $NAME ]] && [[ "$data" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; } \
         || fail "a line is not <N>.snapshot.json <base64>"
-      { [ ! -e "$2/$name" ] && [ ! -e "$staged/$name" ]; } || fail "$name is there already"
+      # The base64 of MAX bytes, checked before anything is decoded.
+      [ "${#data}" -le $(((MAX + 2) / 3 * 4)) ] || fail "$name is more than $MAX bytes"
+      { [ ! -e "$2/$name" ] && [ ! -L "$2/$name" ] && [ ! -e "$staged/$name" ]; } || fail "$name is there already"
       printf '%s' "$data" | base64 -d > "$staged/$name" || fail "$name is not base64"
       size=$(stat -c %s -- "$staged/$name")
       [ "$size" -le "$MAX" ] || fail "$name is $size bytes, more than $MAX"
@@ -61,7 +66,6 @@ case "${1:-}" in
       mv -n -- "$staged/$name" "$2/$name"
       [ ! -e "$staged/$name" ] || fail "$name could not be written"
     done
-    rm -r -- "$staged"
     ;;
   *)
     fail "usage: snapshot-files.sh pack <tree metadata> <copy metadata> | unpack <metadata>"

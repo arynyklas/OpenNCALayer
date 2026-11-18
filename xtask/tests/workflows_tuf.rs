@@ -542,11 +542,11 @@ fn check_secret_job(job_id: &str, job: &Value, secret_step: usize, bad: &mut Vec
     let built = steps[..secret_step.min(steps.len())].iter().any(|s| {
         s.get("run")
             .and_then(Value::as_str)
-            .is_some_and(|r| r.contains("cargo build -p xtask"))
+            .is_some_and(|r| r.contains("cargo build --locked -p xtask"))
     });
     if !built {
         bad.push(format!(
-            "the job {job_id} does not build xtask before the secret"
+            "the job {job_id} does not build xtask (--locked) before the secret"
         ));
     }
     let Some(step) = steps.get(secret_step) else {
@@ -753,7 +753,9 @@ fn check_graph(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
         if !needs("build").contains(&needed.to_owned()) {
             bad.push(format!("build does not need the {needed} job"));
         }
-        if !condition("build").contains(&format!("needs.{needed}.result != 'failure'")) {
+        if !condition("build").contains(&format!(
+            "contains(fromJSON('[\"success\",\"skipped\"]'), needs.{needed}.result)"
+        )) {
             bad.push(format!("build runs although the {needed} job failed"));
         }
     }
@@ -903,8 +905,12 @@ fn check_expiry(text: &str) -> Vec<String> {
         ),
         ("|| status=$?", "it does not keep the result of the check"),
         (
-            "*\"warning[role-expired]\"* | *\"warning[role-expiring]\"*) echo \"::warning::$line\" ;;",
+            "*\"warning[role-expired]\"* | *\"warning[role-expiring]\"*) echo \"::warning::${line//%/%25}\" ;;",
             "it does not make the expiry of the publishers' roles annotations",
+        ),
+        (
+            "echo \"::stop-commands::$token\"\ncat \"$RUNNER_TEMP/expiry.log\"\necho \"::$token::\"",
+            "it prints the log with workflow commands on",
         ),
     ] {
         if !run.contains(needle) {
@@ -1272,11 +1278,19 @@ fn a_cache_cargo_next_to_the_key_or_no_build_in_the_snapshot_job_is_found() {
     );
     assert_found(
         mutated(
-            "        if: steps.mode.outputs.mode == 'online'\n        run: cargo build -p xtask\n",
+            "        if: steps.mode.outputs.mode == 'online'\n        run: cargo build --locked -p xtask\n",
             "        if: steps.mode.outputs.mode == 'online'\n        run: echo no build\n",
             &[],
         ),
-        "the job snapshot does not build xtask before the secret",
+        "the job snapshot does not build xtask (--locked) before the secret",
+    );
+    assert_found(
+        mutated(
+            "        if: steps.tree.outputs.exists == 'true'\n        run: cargo build --locked -p xtask\n",
+            "        if: steps.tree.outputs.exists == 'true'\n        run: cargo build -p xtask\n",
+            &[],
+        ),
+        "the job timestamp does not build xtask (--locked) before the secret",
     );
     assert_found(
         mutated(
@@ -1477,11 +1491,19 @@ fn the_graph_of_jobs_is_pinned() {
         "build does not need the snapshot job",
     );
     assert_found(
-        mutated("needs.snapshot.result != 'failure' && ", "", &[]),
+        mutated(
+            "contains(fromJSON('[\"success\",\"skipped\"]'), needs.snapshot.result)",
+            "needs.snapshot.result != 'failure'",
+            &[],
+        ),
         "build runs although the snapshot job failed",
     );
     assert_found(
-        mutated("needs.timestamp.result != 'failure' && ", "", &[]),
+        mutated(
+            "contains(fromJSON('[\"success\",\"skipped\"]'), needs.timestamp.result)",
+            "needs.timestamp.result != 'failure'",
+            &[],
+        ),
         "build runs although the timestamp job failed",
     );
     assert_found(
@@ -1586,6 +1608,11 @@ fn the_expiry_workflow_keeps_its_rules() {
             "the publishers' roles annotations",
         ),
         ("  schedule:\n", "  push:\n", "has no schedule"),
+        (
+            "          echo \"::stop-commands::$token\"\n",
+            "",
+            "with workflow commands on",
+        ),
     ] {
         assert_found(mutated_file(EXPIRY, from, to, &[]), needle);
     }
@@ -1630,6 +1657,14 @@ fn check_snapshot_script(text: &str) -> Vec<String> {
             "it packs a file that is not <N>.snapshot.json",
         ),
         (
+            "{ [ -f \"$file\" ] && [ ! -L \"$file\" ]; } || fail",
+            "it packs what is not a regular file (a symlink)",
+        ),
+        (
+            "shopt -s nullglob dotglob\n",
+            "it does not see every file of the copy",
+        ),
+        (
             "printf '%s %s\\n' \"$name\" \"$(base64 -w0 -- \"$file\")\"",
             "it does not pack one line of base64 per file",
         ),
@@ -1657,8 +1692,16 @@ fn check_snapshot_script(text: &str) -> Vec<String> {
             "it does not check each line",
         ),
         (
-            "{ [ ! -e \"$2/$name\" ] && [ ! -e \"$staged/$name\" ]; } || fail",
+            "{ [ ! -e \"$2/$name\" ] && [ ! -L \"$2/$name\" ] && [ ! -e \"$staged/$name\" ]; } || fail",
             "it may overwrite a file",
+        ),
+        (
+            "[ \"${#data}\" -le $(((MAX + 2) / 3 * 4)) ] || fail",
+            "it decodes before it caps the length",
+        ),
+        (
+            "trap 'rm -rf -- \"$staged\"' EXIT\n",
+            "it leaves the staged files behind",
         ),
         (
             "    staged=$(mktemp -d)\n",
@@ -1695,7 +1738,7 @@ fn the_snapshot_script_keeps_its_rules() {
             "only <N>.snapshot.json",
         ),
         (
-            "{ [ ! -e \"$2/$name\" ] && [ ! -e \"$staged/$name\" ]; } || fail",
+            "{ [ ! -e \"$2/$name\" ] && [ ! -L \"$2/$name\" ] && [ ! -e \"$staged/$name\" ]; } || fail",
             "true || fail",
             "may overwrite",
         ),
@@ -1713,6 +1756,16 @@ fn the_snapshot_script_keeps_its_rules() {
             "    { [ \"$count\" -ge 1 ] && [ \"$count\" -le 2 ]; } || fail",
             "    true || fail",
             "other than one or two",
+        ),
+        (
+            "{ [ -f \"$file\" ] && [ ! -L \"$file\" ]; } || fail",
+            "true || fail",
+            "not a regular file",
+        ),
+        (
+            "[ \"${#data}\" -le $(((MAX + 2) / 3 * 4)) ] || fail",
+            "true || fail",
+            "caps the length",
         ),
     ] {
         assert!(text.contains(from), "the mutation target is gone: {from:?}");

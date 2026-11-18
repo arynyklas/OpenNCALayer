@@ -46,10 +46,14 @@ jobs:
           status=0
           cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45 \
             > "$RUNNER_TEMP/expiry.log" 2>&1 || status=$?
+          # The log as text: no line of it is taken for a workflow command.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
           cat "$RUNNER_TEMP/expiry.log"
+          echo "::$token::"
           while read -r line; do
             case "$line" in
-              *"warning[role-expired]"* | *"warning[role-expiring]"*) echo "::warning::$line" ;;
+              *"warning[role-expired]"* | *"warning[role-expiring]"*) echo "::warning::${line//%/%25}" ;;
             esac
           done < "$RUNNER_TEMP/expiry.log"
           exit "$status"

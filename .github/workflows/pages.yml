@@ -136,11 +136,13 @@ jobs:
         if: steps.mode.outputs.mode == 'online'
         run: rustup toolchain install
       # No build cache in this job: whatever it restored would be compiled code that runs
-      # next to the key. Compiled here, before the secret is in any environment: the build
-      # scripts and dependencies never run with the key.
+      # next to the key. Compiled here, from the reviewed Cargo.lock, before the secret is in
+      # any environment: the build scripts do not run in the step with the key. This narrows
+      # the exposure, it is no boundary: the dependencies are linked into the binary that
+      # holds the key, and what runs earlier as the same user could still watch later steps.
       - name: Build xtask
         if: steps.mode.outputs.mode == 'online'
-        run: cargo build -p xtask
+        run: cargo build --locked -p xtask
       # The last step. `xtask tuf snapshot` verifies the copy with the client's code (roots,
       # top-level targets, the indexes, every publisher's newest role) and the published
       # snapshot the new one extends (`--previous`, no way around it), and signs only if they
@@ -204,11 +206,13 @@ jobs:
         if: steps.tree.outputs.exists == 'true'
         run: rustup toolchain install
       # No build cache in this job: whatever it restored would be compiled code that runs
-      # next to the key. Compiled here, before the secret is in any environment: the build
-      # scripts and dependencies never run with the key.
+      # next to the key. Compiled here, from the reviewed Cargo.lock, before the secret is in
+      # any environment: the build scripts do not run in the step with the key. This narrows
+      # the exposure, it is no boundary: the dependencies are linked into the binary that
+      # holds the key, and what runs earlier as the same user could still watch later steps.
       - name: Build xtask
         if: steps.tree.outputs.exists == 'true'
-        run: cargo build -p xtask
+        run: cargo build --locked -p xtask
       # The copy that is signed, before the key is in any environment: `tuf/v1` and, once
       # the snapshot is online, the snapshots the `snapshot` job signed (only
       # `<N>.snapshot.json`, one or two, none that is there already).
@@ -261,11 +265,11 @@ jobs:
 
   build:
     needs: [snapshot, timestamp]
-    # Not when the snapshot or the timestamp job failed: a site without its snapshot or
-    # `metadata/timestamp.json` would make every client's check fail (a 404 is an error),
-    # while the site now served still has them. It runs when those jobs were skipped (a fork,
-    # an event or a ref they do not sign on).
-    if: ${{ !cancelled() && needs.snapshot.result != 'failure' && needs.timestamp.result != 'failure' && github.event_name != 'release' }}
+    # Only when the snapshot and the timestamp jobs succeeded or were skipped (a fork, an
+    # event or a ref they do not sign on): a failed, cancelled or timed-out one leaves the
+    # site without its snapshot or `metadata/timestamp.json`, which would make every client's
+    # check fail (a 404 is an error), while the site now served still has them.
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.snapshot.result) && contains(fromJSON('["success","skipped"]'), needs.timestamp.result) && github.event_name != 'release' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
