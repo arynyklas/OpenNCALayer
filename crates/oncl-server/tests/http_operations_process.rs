@@ -40,31 +40,140 @@ fn scratch_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
     }
     files
 }
+/// `ACCESS_ALLOWED_ACE_TYPE` (winnt.h); windows-sys keeps it behind an unneeded feature.
+#[cfg(windows)]
+const ACCESS_ALLOWED_ACE_TYPE: u32 = 0;
 #[cfg(windows)]
 fn assert_owner_only_file(path: &std::path::Path) {
-    let script = r#"$a=Get-Acl -LiteralPath '__PATH__';$t=[System.Security.Principal.SecurityIdentifier];[pscustomobject]@{owner=$a.GetOwner($t).Value;current=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;protected=$a.AreAccessRulesProtected;rules=@($a.GetAccessRules($true,$true,$t)|ForEach-Object{[pscustomobject]@{sid=$_.IdentityReference.Value;kind=$_.AccessControlType.ToString()}})}|ConvertTo-Json -Depth 4 -Compress"#;
-    let script = script.replace("__PATH__", &path.to_string_lossy().replace('\'', "''"));
-    let output = std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "ACL query of {} failed: {}",
-        path.display(),
-        String::from_utf8_lossy(&output.stderr)
+    use std::ffi::c_void;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{FALSE, LocalFree};
+    use windows_sys::Win32::Security::Authorization::{GetSecurityInfo, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{
+        ACCESS_ALLOWED_ACE, ACE_HEADER, ACL, DACL_SECURITY_INFORMATION, EqualSid, GetAce,
+        GetSecurityDescriptorControl, GetTokenInformation, OWNER_SECURITY_INFORMATION,
+        SE_DACL_PROTECTED, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    struct Local(*mut c_void);
+    impl Drop for Local {
+        fn drop(&mut self) {
+            // SAFETY: the pointer came from GetSecurityInfo, which allocates with LocalAlloc.
+            unsafe { LocalFree(self.0) };
+        }
+    }
+
+    // Current process token user SID.
+    let mut token = std::ptr::null_mut();
+    // SAFETY: the process pseudo-handle is valid and `token` is a writable out pointer.
+    assert_ne!(
+        unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) },
+        FALSE,
+        "OpenProcessToken failed: {}",
+        std::io::Error::last_os_error()
     );
-    let acl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(acl["owner"], acl["current"]);
-    let rules = acl["rules"].as_array().unwrap();
+    // SAFETY: OpenProcessToken succeeded and returned one owned handle.
+    let token = unsafe { OwnedHandle::from_raw_handle(token) };
+    let mut length = 0;
+    // SAFETY: size query with a null buffer of zero length.
+    unsafe {
+        GetTokenInformation(
+            token.as_raw_handle(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut length,
+        )
+    };
+    assert_ne!(length, 0, "TokenUser size query failed");
+    let mut buffer = vec![0u64; (length as usize).div_ceil(8)];
+    // SAFETY: u64 storage is 8-aligned and holds at least `length` bytes.
+    assert_ne!(
+        unsafe {
+            GetTokenInformation(
+                token.as_raw_handle(),
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length,
+            )
+        },
+        FALSE,
+        "GetTokenInformation failed: {}",
+        std::io::Error::last_os_error()
+    );
+    // SAFETY: a successful TokenUser query starts with a TOKEN_USER; the SID points into `buffer`.
+    let current = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+
+    // READ_CONTROL only; share everything so concurrent holders do not interfere.
+    let file = std::fs::OpenOptions::new()
+        .access_mode(0x0002_0000)
+        .share_mode(7)
+        .open(path)
+        .unwrap();
+    let mut owner = std::ptr::null_mut();
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut descriptor = std::ptr::null_mut();
+    // SAFETY: the handle is a live file opened with READ_CONTROL; all out pointers are writable.
+    let status = unsafe {
+        GetSecurityInfo(
+            file.as_raw_handle(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+            &mut owner,
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut descriptor,
+        )
+    };
     assert_eq!(
-        acl["protected"], true,
+        status,
+        0,
+        "ACL query of {} failed: error {status}",
+        path.display()
+    );
+    let _descriptor = Local(descriptor);
+    assert!(!owner.is_null() && !dacl.is_null());
+    // SAFETY: both SIDs are valid and live while `descriptor` is held.
+    assert_ne!(
+        unsafe { EqualSid(owner, current) },
+        FALSE,
+        "owner is not the current user"
+    );
+
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    // SAFETY: `descriptor` is a valid self-relative descriptor; out pointers are writable.
+    assert_ne!(
+        unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) },
+        FALSE
+    );
+    assert!(
+        control & SE_DACL_PROTECTED != 0,
         "actual child scratch file DACL must be protected"
     );
-    assert!(!rules.is_empty());
-    for rule in rules {
-        assert_eq!(rule["sid"], acl["current"]);
-        assert_eq!(rule["kind"], "Allow");
+
+    // SAFETY: `dacl` is non-null and points into the live descriptor.
+    let count = unsafe { (*dacl).AceCount };
+    assert!(count > 0, "DACL must not be empty");
+    for index in 0..u32::from(count) {
+        let mut ace: *mut c_void = std::ptr::null_mut();
+        // SAFETY: `index` is below AceCount; `ace` is a writable out pointer.
+        assert_ne!(unsafe { GetAce(dacl, index, &mut ace) }, FALSE);
+        // SAFETY: GetAce returned a pointer to an ACE, which starts with an ACE_HEADER.
+        let kind = unsafe { (*ace.cast::<ACE_HEADER>()).AceType };
+        assert_eq!(u32::from(kind), ACCESS_ALLOWED_ACE_TYPE, "non-allow ACE");
+        // SAFETY: an allowed ACE stores its SID inline starting at SidStart.
+        let sid = unsafe { (&raw mut (*ace.cast::<ACCESS_ALLOWED_ACE>()).SidStart).cast() };
+        // SAFETY: both SIDs are valid for the duration of the call.
+        assert_ne!(
+            unsafe { EqualSid(sid, current) },
+            FALSE,
+            "ACE for a foreign SID"
+        );
     }
 }
 #[cfg(unix)]
