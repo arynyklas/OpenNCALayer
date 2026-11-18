@@ -9,10 +9,14 @@ name: TUF expiry
 # yet (before the owner's ceremony) it passes. No secret is used or reachable here.
 #
 # With `tuf/v2` in the tree the same check covers it (its root and top-level targets as in
-# `tuf/v1`; its snapshot and timestamp are signed by Pages) and the roles of the publishers:
-# an expired or expiring role only warns (`warning[role-expired]`, `warning[role-expiring]`
-# become annotations of the run, which stays green): the publisher signs a new one, and a
-# publisher's role never stops the publication.
+# `tuf/v1`; its snapshot and timestamp are signed by Pages) and the roles of the publishers.
+# The expiry of a publisher's role only warns (`warning[role-expired]`,
+# `warning[role-expiring]` become annotations of the run, which stays green): the publisher
+# signs a new one, and an expiring role does not stop the publication. Other findings about
+# the publishers are errors and do stop it: `error[role-key-removed]` (Р24: the newest role is
+# not signed by a threshold of the keys `publisher.toml` keeps) fails this run, and the Pages
+# `snapshot` job refuses to sign a v2 snapshot until it is fixed (Pages then publishes the
+# served `tuf/v2` again and goes red).
 on:
   schedule:
     - cron: "17 6 * * 1"

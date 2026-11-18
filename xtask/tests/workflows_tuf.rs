@@ -507,6 +507,17 @@ fn check_secret_job(
                     "the secret's job {job_id} restores a cache: {uses}"
                 ));
             }
+            if uses.starts_with("actions/checkout@")
+                && step
+                    .get("with")
+                    .and_then(|w| w.get("persist-credentials"))
+                    .and_then(Value::as_str)
+                    != Some("false")
+            {
+                bad.push(format!(
+                    "the checkout of the secret's job {job_id} keeps its credentials"
+                ));
+            }
         }
     }
     let Some(&first) = secret_steps.iter().next() else {
@@ -619,11 +630,35 @@ fn check_pages(text: &str) -> Vec<String> {
             ));
         }
         if let Ok(step) = path[3].parse::<usize>() {
+            let run = jobs[&path[1]]["steps"][step]
+                .get("run")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !run.contains(&format!("echo \"::add-mask::${secret}\"")) {
+                bad.push(format!(
+                    "the step with {secret} does not mask that variable"
+                ));
+            }
             secret_steps
                 .entry(path[1].clone())
                 .or_default()
                 .insert(step);
         }
+    }
+    // One address of the site, at the top: no other place names the Pages host.
+    let pages_url = doc
+        .get("env")
+        .and_then(|e| e.get("PAGES_URL"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if !(pages_url.starts_with("https://") && pages_url.ends_with('/')) {
+        bad.push("pages.yml has no workflow-level PAGES_URL".to_owned());
+    }
+    if all
+        .iter()
+        .any(|(p, v)| v.contains("github.io") && p.as_slice() != ["env", "PAGES_URL"])
+    {
+        bad.push("pages.yml names the Pages host outside PAGES_URL".to_owned());
     }
     // Each environment is used by the jobs of its secrets only.
     for (id, job) in jobs {
@@ -682,13 +717,16 @@ fn check_pages(text: &str) -> Vec<String> {
     if !text("timestamp", "if").contains("!cancelled()") {
         bad.push("timestamp does not run when the snapshot job failed".to_owned());
     }
-    let sign_v2 = step_with_id(jobs.get("timestamp"), "sign_v2");
-    if sign_v2
-        .and_then(|s| s.get("continue-on-error"))
-        .and_then(Value::as_str)
-        != Some("true")
-    {
-        bad.push("the v2 timestamp step can fail the timestamp job of tuf/v1".to_owned());
+    for id in ["unpack", "sign_v2"] {
+        if step_with_id(jobs.get("timestamp"), id)
+            .and_then(|s| s.get("continue-on-error"))
+            .and_then(Value::as_str)
+            != Some("true")
+        {
+            bad.push(format!(
+                "the v2 timestamp step {id} can fail the timestamp job of tuf/v1"
+            ));
+        }
     }
     for needed in ["snapshot", "timestamp"] {
         if !needs("build").contains(&needed.to_owned()) {
@@ -763,6 +801,87 @@ fn field<'a>(step: Option<&'a Value>, key: &str) -> &'a str {
         .unwrap_or("")
 }
 
+/// The text of `text` after the first `start` and before the next `end`.
+fn between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
+    let rest = text.split_once(start)?.1;
+    Some(rest.split_once(end)?.0)
+}
+
+/// The lines of the shell function `name() { … }` in `run`, trimmed, without comments.
+fn function_lines<'a>(run: &'a str, name: &str) -> Option<Vec<&'a str>> {
+    let body = run.split_once(&format!("\n{name}() {{\n"))?.1;
+    let body = body.split_once("\n}\n")?.0;
+    Some(
+        body.lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .collect(),
+    )
+}
+
+/// Every command of the function stops it on failure: it ends with `|| return 1`, or is
+/// the shell's own structure (`case … in`, a branch ending in `;;`, `esac`, a loop).
+fn returns_on_failure(lines: &[&str]) -> bool {
+    lines.iter().all(|l| {
+        l.ends_with("|| return 1")
+            || l.ends_with(";;")
+            || l.ends_with(";; esac")
+            || (l.starts_with("case ") && l.ends_with(" in"))
+            || *l == "esac"
+            || (l.starts_with("while ") && l.ends_with("; do"))
+            || l.starts_with("done")
+    }) && lines.iter().all(|l| !l.contains("|| true"))
+}
+
+/// The publication of `tuf/v2` in `build` (`publish`, the run of the step): the new
+/// `tuf/v2` (`signed`) or the served one (`served`), each function returning on every
+/// failure, the served one verified by the client and checked as a publication; the
+/// branches: `signed` and `republished` go on, the last one fails `build`.
+fn fallback_is_sound(publish: &str) -> bool {
+    let (Some(signed), Some(served)) = (
+        function_lines(publish, "signed"),
+        function_lines(publish, "served"),
+    ) else {
+        return false;
+    };
+    let checked = |lines: &[&str], what: &str| {
+        lines
+            .iter()
+            .any(|l| l.starts_with(what) && l.ends_with("|| return 1"))
+    };
+    let functions = returns_on_failure(&signed)
+        && returns_on_failure(&served)
+        && checked(&signed, "bash .github/scripts/tuf-v2-snapshots.sh unpack ")
+        && checked(&signed, "cargo xtask tuf check ")
+        && checked(&served, "cargo xtask tuf verify-published --repo v2 --dir ")
+        && served.iter().any(|l| {
+            l.starts_with("cargo xtask tuf check ")
+                && l.contains("--served-v2")
+                && l.contains("--fail-on-expiring")
+                && l.ends_with("|| return 1")
+        });
+    let Some(branches) = publish.split_once("\nif signed ").map(|(_, b)| b) else {
+        return false;
+    };
+    let Some((new, rest)) = branches.split_once("\nelif served ") else {
+        return false;
+    };
+    let Some((again, rest)) = rest.split_once("\nelse\n") else {
+        return false;
+    };
+    let Some((none, _)) = rest.split_once("\nfi") else {
+        return false;
+    };
+    functions
+        && new.contains("state=signed")
+        && !new.contains("exit")
+        && again.contains("state=republished")
+        && !again.contains("exit")
+        && none.contains("exit 1")
+        && !none.contains("state=")
+        && !publish.contains("|| true")
+}
+
 /// `tuf/v2`: the first publication only on HTTP 404 and the owner's variable; published,
 /// checked and verified only when its root is in the tree; the `tuf/v1` step without it.
 fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
@@ -785,6 +904,9 @@ fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
                 .to_owned(),
         );
     }
+    if !between(probe_run, "*)", ";;").is_some_and(|branch| branch.contains("exit 1")) {
+        bad.push("the probe does not fail on an answer other than 200 and 404".to_owned());
+    }
     let sign = step_with_id(snapshot, "sign");
     if sign
         .and_then(|s| s.get("env"))
@@ -795,9 +917,34 @@ fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
         bad.push("the snapshot is not signed in the mode the probe decided".to_owned());
     }
     let sign_run = field(sign, "run");
-    if !(sign_run.contains("tuf snapshot --out") && sign_run.contains("--previous \"$PUBLISHED\""))
+    if !(sign_run.contains("tuf snapshot --out")
+        && sign_run.contains("--previous \"${PAGES_URL}tuf/v2/\""))
     {
         bad.push("the snapshot does not extend the published one".to_owned());
+    }
+    // The snapshots between the jobs: packed by the script (gzip, the cap), unpacked by it
+    // (the names allowed) in a step of `timestamp` without a key, before the keys.
+    if !sign_run.contains("bash .github/scripts/tuf-v2-snapshots.sh pack ") {
+        bad.push("the snapshots are not packed by tuf-v2-snapshots.sh".to_owned());
+    }
+    let timestamp = jobs.get("timestamp");
+    let unpack = step_with_id(timestamp, "unpack");
+    let unpack_plain = unpack.is_some_and(|s| {
+        !all_text(s).to_lowercase().contains("secrets.")
+            && field(Some(s), "run").contains("bash .github/scripts/tuf-v2-snapshots.sh unpack ")
+    });
+    let sign_v2 = step_with_id(timestamp, "sign_v2");
+    let sign_v2_run = field(sign_v2, "run");
+    if !(unpack_plain
+        && field(sign_v2, "if") == "steps.unpack.outputs.ready == 'true'"
+        && !sign_v2_run.contains("SNAPSHOTS")
+        && !sign_v2_run.contains("tar ")
+        && !sign_v2_run.contains("base64"))
+    {
+        bad.push(
+            "the v2 snapshots are not unpacked by tuf-v2-snapshots.sh before the timestamp key"
+                .to_owned(),
+        );
     }
     for (id, other) in jobs {
         if id != "snapshot" && all_text(other).contains("--first-publication") {
@@ -814,15 +961,13 @@ fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
             "the publication of tuf/v2 is not gated on tuf/v2/metadata/1.root.json".to_owned(),
         );
     }
-    // A v2 failure never stops the publication: the served `tuf/v2` is published again
-    // after the client verified the copy, or the site goes without it; then the run is red.
-    let fallback = publish.contains("verify-published --repo v2 --dir")
-        && publish.contains("state=republished")
-        && publish.contains("state=missing")
-        && publish.matches("exit 1").count() == 1;
-    if !fallback {
+    // A v2 failure stops `tuf/v1` only when there is no `tuf/v2` at all to publish: the
+    // served `tuf/v2` is published again after the checks (then the run goes red after the
+    // deployment); without it `build` fails, so no site without `tuf/v2` is ever deployed
+    // (the next `snapshot` would take its 404 for a first publication).
+    if !fallback_is_sound(publish) {
         bad.push(
-            "a failure of tuf/v2 does not fall back to the served tuf/v2 (or none) without failing build"
+            "a failure of tuf/v2 does not fall back to the served tuf/v2, or deploys without it"
                 .to_owned(),
         );
     }
@@ -836,7 +981,10 @@ fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
         .and_then(Value::as_array)
         .is_some_and(|n| n.iter().any(|x| x == "deploy"));
     let status_runs = status.is_some_and(|j| all_text(j).contains("exit 1"));
-    if !(after_deploy && status_if.contains("[\"republished\",\"missing\"]") && status_runs) {
+    if !(after_deploy
+        && status_if.contains("needs.build.outputs.tuf_v2 == 'republished'")
+        && status_runs)
+    {
         bad.push("a tuf/v2 failure does not make the run red after the deployment".to_owned());
     }
     for (job, what, gate) in [
@@ -1176,7 +1324,7 @@ fn the_graph_of_jobs_is_pinned() {
     );
     assert_found(
         mutated("        continue-on-error: true\n", "", &[]),
-        "the v2 timestamp step can fail the timestamp job",
+        "can fail the timestamp job of tuf/v1",
     );
     assert_found(
         mutated(
@@ -1188,11 +1336,40 @@ fn the_graph_of_jobs_is_pinned() {
     );
     assert_found(
         mutated(
-            "            cargo xtask tuf verify-published --repo v2 --dir \"$1\"\n",
+            "            cargo xtask tuf verify-published --repo v2 --dir \"$1\" || return 1\n",
             "            true\n",
             &[],
         ),
         "does not fall back to the served tuf/v2",
+    );
+    assert_found(
+        mutated(
+            "cargo xtask tuf verify-published --repo v2 --dir \"$1\" || return 1\n",
+            "cargo xtask tuf verify-published --repo v2 --dir \"$1\" || true\n",
+            &[],
+        ),
+        "does not fall back to the served tuf/v2",
+    );
+    assert_found(
+        mutated(
+            "cargo xtask tuf verify-published --repo v2 --dir \"$1\" || return 1\n",
+            "cargo xtask tuf verify-published --repo v2 --dir \"$1\"\n",
+            &[],
+        ),
+        "does not fall back to the served tuf/v2",
+    );
+    assert_found(
+        mutated(" --served-v2 --fail-on-expiring", " --served-v2", &[]),
+        "does not fall back to the served tuf/v2",
+    );
+    // Neither new nor served: `build` fails, never a site without tuf/v2.
+    assert_found(
+        mutated(
+            "nothing is deployed (a site without tuf/v2 would read as never published)\"\n            exit 1\n",
+            "nothing is deployed (a site without tuf/v2 would read as never published)\"\n            echo \"state=missing\" >> \"$GITHUB_OUTPUT\"\n",
+            &[],
+        ),
+        "or deploys without it",
     );
     assert_found(
         mutated(
@@ -1407,7 +1584,7 @@ fn the_first_publication_and_the_v2_gates_are_pinned() {
     );
     assert_found(
         mutated(
-            " --previous \"$PUBLISHED\" ;;",
+            " --previous \"${PAGES_URL}tuf/v2/\" ;;",
             " --first-publication ;;",
             &[],
         ),
@@ -1452,5 +1629,160 @@ fn the_first_publication_and_the_v2_gates_are_pinned() {
             &[],
         ),
         "the job verify does not check tuf/v2",
+    );
+}
+
+#[test]
+fn the_review_rules_are_pinned() {
+    // The probe fails on an answer other than 200 and 404.
+    assert_found(
+        mutated(
+            "answered '${status}': the published snapshot cannot be extended\"\n              exit 1\n",
+            "answered '${status}': the published snapshot cannot be extended\"\n",
+            &[],
+        ),
+        "does not fail on an answer other than 200 and 404",
+    );
+    // The checkout of a job with a key keeps no credentials.
+    assert_found(
+        mutated(
+            "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5\n        with:\n          persist-credentials: false\n",
+            "      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5\n        with:\n          persist-credentials: true\n",
+            &[],
+        ),
+        "keeps its credentials",
+    );
+    // Each key masks its own variable.
+    assert_found(
+        mutated(
+            "          echo \"::add-mask::$TUF_V2_TIMESTAMP_KEY\"\n",
+            "          echo \"::add-mask::$TUF_TIMESTAMP_KEY\"\n",
+            &[],
+        ),
+        "the step with TUF_V2_TIMESTAMP_KEY does not mask that variable",
+    );
+    // One Pages address.
+    assert_found(
+        mutated(
+            "          served_url=\"${PAGES_URL}tuf/v2/\"\n",
+            "          served_url=\"https://arynyklas.github.io/OpenNCALayer/tuf/v2/\"\n",
+            &[],
+        ),
+        "names the Pages host outside PAGES_URL",
+    );
+    // The snapshots: packed by the script, unpacked before the key by it.
+    assert_found(
+        mutated(
+            "bash .github/scripts/tuf-v2-snapshots.sh pack ",
+            "bash .github/scripts/other.sh pack ",
+            &[],
+        ),
+        "not packed by tuf-v2-snapshots.sh",
+    );
+    assert_found(
+        mutated(
+            "        if: steps.unpack.outputs.ready == 'true'\n",
+            "        if: steps.tree.outputs.v2 == 'true'\n",
+            &[],
+        ),
+        "not unpacked by tuf-v2-snapshots.sh before the timestamp key",
+    );
+}
+
+fn snapshot_script() -> String {
+    fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/scripts/tuf-v2-snapshots.sh"),
+    )
+    .unwrap()
+    .replace("\r\n", "\n")
+}
+
+/// What is wrong with the script that carries the snapshots between the jobs.
+fn check_snapshot_script(text: &str) -> Vec<String> {
+    let mut bad = Vec::new();
+    for (needle, rule) in [
+        (
+            "set -euo pipefail\n",
+            "it does not stop on the first failure",
+        ),
+        ("CAP=102400\n", "the cap is not 100 KiB"),
+        (
+            "tar -czf - -- \"${names[@]}\" | base64 -w0",
+            "it does not pack gzip",
+        ),
+        (
+            "if [ \"${#encoded}\" -gt \"$CAP\" ]; then",
+            "it does not refuse a packing over the cap",
+        ),
+        (
+            "if [ \"${#SNAPSHOTS}\" -gt \"$CAP\" ]; then",
+            "it does not refuse an input over the cap",
+        ),
+        (
+            "[[ \"$name\" =~ ^[0-9]{1,20}\\.snapshot\\.json$ ]] || fail",
+            "it does not allow only <N>.snapshot.json",
+        ),
+        (
+            "[ \"$#\" -ge 1 ] && [ \"$#\" -le 2 ] || fail",
+            "it does not allow only one or two files",
+        ),
+        (
+            "tar -xzf \"$archive\" --no-same-owner -C \"$2\" -- \"${names[@]}\"",
+            "it does not extract only the names it checked",
+        ),
+        (
+            "echo \"::error::$1\"",
+            "a refusal is not an error annotation",
+        ),
+    ] {
+        if !text.contains(needle) {
+            bad.push(rule.to_owned());
+        }
+    }
+    let unpack = between(text, "\n  unpack)\n", "\n    ;;").unwrap_or("");
+    let checked = unpack.find("check_names \"${names[@]}\"");
+    let extracted = unpack.find("tar -xzf");
+    if !matches!((checked, extracted), (Some(c), Some(x)) if c < x) {
+        bad.push("it extracts before it checks the names".to_owned());
+    }
+    bad
+}
+
+#[test]
+fn the_snapshot_script_keeps_its_rules() {
+    let text = snapshot_script();
+    let bad = check_snapshot_script(&text);
+    assert!(bad.is_empty(), "{bad:#?}");
+    for (from, to, needle) in [
+        ("CAP=102400\n", "CAP=10240000\n", "the cap"),
+        ("tar -czf -", "tar -cf -", "gzip"),
+        (
+            "^[0-9]{1,20}\\.snapshot\\.json$",
+            "^.*$",
+            "only <N>.snapshot.json",
+        ),
+        (
+            " -- \"${names[@]}\"\n    rm -f",
+            "\n    rm -f",
+            "only the names it checked",
+        ),
+    ] {
+        assert!(text.contains(from), "the mutation target is gone: {from:?}");
+        let broken = check_snapshot_script(&text.replacen(from, to, 1));
+        assert!(
+            broken.iter().any(|b| b.contains(needle)),
+            "not caught ({needle:?}): {broken:#?}"
+        );
+    }
+    let moved = text.replacen(
+        "    mapfile -t names < <(tar -tzf \"$archive\")\n    check_names \"${names[@]}\"\n    tar -xzf",
+        "    mapfile -t names < <(tar -tzf \"$archive\")\n    tar -xzf",
+        1,
+    );
+    assert_ne!(moved, text);
+    assert!(
+        check_snapshot_script(&moved)
+            .iter()
+            .any(|b| b.contains("before it checks"))
     );
 }
