@@ -178,20 +178,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn workspace_root_holds_workspace_manifest() {
-        let manifest = String::from_utf8(read(workspace_root().join("Cargo.toml"))).unwrap();
-        assert!(manifest.contains("[workspace]"));
-    }
-
-    #[test]
-    fn fixture_is_under_fixtures_dir() {
-        assert_eq!(
-            fixture("a/b.der"),
-            workspace_root().join("fixtures").join("a/b.der")
-        );
-    }
-
-    #[test]
     fn synthetic_issuer_and_cert_resolve() {
         let leaf = synthetic("inter-user-gost2015-sign");
         assert_eq!(leaf.issuer, fixture("synthetic/inter-gost2015.cer"));

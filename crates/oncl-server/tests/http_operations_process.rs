@@ -48,7 +48,12 @@ fn assert_owner_only_file(path: &std::path::Path) {
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .unwrap();
-    assert!(output.status.success(), "ACL query failed");
+    assert!(
+        output.status.success(),
+        "ACL query of {} failed: {}",
+        path.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let acl: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(acl["owner"], acl["current"]);
     let rules = acl["rules"].as_array().unwrap();
@@ -135,9 +140,12 @@ fn standalone_multipart_uses_actual_random_private_scratch_and_cleans_it() {
         io::{Read, Write},
         time::{Duration, Instant},
     };
+    // The upload stalls on purpose while the test inspects the staged file (a cold
+    // PowerShell can take tens of seconds on a CI runner): the slow-upload rules must not
+    // end the request and delete that file meanwhile.
     let process = support::Process::configured("127.0.0.1:0", |root| {
         format!(
-            "scratch_directory = {}\nmax_in_flight = 1\nblocking_workers = 1\nqueue_capacity = 1",
+            "scratch_directory = {}\nmax_in_flight = 1\nblocking_workers = 1\nqueue_capacity = 1\nupload_idle_timeout_ms = 120000\nupload_min_bytes_per_second = 0",
             support::toml_path(&root.join("scratch"))
         )
     });

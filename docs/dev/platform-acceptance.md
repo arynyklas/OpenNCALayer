@@ -1,4 +1,4 @@
-# Platform acceptance: 1 GiB / 1 GiB proof (`cargo xtask platform-proof`)
+# Приёмка платформы: 1 ГиБ документа и 1 ГиБ памяти (`cargo xtask platform-proof`)
 
 ```text
 cargo xtask platform-proof --document-bytes 1073741824 --max-rss-bytes 1073741824 \
@@ -6,134 +6,81 @@ cargo xtask platform-proof --document-bytes 1073741824 --max-rss-bytes 107374182
   [--jobs N] [--only <id>…] [--resume] [--reuse-data] [--skip-build]
 ```
 
-The gate is separate from the normal suite: `cargo test -p xtask --test platform_large` runs only small
-deterministic cases (generator, OS measurement, parsing, a lxml/pyHanko check of the generator).
-A big run that was not done is **not** a pass.
+Эта проверка отделена от обычного набора тестов. `cargo test -p xtask --test platform_large` прогоняет только небольшие детерминированные случаи: генератор, измерение памяти средствами ОС, разбор, проверку генератора через lxml и pyHanko. Если большой прогон не выполнялся, проверка не пройдена.
 
-## What it does
+## Что делает команда
 
-1. Preflight: `--out` and `--scratch-dir` must be on a fixed local drive (removable, network, optical
-   are refused) with at least `--scratch-bytes` (plus the data) free. Not enough room is `BLOCKED`.
-2. Reference validation on small instances before any large file: lxml canonicalization of every
-   `Id` element and of the whole XML document, pyHanko (revisions, page tree, object streams, embedded
-   file) and, when `ONCL_PY_TOOLS` names pikepdf/pypdf/pdfminer, qpdf/pypdf/pdfminer on the PDF.
-3. Independent reference generator (`xtask/src/platform/generate*`): XML records in a non-canonical
-   lexical form with canonical form produced by a second code path (`Id`, namespaces, xml:lang, CDATA,
-   char refs, comments, PIs; the SOAP form has none), SOAP with the signed Body after 45 % of the
-   document, PDF with a three-level page tree, classic xref plus two incremental revisions with xref
-   streams (8-byte offsets) and object streams, and a framed pseudo-random byte stream. Sizes are exact.
-4. Real programs, release builds, as separate processes: `sdk_probe large` (SDK), `oncl` (CLI), `oncl-server`
-   with `oncl --endpoint` as its client (HTTP). Peak working set and peak private bytes come from the OS
-   (Windows `GetProcessMemoryInfo` + job object; Linux `/proc/<pid>/status`), never from a buffer
-   counter. PASS needs the stricter of the two ≤ `--max-rss-bytes` for every process.
-5. Independent verification of results: openssl (CMS), lxml + cryptography (XMLDSig digests against the
-   generator's canonical digests and the RSA SignatureValue), hashlib + asn1crypto + cryptography +
-   pyHanko (PDF ByteRange arithmetic, digest of the covered bytes, signature, untouched original prefix).
-   GOST has no independent oracle on this machine; those cases are SDK-verified with a tamper contrast.
-6. Matrix per surface: hash (known and unknown length, the document-size boundary, limit+1; the 2/4 GiB boundaries are run only when `--document-bytes` is raised above the 1 GiB guarantee), CMS detached and
-   attached (output above the document size read back by extract/verify/openssl), GOST CMS, XMLDSig far reference,
-   whole document, GOST, WSSE Body in the second half of the document, unknown-length XML, cancellation, temp quota, PDF
-   (dense many-object and compact), PAdES-B, CAdES/PAdES/XAdES T→LT→LTA, output limit, key-application
-   counts (SDK guard, server audit journal), scratch cleanup.
-7. The overload family (real `oncl-server`, small shared budgets, OTLP gauges collected by the harness; see
-   "The overload cases" below): `overload-profile`, `overload-slot-release`, `overload-token-apdu`, and
-   the diagnostic `http-progress-frame-rate` (run only when named with `--only`).
+1. Проверяет место: `--out` и `--scratch-dir` должны быть на несъёмном локальном диске (съёмные, сетевые и оптические отвергаются), и на нём должно быть свободно не меньше `--scratch-bytes` плюс объём данных. Если места мало, результат `BLOCKED`.
+2. До создания больших файлов проверяет эталонные инструменты на маленьких образцах: каноникализация lxml каждого элемента с `Id` и всего XML-документа, pyHanko (ревизии, дерево страниц, object streams, вложенный файл), а если `ONCL_PY_TOOLS` указывает на pikepdf, pypdf и pdfminer, то ещё qpdf, pypdf и pdfminer для PDF.
+3. Генерирует входы независимым генератором (`xtask/src/platform/generate*`):
+   - XML-записи в неканонической лексической форме; каноническую форму строит отдельный путь кода (`Id`, пространства имён, xml:lang, CDATA, ссылки на символы, комментарии, инструкции обработки; в SOAP-варианте их нет);
+   - SOAP, где подписанный Body начинается после 45 % документа;
+   - PDF с трёхуровневым деревом страниц, классическим xref и двумя инкрементальными ревизиями с xref streams (8-байтовые смещения) и object streams;
+   - поток псевдослучайных байтов с разметкой.
+   Размеры точные.
+4. Запускает настоящие программы, release-сборки, отдельными процессами: `sdk_probe large` (SDK), `oncl` (CLI), `oncl-server` с `oncl --endpoint` в роли клиента (HTTP). Пиковый рабочий набор и пиковые приватные байты берутся у ОС (Windows: `GetProcessMemoryInfo` и job object; Linux: `/proc/<pid>/status`), а не из счётчика буферов. Для PASS строгий из двух показателей должен быть не больше `--max-rss-bytes` у каждого процесса.
+5. Проверяет результаты независимо: OpenSSL для CMS; lxml и cryptography для XMLDSig (дайджесты сверяются с каноническими дайджестами генератора, проверяется RSA SignatureValue); hashlib, asn1crypto, cryptography и pyHanko для PDF (арифметика ByteRange, дайджест покрытых байтов, подпись, нетронутое начало исходного файла). Независимого проверяющего ГОСТ на этой машине нет, поэтому ГОСТ-случаи проверяет SDK с контрольным изменённым входом.
+6. Для каждого способа вызова прогоняет матрицу:
+   - хеш (известная и неизвестная длина, граница размера документа, лимит + 1; границы 2 и 4 ГиБ проверяются, только если `--document-bytes` поднят выше 1 ГиБ);
+   - CMS отсоединённая и присоединённая (результат больше документа читается обратно через extract, verify и OpenSSL), ГОСТ CMS;
+   - XMLDSig: дальняя ссылка, весь документ, ГОСТ, WSSE Body во второй половине документа, XML неизвестной длины;
+   - отмена, квота временных файлов;
+   - PDF (плотный с множеством объектов и компактный), PAdES-B;
+   - CAdES, PAdES и XAdES T → LT → LTA;
+   - лимит выхода, подсчёт применений ключа (счётчик в SDK, журнал аудита сервера), очистка временного каталога.
+7. Прогоняет случаи перегрузки на настоящем `oncl-server` с маленькими общими бюджетами и OTLP-показателями, которые собирает сама команда (подробно ниже): `overload-profile`, `overload-slot-release`, `overload-token-apdu` и диагностический `http-progress-frame-rate` (запускается, только если указан в `--only`).
 
-## The overload cases
+## Случаи перегрузки
 
-Since the upload phase (`docs/user/server.md`, «Загрузки») a body is received under one of `max_uploads`
-upload slots, and only the completed body takes a `max_in_flight` slot and a native worker. The cases are
-therefore built on **observed server state, not on clocks**: a wave of clients starts when the previous wave has
-produced the state it was meant to produce (`xtask/src/platform/large/barrier.rs`). What the harness reads is
-one of three things:
+Сервер принимает тело запроса, занимая один из `max_uploads` слотов загрузки (`docs/user/server.md`, «Загрузки»); слот `max_in_flight` и рабочий поток получает только полностью принятое тело. Поэтому случаи построены на наблюдаемом состоянии сервера, а не на таймерах: следующая волна клиентов стартует, когда предыдущая привела сервер в нужное состояние (`xtask/src/platform/large/barrier.rs`). Команда наблюдает три вещи.
 
-* what the server did to the client: with `Expect: 100-continue` Hyper writes `100 Continue` only when the
-  handler first polls the body, which the server does only after the request holds its upload slot, so the
-  receipt of `100 Continue` means "this client holds an upload slot" (`http_raw::Probe::continued`); an
-  answer or close (`Probe::answered`); a stalled client that the harness lets go by disconnecting
-  (`Probe::release`), so a stall lasts exactly as long as the plan wants;
-* what the server did to the disk: its spool files in the scratch directory (a spool holds what the SERVER
-  received, not what the client wrote into a socket);
-* what the server exported: its OTLP gauges, read as the second export after the change
-  (`otlp::second_sample_after`: the first may have been read just before the change).
+- Что сервер сделал с клиентом. С `Expect: 100-continue` Hyper отправляет `100 Continue`, только когда обработчик впервые читает тело, а сервер читает его только после того, как запрос получил слот загрузки. Значит, получение `100 Continue` означает «этот клиент держит слот загрузки» (`http_raw::Probe::continued`). Также видны ответ или закрытие соединения (`Probe::answered`). Зависший клиент команда отпускает, разрывая соединение (`Probe::release`), поэтому зависание длится ровно столько, сколько нужно по плану.
+- Что сервер сделал с диском: его промежуточные файлы во временном каталоге. Они содержат то, что сервер принял, а не то, что клиент записал в сокет.
+- Что сервер экспортировал: его OTLP-показатели. Читается второй экспорт после изменения (`otlp::second_sample_after`), потому что первый мог быть снят прямо перед изменением.
 
-Every barrier has a time-out, and the time-out is a failure that names what never happened. Every client has a
-*plan* (`clients::Plan`): completes, refused `503 CapacityExceeded`/`NotApplied`, ends by its own disconnect, or is
-ended by the server (`504 DeadlineExceeded`/`NotApplied`); no wave puts more clients into the upload phase than
-`max_uploads` can hold, except the one probe that is meant to be refused, so the answer of every client is fixed
-by the plan and not by arrival order. `max_uploads` is explicit in the profiles (the default follows
-`total_temp / (input_bytes + container_bytes)`), and the budgets leave room for the concurrent signatures of a
-wave (`total_memory`, `metadata_bytes`). Measured on the first run of the redesign: with the default 64 MiB
-`metadata_bytes`, three of four concurrent signatures of the 8 MiB test document were aborted by the server
-at their start with `MetadataLimit` (the documented stream abort of a resource failure before any key use: the
-client sees only a lost response). That is the budget doing its work, but it would decide *which* client
-completes, so the profile raises `metadata_bytes` (512 MiB) and `total_memory` (1 GiB) and leaves the refusals to
-the upload slots, whose count is exact.
+У каждого ожидания есть тайм-аут; срабатывание тайм-аута считается провалом и называет, чего так и не случилось. У каждого клиента есть план (`clients::Plan`): завершиться, получить отказ `503 CapacityExceeded`/`NotApplied`, отключиться самому или быть отключённым сервером (`504 DeadlineExceeded`/`NotApplied`). Ни одна волна не запускает в загрузку больше клиентов, чем помещается в `max_uploads`, кроме одного запроса, который и должен получить отказ. Так ответ каждого клиента определяется планом, а не порядком прихода.
 
-* **`overload-profile`** (`max_in_flight 4`, `blocking_workers 4`, `max_uploads 6`, upload idle timeout and
-  operation deadline far beyond the run):
-  1. *Five stalled uploads* (one slot short; more than `max_in_flight` and `blocking_workers`): the exported gauges
-     show no running or queued operation; **(a)** a small request and a CPU-bound signature are admitted and
-     complete (the signature is checked by the independent oracle) while the stalls are still stalled.
-  2. *Every upload slot taken* (a sixth stall, after a CPU-bound signature was admitted): **(b)** a further
-     upload is refused `503 CapacityExceeded`/`NotApplied` before its body (no `100 Continue`, no byte sent)
-     after `admission_wait_ms`; `/health` is answered `200` throughout; the operation admitted earlier completes.
-  3. *Disconnect*: **(c)** every spool is deleted, the server sees no request in flight, and six new stalled
-     uploads each take a slot at once (a leaked slot would leave one of them unparked: the barrier fails).
-  4. *A storm*: a 1 GiB upload and a disconnecting upload in progress, four concurrent CPU-bound signatures and
-     three small requests next to them; all complete or end as planned, the 1 GiB digest is right.
-  5. *The idle rule*, on a second server (`upload_idle_timeout_ms 3000`, `max_uploads 2`): two stalled uploads
-     are ended by the server with `504 DeadlineExceeded`/`NotApplied` after about the idle timeout and never held
-     to the operation deadline; **(c)** both slots are free afterwards and the next request completes.
-  Over the whole run: every client got an end, no 500 or untyped close, a key never applied on a refusal, the
-  shared scratch empty, gauges exported, peak running within `blocking_workers` (and the signatures did run), peak
-  queued within `queue_capacity` (the queue stays empty by construction: `blocking_workers >= max_in_flight`, the
-  documented default shape, so no admitted signature waits for a worker), shared temp within `total_temp`,
-  `/health` answerable, a request after the storm with the right digest, graceful stop, a FINAL for every BEGIN,
-  empty scratch after the stop.
-* **`overload-slot-release`** (`max_in_flight 2`, `blocking_workers 2`, `max_uploads 4`, deadline 20 s, idle
-  timeout 120 s): two uploads stall against `max_in_flight = 2`; two CPU-bound signatures complete next to them (the
-  stalls hold no in-flight slot and no worker). Then two stalls that only the operation deadline ends: the server
-  ends them with `504 DeadlineExceeded` at about the deadline, all four upload slots are free again and the next
-  signature completes.
-* **`overload-token-apdu`**: sixteen concurrent signatures on two software cards, three times over, through the
-  service library with a counting card backend (not the standalone binary); APDU exchanges and card
-  transactions never overlap per reader, OpenSSL verifies the signatures, the audit has a FINAL for every
-  BEGIN. `max_uploads` is 8 (explicit; `total_temp` 16 GiB).
-* **`http-progress-frame-rate`**: one 1 GiB CPU-bound signature with a raw client that keeps the response;
-  records progress-frame traffic and checks that the entity completes without a transport abort. It is a single
-  request and does not depend on the upload phase.
+`max_uploads` задан в профилях явно (по умолчанию он равен `total_temp / (input_bytes + container_bytes)`), а бюджеты оставляют место для одновременных подписей волны (`total_memory`, `metadata_bytes`). При стандартных 64 МиБ `metadata_bytes` три из четырёх одновременных подписей тестового документа размером 8 МиБ сервер прерывал в начале с `MetadataLimit`: это документированный обрыв потока при нехватке ресурсов до применения ключа, клиент видит только потерянный ответ. Бюджет работает правильно, но тогда от него зависело бы, какой клиент завершится. Поэтому профиль поднимает `metadata_bytes` до 512 МиБ и `total_memory` до 1 ГиБ, а отказы оставлены слотам загрузки, число которых точно известно.
 
-History: the first `overload-profile` assumed that a stalled upload holds a worker and an in-flight slot. Its
-retunes (workers 4, admission wait 8 s, uploads at 3 s, abandoned uploads aborted after 64 MiB) narrowed a
-timing race between the clients but could not remove it: under `--jobs 2` the abandoned uploads held their slots
-past `admission_wait_ms` and all CPU-bound clients were refused. After the upload phase the case failed outright
-(the default `max_uploads` of `3 GiB / 2 GiB = 1` was taken by a stalled upload and every other client was
-refused), and `overload-slot-release` passed on the strength of a late client only. Both were redesigned as above.
+### `overload-profile`
 
-## Limits of the proof (state them in every report)
+Параметры: `max_in_flight 4`, `blocking_workers 4`, `max_uploads 6`; тайм-аут простоя загрузки и срок операции далеко за пределами прогона.
 
-* Encryption/decryption (G01/G02): the RSA profiles exist at library level only (`oncl_pki::cms::envelope`, rows `envelope-*`
-  of the interop matrix); no CLI, HTTP or SDK-facade surface. No KZ GOST profile is proven (Kalkan has none: see
-  `[[excluded]] envelope-gost`), and no RSA result is claimed for it.
-* The standalone `oncl-server` uses system PC/SC only and this stand has no virtual reader: per-device APDU
-  overlap is measured on the same service library hosted by `platform-token-host` with a counting
-  software card. It is labelled as such and is not the standalone binary.
-* Windows x64 only unless run elsewhere; page cache effects: reads through `ReadFile` do not enter the
-  process working set, mapped pages do; both peaks are reported.
-* The report (`report.json`) holds environment, program hashes, artifact digests, per-case checks,
-  per-process peaks, durations and temp peaks.
+1. Пять зависших загрузок (на один слот меньше лимита, но больше `max_in_flight` и `blocking_workers`). Экспортированные показатели не показывают ни выполняемых, ни ожидающих операций. Пока загрузки висят, небольшой запрос и вычислительно тяжёлая подпись принимаются и завершаются; подпись проверяет независимый проверяющий.
+2. Заняты все слоты загрузки (шестая зависшая загрузка, после того как тяжёлая подпись принята). Следующая загрузка получает отказ `503 CapacityExceeded`/`NotApplied` до отправки тела (без `100 Continue`, ни один байт не отправлен) по истечении `admission_wait_ms`. `/health` всё это время отвечает `200`. Принятая ранее операция завершается.
+3. Разрыв соединений. Все промежуточные файлы удаляются, сервер не видит запросов в работе, и шесть новых зависших загрузок сразу получают по слоту. Если бы слот утёк, одна из них осталась бы без слота, и ожидание провалилось бы.
+4. Шторм: идёт загрузка 1 ГиБ и загрузка, которая оборвётся, рядом четыре одновременные тяжёлые подписи и три небольших запроса. Все завершаются или заканчиваются по плану, дайджест 1 ГиБ правильный.
+5. Правило простоя на втором сервере (`upload_idle_timeout_ms 3000`, `max_uploads 2`). Две зависшие загрузки сервер завершает с `504 DeadlineExceeded`/`NotApplied` примерно через время простоя, не дожидаясь срока операции. После этого оба слота свободны и следующий запрос завершается.
 
-## Status (2026-11-13): 1 GiB gate results
+По всему прогону проверяется: каждый клиент получил завершение; не было ответа 500 или закрытия без типизированной ошибки; при отказе ключ ни разу не применялся; общий временный каталог пуст; показатели экспортировались; пик выполняемых операций не больше `blocking_workers` (и подписи действительно выполнялись); пик очереди не больше `queue_capacity` (очередь пуста по построению: `blocking_workers >= max_in_flight`, как в документированной конфигурации по умолчанию, поэтому ни одна принятая подпись не ждёт рабочего потока); общий объём временных файлов не больше `total_temp`; `/health` отвечает; запрос после шторма даёт правильный дайджест; сервер штатно останавливается; на каждую запись BEGIN есть FINAL; после остановки временный каталог пуст.
 
-The guaranteed document size is **1 GiB** (user scope change of 2026-11-11, superseding 10 GiB). The
-control-process memory budget stays 1 GiB. These are the ledger facts; no claim is made beyond them.
+### `overload-slot-release`
 
-* **The 10 GiB gate was never passed and is withdrawn by the scope change.** It is history, not a result of the current contract. Its only run (build `0c0cb19`, 2026-11, resumed after an outage; durable report stopped at about 39,900 s with 37 completed cases) exposed production defects, now fixed (the numbering D1-D4 is separate from the D1-D6 of `platform-interop.md`):
-  * **D1** (PDF/CMS output): own-output `InputLimit` of a signed PDF readback. Fixed by the container surcharge (`6d3ba57e`, f4359257).
-  * **D2** (XAdES-T): `InvalidInput` after key use. Root cause: the host clock was sampled before the carried-proof passes; fixed by sampling after (`2736f787`, `66eb1e36`). The throughput cost (every carried proof re-reads the whole source; about 21,000 s at 10 GiB) was not fixed.
-  * **D3** (HTTP signing): `ResponseLost`, unthrottled progress frames consumed the output allowance; fixed by the progress throttle (`cba9f224`, merged `31854c17`).
-  * **D4** (dense PDF): the cross-reference budget; fixed by `a07d2832` (see "Dense PDFs" in `docs/dev/sdk.md`).
-  * **D7** (server): a stalled or crawling upload held an admission slot; fixed (`902ed9f1`: `upload_idle_timeout_ms`, `upload_min_bytes_per_second`).
-* The 2 GiB rerun on `efc785ed` (history, before the scope change) passed PDF compact and dense, PAdES-B and levels, CAdES levels and XML far-reference / whole-document / WSSE; `cms-attached` had its OpenSSL oracle replaced above `INT_MAX` by a decomposition. Peak working set and private bytes were at or below about 20 MiB.
-* **The 1 GiB gate has been run.** A full `cargo xtask platform-proof` run with the defaults above (`--jobs 1 --reuse-data`, 42,946 s; the report stays outside the repository) passed **70/70** on tree `9a1f0181` (SDK 23, CLI 22, HTTP 25); the maximum peak working set of any process was 20.4 MiB against the 1 GiB limit. Later changes to `oncl-server` (staged close of refused connections, the executor's drop order, intake) are covered only for HTTP: the 12 HTTP cases that exercise them (`overload-profile`, `overload-slot-release`, `overload-token-apdu`, `cms-sign-limit-plus-one`, `hash-limit-plus-one`, `xml-temp-quota`, `xml-cancel`, `http-progress-frame-rate`, `cms-attached`, `pdf-compact-sign`, `xml-whole-document`, `hash-unknown-length`) were rerun on `e99a90a2`, the commit released as `0.1.0-alpha.7`, and passed (12/12, in two runs of 7 and 5 cases; maximum peak working set 20.4 MiB). The other HTTP cases and all SDK and CLI cases were **not** rerun on that commit; their evidence is the 70/70 run on `9a1f0181`. That the server change cannot affect SDK and CLI cases is an inference, not a check. The overload family (see "The overload cases") was redesigned before the full run and also passed three runs alone and three under artificial CPU and disk contention. Not done at all: encrypt/decrypt (G01/G02), which is externally blocked and has no case.
+Параметры: `max_in_flight 2`, `blocking_workers 2`, `max_uploads 4`, срок операции 20 с, тайм-аут простоя 120 с. Две загрузки зависают при `max_in_flight = 2`, а рядом две тяжёлые подписи завершаются: зависшие загрузки не держат ни слота `max_in_flight`, ни рабочего потока. Затем две загрузки зависают так, что их может завершить только срок операции: сервер завершает их с `504 DeadlineExceeded` примерно по сроку, все четыре слота загрузки освобождаются, и следующая подпись завершается.
+
+### `overload-token-apdu`
+
+Шестнадцать одновременных подписей на двух программных картах, три раза подряд, через библиотеку сервиса со считающим бэкендом карт (не через отдельный бинарь). Обмены APDU и транзакции карты на одном считывателе не пересекаются, OpenSSL проверяет подписи, в аудите на каждый BEGIN есть FINAL. `max_uploads` задан явно и равен 8 (`total_temp` 16 ГиБ).
+
+### `http-progress-frame-rate`
+
+Одна тяжёлая подпись 1 ГиБ с клиентом, который читает ответ без обработки. Записывает трафик кадров прогресса и проверяет, что ответ завершается без обрыва транспорта. Это один запрос, от фазы загрузки он не зависит.
+
+## Границы доказательства
+
+Эти пункты указываются в каждом отчёте.
+
+- Шифрование и расшифрование: профили RSA есть только в библиотеке (`oncl_pki::cms::envelope`, строки `envelope-*` interop-матрицы); в CLI, HTTP и SDK их нет. Казахстанский профиль ГОСТ не доказан (у Kalkan его нет, см. `[[excluded]] envelope-gost`), и результат для RSA за него не выдаётся. Случаев шифрования в `platform-proof` нет.
+- Отдельный `oncl-server` работает только с системным PC/SC, а виртуального считывателя на этом стенде нет. Поэтому пересечение APDU на одном устройстве измеряется на той же библиотеке сервиса, запущенной в `platform-token-host` со считающей программной картой. В отчёте это так и подписано: это не отдельный бинарь.
+- Проверка выполнялась только на Windows x64, если не запущена где-то ещё. Влияние страничного кэша: чтение через `ReadFile` не попадает в рабочий набор процесса, отображённые в память страницы попадают; в отчёте приводятся оба пика.
+- Отчёт `report.json` содержит окружение, хеши программ, дайджесты артефактов, проверки по каждому случаю, пики памяти по процессам, длительности и пики временных файлов.
+
+## Результаты
+
+Гарантированный размер документа 1 ГиБ, бюджет памяти контрольного процесса 1 ГиБ.
+
+- Полный прогон `cargo xtask platform-proof` с параметрами по умолчанию (`--jobs 1 --reuse-data`, 42 946 с; отчёт хранится вне репозитория) прошёл 70 из 70 случаев: SDK 23, CLI 22, HTTP 25. Максимальный пиковый рабочий набор среди всех процессов 20,4 МиБ при лимите 1 ГиБ.
+- Последующие изменения `oncl-server` (поэтапное закрытие отклонённых соединений, порядок освобождения в исполнителе, приём запросов) перепроверены только для HTTP. Двенадцать HTTP-случаев, которые их затрагивают (`overload-profile`, `overload-slot-release`, `overload-token-apdu`, `cms-sign-limit-plus-one`, `hash-limit-plus-one`, `xml-temp-quota`, `xml-cancel`, `http-progress-frame-rate`, `cms-attached`, `pdf-compact-sign`, `xml-whole-document`, `hash-unknown-length`), повторены на ревизии выпуска `0.1.0-alpha.7` и прошли (12 из 12, двумя прогонами по 7 и 5 случаев; максимальный пиковый рабочий набор 20,4 МиБ). Остальные HTTP-случаи и все случаи SDK и CLI на этой ревизии не повторялись, для них доказательством остаётся прогон 70 из 70. То, что изменения сервера не влияют на случаи SDK и CLI, выведено из устройства кода, а не проверено.
+- Случаи перегрузки, кроме полного прогона, прошли три раза отдельно и три раза при искусственной нагрузке на процессор и диск.
+- Подпись XAdES-T медленная на больших документах: каждое вложенное доказательство заново читает весь исходный документ. На документе 10 ГиБ это занимало около 21 000 с; ускорение не делалось.
+- Шифрование и расшифрование не проверялись совсем: случаев для них нет, а профиль ГОСТ упирается во внешние данные.

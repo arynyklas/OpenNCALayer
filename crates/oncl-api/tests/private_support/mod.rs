@@ -670,6 +670,7 @@ pub fn artifact<'a>(parts: &'a [(String, Option<String>, Vec<u8>)], id: &str) ->
         .expect("artifact part")
 }
 
+
 /// Independent oracle: OpenSSL CMS signature verification (embedded signer cert,
 /// no chain: the synthetic chain uses GOST CAs OpenSSL cannot validate).
 pub fn openssl_cms_verify(signature: &[u8], content: Option<&[u8]>, dir: &Path) -> Option<Vec<u8>> {
