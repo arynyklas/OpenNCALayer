@@ -215,7 +215,10 @@ i-slint-backend-winit = { git = "https://github.com/arynyklas/slint", rev = "586
 
 # A full package already on disk or rebuilt from deltas is checked by the update source before
 # it is used and before Update.exe is taken from it. The version must stay the one above.
-# Branch `openncalayer/velopack-1.3.39-g8d2844f` of arynyklas/velopack.
+# Branch `openncalayer/velopack-1.3.39-g8d2844f` of arynyklas/velopack. Upstream plans to stop
+# keeping packages on disk and to drop this verify step (velopack/velopack#1175): on that
+# upgrade the contents check (`IndexSource::verify_full_package`) must move to wherever
+# Velopack then reads the package, still before the new Update.exe runs.
 velopack = { git = "https://github.com/arynyklas/velopack", rev = "e2c8d73c368ce0383a547ed5f3dfece42f98ac72" }
 
 # Additive secret-input variants of the cores for agreement/wrap; the ordinary public-document
