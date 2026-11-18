@@ -5,22 +5,16 @@ on:
   # branch push next to it ran the whole workflow a second time on the same commit.
   push:
     branches: [main]
-  # `labeled`: adding the `full-ci` label starts the full run on the pull request (any other
-  # label starts the ordinary one again, which replaces the run in progress).
+  # `labeled`: adding the `full-ci` label starts the full run on the pull request. Any other
+  # label starts the ordinary run again and cancels the one in progress.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   schedule:
     # Every night: the full run on main (macOS included).
     - cron: "30 2 * * *"
-    # Mondays: the `live` job alone (real NCA services).
-    - cron: "0 3 * * 1"
+  # A full run. `check` passes only on main: a manual run elsewhere is for looking, not for
+  # the required status. `live` and `bench` are in scheduled.yml.
   workflow_dispatch:
-    inputs:
-      run:
-        description: "full: every job of a full run; live: the live job; bench: the benchmarks"
-        type: choice
-        options: [full, live, bench]
-        default: full
 
 permissions:
   contents: read
@@ -47,24 +41,22 @@ env:
 jobs:
   # What this run checks. Every other job runs on one of these outputs, and `check` reads the
   # same outputs to tell a job skipped on purpose from one that had to run.
-  # - full: a push to main, the nightly run, a manual `full` run, a pull request labelled
-  #   `full-ci`. Everything runs, macOS included.
+  # - full: a push to main, the nightly run, a manual run, a pull request labelled `full-ci`.
+  #   Everything runs, macOS included.
   # - a pull request: the Rust jobs unless it changes documentation only; the packaging jobs
   #   and `builtins-x86` only if it changes what they build from (the app and xtask code,
   #   Cargo files, the toolchain, .cargo/, the workflows); one macOS job (`test-macos`).
+  # `fmt`, `privacy`, `index` and `actionlint` run on every run.
   changes:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
-      checks: ${{ steps.what.outputs.checks }}
       rust: ${{ steps.what.outputs.rust }}
       site: ${{ steps.what.outputs.site }}
       app: ${{ steps.what.outputs.app }}
       full: ${{ steps.what.outputs.full }}
       mac_pr: ${{ steps.what.outputs.mac_pr }}
       release_plugins: ${{ steps.what.outputs.release_plugins }}
-      live: ${{ steps.what.outputs.live }}
-      bench: ${{ steps.what.outputs.bench }}
       test_oses: ${{ steps.what.outputs.test_oses }}
     steps:
       # The merge commit of a pull request and its first parent, the base it merges into.
@@ -75,32 +67,22 @@ jobs:
         id: what
         env:
           EVENT: ${{ github.event_name }}
-          SCHEDULE: ${{ github.event.schedule }}
-          RUN: ${{ inputs.run }}
           FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
-          checks=true full=false live=false bench=false
           case "$EVENT" in
             pull_request) full="$FULL_CI_LABEL" ;;
-            push) full=true ;;
-            schedule)
-              if [ "$SCHEDULE" = "0 3 * * 1" ]; then live=true checks=false; else full=true; fi ;;
-            workflow_dispatch)
-              case "$RUN" in
-                live) live=true checks=false ;;
-                bench) bench=true checks=false ;;
-                *) full=true ;;
-              esac ;;
+            push | schedule | workflow_dispatch) full=true ;;
             *) echo "::error::unexpected event $EVENT"; exit 1 ;;
           esac
           rust=false site=false app=false
-          if [ "$checks" = true ] && [ "$full" = true ]; then
+          if [ "$full" = true ]; then
             rust=true site=true app=true
-          elif [ "$checks" = true ]; then
-            # --no-renames: a file moved out of a path counts as changed there.
-            changed="$(git diff --name-only --no-renames HEAD^1 HEAD)"
-            printf 'changed:\n%s\n' "$changed"
-            while IFS= read -r file; do
+          else
+            # NUL-separated, unquoted: any file name reads as it is. --no-renames: a file moved
+            # out of a path counts as changed there.
+            echo "changed:"
+            while IFS= read -r -d '' file; do
+              echo "  $file"
               [ -n "$file" ] || continue
               case "$file" in
                 # Documentation that no build, test or package reads (xtask's forks test
@@ -118,7 +100,7 @@ jobs:
                   | Cargo.toml | Cargo.lock | rust-toolchain.toml | .gitattributes \
                   | README.md | LICENSE | NOTICE) app=true ;;
               esac
-            done <<< "$changed"
+            done < <(git -c core.quotePath=false diff -z --name-only --no-renames HEAD^1 HEAD)
             if [ "$rust" = true ]; then site=true; fi
           fi
           mac_pr=false release_plugins=false
@@ -130,21 +112,16 @@ jobs:
             test_oses='["ubuntu-24.04","windows-2025"]'
           fi
           {
-            echo "checks=$checks"
             echo "rust=$rust"
             echo "site=$site"
             echo "app=$app"
             echo "full=$full"
             echo "mac_pr=$mac_pr"
             echo "release_plugins=$release_plugins"
-            echo "live=$live"
-            echo "bench=$bench"
             echo "test_oses=$test_oses"
           } | tee -a "$GITHUB_OUTPUT"
 
   fmt:
-    needs: changes
-    if: needs.changes.outputs.checks == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -156,20 +133,17 @@ jobs:
       - name: cargo fmt (plugin ports)
         run: cargo fmt --manifest-path plugins/Cargo.toml --all --check
 
-  # `cargo xtask privacy` (privacy.yml): every pull request and every run on main, no path
-  # filter. The heavy jobs wait for it and for `fmt`.
+  # `cargo xtask privacy` (privacy.yml): every run, no path filter. The heavy jobs wait for
+  # it and for `fmt`.
   privacy:
-    needs: changes
-    if: needs.changes.outputs.checks == 'true'
     uses: ./.github/workflows/privacy.yml
     secrets:
       PRIVACY_DENYLIST: ${{ secrets.PRIVACY_DENYLIST }}
 
-  # The update indexes and the TUF repository (index-check.yml): every pull request and push
-  # to main. It decides itself whether `updates/`, `tuf/` or the keys changed, so no path
-  # filter skips it.
+  # The update indexes and the TUF repository (index-check.yml): every run. It decides itself
+  # whether `updates/`, `tuf/` or the keys changed (without a base, outside pull requests and
+  # pushes, it checks the tree as it is), so no path filter skips it.
   index:
-    if: github.event_name == 'push' || github.event_name == 'pull_request'
     permissions:
       contents: read
       # The commit statuses of release tags (`vm-smoke`, `conformance`), read through the API.
@@ -177,8 +151,6 @@ jobs:
     uses: ./.github/workflows/index-check.yml
 
   actionlint:
-    needs: changes
-    if: needs.changes.outputs.checks == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -491,8 +463,8 @@ jobs:
   # in the same interpreter on every OS, so this second pass runs on Linux only, from the
   # Linux archive, next to the slices.
   no-markers:
-    needs: [changes, test-build]
-    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' && needs.test-build.result != 'skipped' }}
+    needs: [changes, prepare, test-build]
+    if: ${{ !cancelled() && needs.changes.outputs.rust == 'true' && needs.prepare.result == 'success' && needs.test-build.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -506,6 +478,10 @@ jobs:
         with:
           name: nextest-ubuntu-24.04
           path: ${{ runner.temp }}/nextest
+      - uses: actions/download-artifact@v5
+        with:
+          name: ncanode-fixtures
+          path: target/fixtures/ncanode
       - uses: ./.github/actions/test-oracles
       - name: Built-in modules without markers
         run: |
@@ -514,14 +490,15 @@ jobs:
             --workspace-remap . --extract-to . --extract-overwrite -E 'package(oncl-builtin-tests)'
 
   # The plugin tests with the ports built in the `release` profile (fat LTO, as `plugin pack`
-  # ships them) instead of `plugin-test`: on main and every night, from the Linux archive.
+  # ships them) instead of `plugin-test`, and the operations lint against those modules, the
+  # bytes that ship: on main and every night, from the Linux archive.
   plugins-release:
     needs: [changes, prepare, test-build]
     if: ${{ !cancelled() && needs.changes.outputs.release_plugins == 'true' && needs.prepare.result == 'success' && needs.test-build.result != 'skipped' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     env:
-      ONCL_PLUGIN_PROFILE: release
+      ONCL_PORTS_PROFILE: release
     steps:
       - uses: actions/checkout@v5
       - name: Install toolchain (rust-toolchain.toml)
@@ -542,6 +519,12 @@ jobs:
           cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/nextest/nextest.tar.zst" \
             --workspace-remap . --extract-to . --extract-overwrite --run-ignored all \
             -E 'package(oncl-port-tests) | binary_id(openncalayer::ports_e2e) | binary_id(openncalayer::ports_heavy_e2e) | binary_id(oncl-core::plugin_ports_manual)'
+      # The ports the tests above built (a no-op build then), linted as they ship.
+      - name: Plugin operations lint (release modules)
+        run: |
+          cargo build --locked --release --target wasm32-unknown-unknown --workspace \
+            --manifest-path plugins/Cargo.toml --target-dir target/plugin-ports
+          cargo xtask plugin-ops-check --require-wasm --wasm-dir target/plugin-ports/wasm32-unknown-unknown/release
 
   # The Linux checks outside the test binaries.
   linux-checks:
@@ -1127,7 +1110,9 @@ jobs:
   # The required status of the repository's ruleset (it requires a check named `check`). It
   # fails when a job it needs failed or was cancelled, and when a job this run had to run
   # (by the outputs of `changes`) was skipped; a job skipped because the change does not
-  # need it passes. `live` and `bench` are not part of it.
+  # need it passes. A manual run on another ref than main fails it: only main's manual run
+  # may stand for the commit. Every job of this file is needed here (xtask's
+  # `workflows_ci` test pins that); `live` and `bench` live in scheduled.yml.
   check:
     if: always()
     needs:
@@ -1163,7 +1148,7 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
           EVENT: ${{ github.event_name }}
-          CHECKS: ${{ needs.changes.outputs.checks }}
+          REF: ${{ github.ref }}
           RUST: ${{ needs.changes.outputs.rust }}
           SITE: ${{ needs.changes.outputs.site }}
           APP: ${{ needs.changes.outputs.app }}
@@ -1171,9 +1156,11 @@ jobs:
           MAC_PR: ${{ needs.changes.outputs.mac_pr }}
           RELEASE_PLUGINS: ${{ needs.changes.outputs.release_plugins }}
         run: |
-          index=false
-          if [ "$EVENT" = push ] || [ "$EVENT" = pull_request ]; then index=true; fi
           status=0
+          if [ "$EVENT" = workflow_dispatch ] && [ "$REF" != refs/heads/main ]; then
+            echo "::error::a manual run on $REF is not a required status; run it on main or open a pull request"
+            status=1
+          fi
           listed=()
           # expect <job> <true if this run had to run it>
           expect() {
@@ -1195,8 +1182,7 @@ jobs:
             esac
           }
           expect changes true
-          for job in fmt privacy actionlint; do expect "$job" "$CHECKS"; done
-          expect index "$index"
+          for job in fmt privacy index actionlint; do expect "$job" true; done
           for job in deny prepare clippy clippy-windows test-build test no-markers linux-checks \
             tokens-vpcd extension ext-e2e; do
             expect "$job" "$RUST"
@@ -1215,57 +1201,3 @@ jobs:
             fi
           done < <(jq -r 'keys[]' <<< "$NEEDS")
           exit "$status"
-
-  live:
-    needs: changes
-    if: needs.changes.outputs.live == 'true'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
-      - name: Install toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: ./.github/actions/pinned-toolchains
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: tests-ubuntu-24.04
-          save-if: false
-      - name: Fetch fixtures
-        run: cargo xtask fetch-fixtures
-      - name: Live tests
-        run: cargo test --workspace --all-features -- --ignored live_
-      # Docker comes with the runner image. Runs even if a live test failed: it does not
-      # depend on them.
-      - name: NCANode interop (XMLDSig, CMS)
-        if: ${{ !cancelled() }}
-        run: cargo xtask interop-ncanode
-
-  # The built-in modules' benchmarks and their thresholds (`bench_*`), in release, on the
-  # runner the thresholds are set for. By hand: they need a quiet machine.
-  bench:
-    needs: changes
-    if: needs.changes.outputs.bench == 'true'
-    runs-on: windows-2025
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-      - name: Install toolchain (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: ./.github/actions/pinned-toolchains
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          save-if: false
-      - name: Fetch fixtures
-        run: cargo xtask fetch-fixtures
-      - name: Benchmarks
-        run: cargo test --locked --release -p oncl-builtin-tests --test bench -- --ignored --test-threads=1
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
-          name: builtins-bench
-          path: target/builtins-bench.json
-          if-no-files-found: warn
