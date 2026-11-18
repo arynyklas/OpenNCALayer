@@ -12,11 +12,12 @@
 //! 4. a publisher's release outside its prefix, modules or bundles is left out.
 //!
 //! Each publisher is [`PublisherState::Active`], [`PublisherState::Retired`] (it publishes no
-//! more: no new versions, installed ones stay unless the owner revoked them),
+//! more: no new versions, installed ones stay unless revoked),
 //! [`PublisherState::Unavailable`] (its role, `publishers.json` or the delegations did not
 //! hold up, its `state` is unknown to this version, or `publishers.json` does not name it:
-//! its plugins are neither updated nor revoked) or [`PublisherState::Revoked`] (the verified
-//! `publishers.json` says so). An error or a missing entry never revokes.
+//! its plugins are not updated and stay installed, except versions the owner revoked in
+//! `publishers.json`) or [`PublisherState::Revoked`] (the verified `publishers.json` says
+//! so). An error or a missing entry never revokes a publisher.
 //!
 //! A catalog of the owner's index alone ([`Catalog::owner`]) behaves as the index did:
 //! every publisher is unavailable and only the index's releases are offered.
@@ -243,9 +244,11 @@ impl<'r> CatalogBuilder<'r> {
     }
 
     /// The catalog. A `publishers.json` that gives a publisher a built-in module, names a
-    /// publisher active without a delegated role, or misses an active one of the
-    /// delegations is not used: every publisher is unavailable. Each target left out is
-    /// logged once.
+    /// publisher active without a delegated role, or does not name (or names revoked) the
+    /// publisher of a delegated role is not used: every publisher is unavailable. Active
+    /// publishers' targets are offered; of a retired or unknown-state publisher's verified
+    /// role only the versions it revoked are read, so they stay withdrawn. Each target left
+    /// out of an active role is logged once.
     pub fn build(self) -> Catalog {
         let CatalogBuilder {
             index,
@@ -271,33 +274,47 @@ impl<'r> CatalogBuilder<'r> {
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
             let name = publisher.name();
-            let active = match publisher.standing() {
-                Standing::Active(active) => active,
-                Standing::Retired(_) => {
-                    states.insert(name.clone(), PublisherState::Retired);
-                    continue;
-                }
-                Standing::Unknown { state } => {
-                    warn!(publisher = %name, state = %state, "a publisher of an unknown state is unavailable");
-                    states.insert(name.clone(), PublisherState::Unavailable);
-                    continue;
+            let targets = roles
+                .iter()
+                .find(|(role, _)| role == name)
+                .and_then(|(_, targets)| *targets);
+            let (rules, state) = match publisher.standing() {
+                Standing::Active(rules) => (rules, PublisherState::Active),
+                Standing::Retired(rules) => (rules, PublisherState::Retired),
+                Standing::Unknown { state, rules } => {
+                    warn!(publisher = %name, state = ?state, "a publisher of an unknown state is unavailable");
+                    (rules, PublisherState::Unavailable)
                 }
                 Standing::Revoked { .. } => {
                     states.insert(name.clone(), PublisherState::Revoked);
                     continue;
                 }
             };
-            let Some(targets) = roles
-                .iter()
-                .find(|(role, _)| role == name)
-                .and_then(|(_, targets)| *targets)
-            else {
-                states.insert(name.clone(), PublisherState::Unavailable);
+            let Some(targets) = targets else {
+                let state = match state {
+                    PublisherState::Active => PublisherState::Unavailable,
+                    other => other,
+                };
+                states.insert(name.clone(), state);
                 continue;
             };
-            states.insert(name.clone(), PublisherState::Active);
+            states.insert(name.clone(), state);
+            if state != PublisherState::Active {
+                // Nothing is offered; only the versions it revoked itself are kept, so an
+                // installation that missed the withdrawal still withdraws them.
+                releases.extend(
+                    targets
+                        .iter()
+                        .filter_map(|(path, target)| {
+                            admit(publisher, rules, &owner, path, target).ok()
+                        })
+                        .map(PublisherRelease::into_release)
+                        .filter(|release| release.revoked),
+                );
+                continue;
+            }
             for (path, target) in targets {
-                match admit(publisher, active, &owner, path, target) {
+                match admit(publisher, rules, &owner, path, target) {
                     Ok(release) if release.offered_on(index.channel) => {
                         releases.push(release.into_release());
                     }

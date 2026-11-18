@@ -1,8 +1,9 @@
 //! `publishers.json`: the owner-signed rules of the third-party publishers (a target of the
-//! top-level targets of `tuf/v2`). It names every publisher ever approved, active or
-//! revoked, with the id prefix it owns, and for an active one the modules and bundles it may
-//! serve, the ports it replaces and the versions the owner revoked. The file is checked as a
-//! whole; a breach makes every publisher unavailable, never revoked.
+//! top-level targets of `tuf/v1`). It names every publisher ever approved, active, retired,
+//! revoked or of a state this version does not know, with the id prefix it owns, and for
+//! all but a revoked one the modules and bundles it may serve, the ports it replaces and the
+//! versions the owner revoked. The file is checked as a whole; a breach makes every
+//! publisher unavailable, never revoked.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -148,7 +149,7 @@ pub struct RevokedVersion {
 }
 
 /// What a publisher may publish while active, and the owner's rules that still hold once it
-/// retires.
+/// retires or takes a state this version does not know.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivePublisher {
     modules: BTreeSet<ModuleName>,
@@ -215,10 +216,13 @@ pub enum Standing {
         date: Option<Date>,
     },
     /// A `state` this version does not know: the publisher is unavailable, its installed
-    /// plugins stay as they are. The rest of the file is used.
+    /// plugins stay as they are unless the owner revoked their versions. Its rules are still
+    /// read and checked, and what it owns stays its own. The rest of the file is used.
     Unknown {
         /// The value read, cut to 32 characters.
         state: String,
+        /// Its rules, read as for an active publisher.
+        rules: ActivePublisher,
     },
 }
 
@@ -263,12 +267,13 @@ impl Publisher {
         }
     }
 
-    /// Its rules, if it is active or retired: what it owns and which versions the owner
-    /// revoked.
+    /// Its rules, unless it is revoked: what it owns and which versions the owner revoked.
     pub fn rules(&self) -> Option<&ActivePublisher> {
         match &self.standing {
-            Standing::Active(rules) | Standing::Retired(rules) => Some(rules),
-            _ => None,
+            Standing::Active(rules) | Standing::Retired(rules) | Standing::Unknown { rules, .. } => {
+                Some(rules)
+            }
+            Standing::Revoked { .. } => None,
         }
     }
 }
@@ -325,7 +330,7 @@ impl PublisherPolicy {
         self.publishers.iter().find(|p| p.name == *name)
     }
 
-    /// The publisher whose prefix covers `id`, active or revoked.
+    /// The publisher whose prefix covers `id`, whatever its standing.
     pub fn covering(&self, id: &str) -> Option<&Publisher> {
         self.publishers.iter().find(|p| p.id_prefix.covers(id))
     }
@@ -455,7 +460,7 @@ impl RawPublisher {
                     .map(|date| parse_date(&name, date))
                     .transpose()?,
             },
-            state @ ("active" | "retired") => {
+            state => {
                 let mut modules = BTreeSet::new();
                 for module in &self.modules {
                     let module = ModuleName::parse(module)?;
@@ -511,15 +516,15 @@ impl RawPublisher {
                     revoked_versions,
                     homepage: self.homepage,
                 };
-                if state == "active" {
-                    Standing::Active(rules)
-                } else {
-                    Standing::Retired(rules)
+                match state {
+                    "active" => Standing::Active(rules),
+                    "retired" => Standing::Retired(rules),
+                    other => Standing::Unknown {
+                        state: other.chars().take(MAX_STATE).collect(),
+                        rules,
+                    },
                 }
             }
-            other => Standing::Unknown {
-                state: other.chars().take(MAX_STATE).collect(),
-            },
         };
         Ok(Publisher {
             name,

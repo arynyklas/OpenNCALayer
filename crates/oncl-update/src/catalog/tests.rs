@@ -365,17 +365,15 @@ fn an_unknown_state_makes_only_that_publisher_unavailable() {
     );
     let next = PublisherName::parse("next").unwrap();
     assert_eq!(catalog.publisher_state(&next), PublisherState::Unavailable);
-    assert_eq!(
+    assert!(matches!(
         catalog
             .policy()
             .unwrap()
             .publisher(&next)
             .unwrap()
             .standing(),
-        &Standing::Unknown {
-            state: "suspended".to_owned()
-        }
-    );
+        Standing::Unknown { state, .. } if state == "suspended"
+    ));
     assert!(matches!(
         choose(&catalog, "kz.next.tool", "1.0.0"),
         PluginChoice::Keep
@@ -416,6 +414,92 @@ fn a_retired_publisher_keeps_its_modules() {
         refused(vec![retired, other]),
         CatalogError::SharedModule { .. }
     ));
+}
+
+#[test]
+fn an_unknown_state_still_enforces_the_owner_revoked_versions() {
+    let mut strange = ecc_entry();
+    strange["state"] = json!("suspended");
+    strange["revoked_versions"] =
+        json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    let mut broken = entry(MARKET, "1.3.0");
+    broken["url"] = json!("http://downloads.ecc.kz/p.onclp");
+    let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.2.0"), broken]);
+    for roles in [&[("ecc", Some(&targets))][..], &[("ecc", None)], &[]] {
+        let catalog = build(index(vec![]), vec![strange.clone()], roles);
+        assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
+        assert_eq!(catalog.releases().count(), 0);
+        assert!(catalog.rejected().is_empty());
+        assert!(matches!(
+            choose(&catalog, MARKET, "1.0.0"),
+            PluginChoice::Keep
+        ));
+        assert!(matches!(
+            choose(&catalog, MARKET, "1.1.0"),
+            PluginChoice::Withdrawn
+        ));
+    }
+}
+
+#[test]
+fn an_unknown_state_keeps_its_prefix_modules_and_ports() {
+    let mut strange = ecc_entry();
+    strange["state"] = json!("suspended");
+    assert!(matches!(
+        refused(vec![strange.clone(), second("kz.ecc.sub.")]),
+        CatalogError::NestedPrefix(..)
+    ));
+    let mut other = second("kz.other.");
+    other["modules"] = json!([SIGNER]);
+    assert!(matches!(
+        refused(vec![strange.clone(), other]),
+        CatalogError::SharedModule { .. }
+    ));
+    let mut taker = second("kz.other.");
+    taker["supersedes"] = json!({ PORT: "kz.other.market" });
+    strange["supersedes"] = json!({ PORT: MARKET });
+    assert!(matches!(
+        refused(vec![strange, taker]),
+        CatalogError::Supersedes { .. }
+    ));
+}
+
+#[test]
+fn a_retired_publisher_keeps_the_versions_it_revoked_withdrawn() {
+    let mut retired = ecc_entry();
+    retired["state"] = json!("retired");
+    let mut revoked = entry(MARKET, "1.1.0");
+    revoked["revoked"] = json!(true);
+    let mut broken = entry(MARKET, "1.3.0");
+    broken["url"] = json!("http://downloads.ecc.kz/p.onclp");
+    let targets = role(&[entry(MARKET, "1.0.0"), revoked, entry(MARKET, "1.2.0"), broken]);
+    let catalog = build(index(vec![]), vec![retired], &[("ecc", Some(&targets))]);
+    assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Retired);
+    assert!(catalog.releases().all(|r| r.revoked));
+    assert!(by_module(&catalog, SIGNER).is_none());
+    assert!(catalog.rejected().is_empty());
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.0.0"),
+        PluginChoice::Keep
+    ));
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.1.0"),
+        PluginChoice::Withdrawn
+    ));
+}
+
+#[test]
+fn a_retired_publisher_does_not_replace_its_port() {
+    let mut retired = superseding_ecc();
+    retired["state"] = json!("retired");
+    let owner = port(PORT, "1.0.0", SIGNER, MARKET);
+    let targets = role(&[entry(MARKET, "1.0.0")]);
+    let catalog = build(index(vec![owner]), vec![retired], &[("ecc", Some(&targets))]);
+    assert!(
+        catalog
+            .replacement(PORT, &core(), &INSTALL, &no_bad())
+            .is_none()
+    );
 }
 
 #[test]
