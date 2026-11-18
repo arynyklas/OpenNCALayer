@@ -1,0 +1,31 @@
+name: Test oracles
+description: >-
+  The programs the oracle tests compare the workspace with (docs/dev/development.md, «Что
+  нужно для тестов»): pyHanko, lxml, cryptography, asn1crypto and gostcrypto from
+  xtask/assets/oracle/requirements.txt in a virtualenv (`ONCL_PYHANKO_PYTHON`), and an
+  OpenSSL 3 that has `cms` and `pkcs12 -legacy`: the runner's on Linux, Git for Windows' on
+  Windows (the tests find it themselves), Homebrew's on macOS, which ships LibreSSL
+  (`ONCL_OPENSSL`). CI sets `ONCL_REQUIRE_ORACLES=1`, so a missing oracle fails the test
+  instead of skipping it.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.12"
+    - name: Oracle environment (pyHanko 0.38.0, OpenSSL)
+      shell: bash
+      run: |
+        python -m venv "$RUNNER_TEMP/oracle"
+        if [ "$RUNNER_OS" = Windows ]; then
+          py="$RUNNER_TEMP/oracle/Scripts/python.exe"
+        else
+          py="$RUNNER_TEMP/oracle/bin/python"
+        fi
+        "$py" -m pip install --require-virtualenv -r xtask/assets/oracle/requirements.txt
+        "$py" -c "import pyhanko, lxml, cryptography, asn1crypto, gostcrypto"
+        echo "ONCL_PYHANKO_PYTHON=$py" >> "$GITHUB_ENV"
+        if [ "$RUNNER_OS" = macOS ]; then
+          brew list openssl@3 > /dev/null 2>&1 || brew install openssl@3
+          echo "ONCL_OPENSSL=$(brew --prefix openssl@3)/bin/openssl" >> "$GITHUB_ENV"
+        fi

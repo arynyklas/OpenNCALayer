@@ -248,7 +248,9 @@ pub fn closure_report(root: &Path) -> anyhow::Result<String> {
     Ok(out)
 }
 
-fn target_directory(root: &Path) -> anyhow::Result<PathBuf> {
+/// The target directory of the workspace `root` (`CARGO_TARGET_DIR`, `build.target-dir`,
+/// else `target`), from `cargo metadata`.
+pub(crate) fn target_directory(root: &Path) -> anyhow::Result<PathBuf> {
     let metadata: Value = serde_json::from_str(&cargo(
         root,
         &[

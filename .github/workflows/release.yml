@@ -42,6 +42,8 @@ env:
   CARGO_TERM_COLOR: always
   # The Velopack CLI of the `velopack` crate in Cargo.lock.
   VPK_VERSION: 1.3.39-g8d2844f
+  # A test or check whose oracle program is missing fails instead of skipping.
+  ONCL_REQUIRE_ORACLES: "1"
 
 jobs:
   version:

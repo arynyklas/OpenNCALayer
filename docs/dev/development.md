@@ -4,7 +4,7 @@
 
 ## Коротко: от клона до зелёных тестов
 
-1. Поставьте `rustup`, OpenSSL 3 и Python 3.12 или новее (в CI стоит 3.12). На Linux до `cargo test --workspace` нужны ещё пакеты разработки для окон из раздела [«Сборка и запуск»](#сборка-и-запуск): `libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`. Подробности в разделе [«Что нужно для тестов»](#что-нужно-для-тестов).
+1. Поставьте `rustup`, OpenSSL 3 и Python 3.12 или новее (в CI стоит 3.12). На Linux до `cargo test --workspace` нужны ещё пакеты разработки для окон из раздела [«Сборка и запуск»](#сборка-и-запуск): `libfontconfig1-dev libxkbcommon-dev libwayland-dev`. Подробности в разделе [«Что нужно для тестов»](#что-нужно-для-тестов).
 2. Создайте для тестов отдельное окружение Python и укажите путь к нему:
    ```sh
    python3 -m venv .venv-oracle
@@ -24,10 +24,10 @@
 
 Нужен `rustup`. Версия Rust записана в `rust-toolchain.toml` и ставится автоматически.
 
-На Linux для окон нужны пакеты разработки fontconfig, xkbcommon, Wayland и GTK 3. В Debian и Ubuntu:
+На Linux для окон нужны пакеты разработки fontconfig, xkbcommon и Wayland. GTK не нужен: ни один крейт из `Cargo.lock` его не подключает. В Debian и Ubuntu:
 
 ```sh
-sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev
 ```
 
 Для запуска программы на Linux нужны ещё два компонента:
@@ -106,6 +106,14 @@ openncalayer run        # запустить сервер со значком; `
 
 Переменная `ONCL_DATA_DIR` задаёт другой каталог данных. При разработке укажите её (например, `ONCL_DATA_DIR=target/oncl-data`), чтобы не трогать свой рабочий профиль.
 
+## Как не ждать сборку
+
+Советы ниже основаны на замерах на машине разработки.
+
+- Каталог `target` держите на SSD или NVMe, не на HDD. На HDD одна сборка нескольких клонов давала очередь в 31 запрос и 60 мс на операцию при 0 % простоя, а NVMe рядом был свободен на 98 %. Один каталог тестов `oncl-cli` занимает около 6 ГБ.
+- Держите один общий `CARGO_TARGET_DIR` на клон и одну форму команды в нём. Новый каталог означает холодную сборку: весь workspace собирался на той машине около 12 минут. Если в том же каталоге сменить `-p oncl-cli` на `--workspace`, пересоберутся 107 сторонних и 42 своих крейта, которые уже были собраны, а при смене `-p oncl-pki` на `-p oncl-cli` и обратно 38 и 5. Смена линкера, тулчейна или `RUSTFLAGS` пересобирает всё.
+- В Windows исключите каталог сборки из проверки Defender в реальном времени или собирайте на Dev Drive (на SSD) в режиме производительности. Во время сборки Defender занимал около 0,67 ядра. Сколько времени это даёт, не измерялось.
+
 ## Что нужно для тестов
 
 Для сборки этот раздел не нужен, а `cargo test` без него упадёт. Часть тестов сверяет результат нашего кода с независимыми программами: OpenSSL, pyHanko, lxml и другими. Если нужной программы нет, тест падает, а не пропускается.
@@ -128,7 +136,7 @@ Docker, Node.js и браузеры для обычного `cargo test` не н
 
 ### 1. OpenSSL
 
-Нужен OpenSSL 3 с командами `cms` и `pkcs12 -legacy`. В CI он берётся так: на Linux пакет `openssl`, на Windows OpenSSL из Git for Windows, на macOS Homebrew (`openssl@3`).
+Нужен OpenSSL 3 с командами `cms` и `pkcs12 -legacy`. В CI он берётся так: на Linux тот, что уже есть в образе раннера, на Windows OpenSSL из Git for Windows, на macOS Homebrew (`openssl@3`).
 
 Linux. Обычно OpenSSL уже установлен. Если нет: `sudo apt-get install -y openssl`.
 
@@ -215,7 +223,7 @@ cargo xtask fetch-fixtures
 cargo test --workspace --all-features
 ```
 
-Сначала выполните шаги из раздела «Что нужно для тестов». Полный набор тестов большой, и в CI он разбит на три части. Когда работаете над одним крейтом, достаточно `cargo test -p <крейт>`.
+Сначала выполните шаги из раздела «Что нужно для тестов». Полный набор тестов большой, CI делит его на три части (раздел [«Что запускает CI»](#что-запускает-ci)). Когда работаете над одним крейтом, достаточно `cargo test -p <крейт>`.
 
 Тестовые ключи в `fixtures/synthetic/` синтетические, пароль у них `Qwerty12`. Их можно использовать на демо-странице. По умолчанию демо отправляет `chain: []`, и тогда подходят и синтетические ключи, и тестовые ключи NCANode. Вариант «синтетический тестовый корень» передаёт `root-gost2015`, и ключи других корней и промежуточного CA становятся недоступны.
 
@@ -232,11 +240,37 @@ cargo test --workspace --all-features -- --ignored live_
 - `live_ocsp_nca_test_certificate`: тестовый OCSP НУЦ (нужен `cargo xtask fetch-fixtures`);
 - `live_crl_nca_root_gost_2022`: CRL промышленного `crl.root.gov.kz`.
 
-Они зависят от внешних сервисов, поэтому в CI запускаются только по расписанию и вручную (`workflow_dispatch`, job `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
+Они зависят от внешних сервисов, поэтому в CI их запускает только job `live` в `scheduled.yml`: по понедельникам (03:00 UTC) и вручную (Actions → Scheduled → Run workflow, `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
 
 #### Встроенные модули без маркеров
 
 Тесты встроенных модулей (`cargo test -p oncl-builtin-tests`) проходят и без маркеров. Обычно ядро заменяет длинные строки запроса маркерами. При `ONCL_TEST_NO_MARKERS=1` модуль читает строки как есть, и все тесты проходят так же. Тест `markers` сравнивает ответы с маркерами и без них для каждой строки запросов покрытых методов, увеличенной до 20 000 байт (и для пачки документов длиннее 1 МиБ).
+
+#### Что собирается внутри сборки и тестов
+
+Встроенные модули (WebAssembly) собирает скрипт сборки `openncalayer` и `oncl-builtin-tests`. Сборка одна на весь каталог `target`: модули лежат в `target/builtins-target` (или в `$CARGO_TARGET_DIR/builtins-target`), и оба крейта, все профили и `cargo check` берут их оттуда. Если два скрипта сборки запустились одновременно, второй ждёт первого. Пересобираются модули, только когда меняются `src`, `Cargo.toml` или `plugin.toml` в `crates/oncl-pdk`, `crates/oncl-protocol` и `crates/oncl-builtin-*` (кроме `crates/oncl-builtin-tests`), корневые `Cargo.toml`, `Cargo.lock` или `rust-toolchain.toml`. `cargo xtask builtins build` собирает в тот же `builtins-target`. Если файл блокировки взять нельзя (файловая система без блокировок), сборка идёт без неё и Cargo выводит предупреждение.
+
+Модули можно собрать один раз и не собирать больше вовсе:
+
+```sh
+cargo xtask builtins build                      # → target/builtins
+export ONCL_BUILTINS_DIR="$PWD/target/builtins"  # в PowerShell: $env:ONCL_BUILTINS_DIR = "$PWD\target\builtins"
+```
+
+С `ONCL_BUILTINS_DIR` скрипт сборки берёт готовые модули и сверяет их с исходниками. Если исходники модулей изменились, сборка падает с ошибкой «built from other sources»: пересоберите модули той же командой.
+
+Отладочная сборка `openncalayer` пишет в окне «О программе» коммит `dev`. Коммит из git попадает только в сборку с `--release`: иначе после каждого коммита и `git checkout` крейт пересобирался бы вместе со своими тестами.
+
+Тесты плагинов сами собирают пример `crates/oncl-pdk/example` и порты из `plugins/`, один раз на процесс, в `target/plugin-example` и `target/plugin-ports`. Пример собирается в `release`. Порты по умолчанию собираются в профиле `plugin-test`: это `release` без LTO, в 16 единицах компиляции и с `opt-level = 1`. Профиль описан в `plugins/Cargo.toml`, так что тесты, CI и сборка вручную (`cargo build --profile plugin-test --manifest-path plugins/Cargo.toml …`) собирают одно и то же. Импорты хоста у портов в нём те же, что в `release`. У примера без LTO импортов больше, чем объявлено в его `plugin.toml`, поэтому он остаётся в `release`.
+
+Плагины выходят в релизы собранными в `release`. В CI тесты портов на такой сборке гоняет задача `plugins-release` (в `main` и ночью). Локально так:
+
+```sh
+ONCL_PORTS_PROFILE=release cargo test -p oncl-port-tests
+# в PowerShell: $env:ONCL_PORTS_PROFILE = "release"; cargo test -p oncl-port-tests
+```
+
+Модули портов лежат в `target/plugin-ports/wasm32-unknown-unknown/<профиль>/`. Кроме `release` и `plugin-test`, другие значения `ONCL_PORTS_PROFILE` тесты не принимают.
 
 ### Расширение браузера
 
@@ -307,6 +341,41 @@ cargo xtask licenses --check   # сторонние лицензии для ок
 cargo xtask index check updates/v1 --offline --base origin/main
 cargo xtask tuf check --no-timestamp --base origin/main
 ```
+
+### Что запускает CI
+
+Workflow `.github/workflows/ci.yml`. Обязательная проверка репозитория называется `check`: это последнее задание `ci.yml`. Оно падает, если упало или отменено любое задание, которое нужно этому запуску, или если такое задание пропущено. Задание, которое пропущено потому, что изменение его не касается, проверку не валит.
+
+Полный запуск идёт на каждый пуш в `main`, каждую ночь (02:30 UTC), вручную (Actions → CI → Run workflow) и на PR с меткой `full-ci`. Метку можно повесить на открытый PR: CI сразу начнёт полный запуск заново. Любая другая метка тоже перезапускает CI на PR и отменяет запуск, который шёл. Ручной запуск не на `main` проверяет всё, но `check` в нём красный: обязательным статусом он быть не может.
+
+Если у PR сменили базовую ветку, CI сам не перезапускается: отправьте новый коммит или снимите и снова повесьте метку.
+
+`live` (тесты с настоящими сервисами НУЦ) и `bench` лежат в отдельном workflow `scheduled.yml`: `live` идёт по понедельникам, оба можно запустить вручную. В `check` они не входят.
+
+Обычный PR проверяется так:
+
+- `fmt`, `privacy` (`privacy.yml`), `index` (`index-check.yml`) и `actionlint` идут в каждом запуске. Тяжёлые задания ждут `fmt` и `privacy`, поэтому ошибка форматирования не занимает раннеры на час.
+- Если PR меняет только документацию (`docs/`, кроме `docs/dev/sdk*.md`, а также `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, `CLAUDE.md`, `.agents/`, шаблоны issue и PR), сборки и тесты не запускаются. Если только `updates/` или `tuf/`, запускаются `index` и `site`.
+- Сборка пакетов (`win7`, `windows-package`, `linux-appimage`) и `builtins-x86` идут, только если PR меняет то, из чего они собираются: `crates/`, `xtask/`, `web/`, `deploy/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.gitattributes`, `.github/workflows/`, `.github/actions/`, `README.md`, `LICENSE`, `NOTICE`.
+- На macOS идёт одно задание `test-macos`: тесты крейтов, где есть свой код для macOS, и `oncl-cli`. Весь набор на macOS и `macos-universal` идут только в полном запуске.
+
+Как идут тесты:
+
+- `prepare` один раз на Linux собирает встроенные модули (`cargo xtask builtins build`) и скачивает тестовые данные NCANode. Остальные задания берут модули из артефакта через `ONCL_BUILTINS_DIR`, как `release.yml`. Модули принимаются, только если собраны из тех же исходников тем же тулчейном.
+- `test-build` на каждой ОС собирает все тесты один раз (`cargo nextest archive`). Задания `test (<ОС>, N/3)` запускают из архива по трети тестов (`--partition slice:N/3`). В архив не попадают файлы PDB, поэтому у упавшего в CI теста на Windows в backtrace нет номеров строк.
+- Задания `test` ничего не собирают, поэтому перед запуском скачивают пакеты всех платформ: `cargo fetch --locked` для workspace и для `plugins/`. Их офлайн читают из реестра cargo тесты лицензий и тесты SDK (замыкание зависимостей и перечень лицензий). Без этого шага они падают на любой ОС.
+- Настройки [cargo-nextest](https://nexte.st) лежат в `.config/nextest.toml`, профиль `ci`. Упавший тест перезапускается до двух раз. Если потом он прошёл, nextest помечает его FLAKY, а запуск всё равно красный. Тест дольше 30 минут снимается. Отчёт JUnit сохраняется артефактом `junit-<ОС>-<N>-<попытка>`.
+- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check` (на модулях профиля `plugin-test`), `plugin-version-check`, `interop-openssl`. На Windows и macOS doctest-ы идут только в полном запуске, в задании `doctests`.
+- В `main` и ночью `plugins-release` прогоняет тесты портов с `ONCL_PORTS_PROFILE=release`, то есть на модулях, собранных так же, как они выходят, и проверяет на этих модулях `plugin-ops-check`.
+- CI задаёт `ONCL_REQUIRE_ORACLES=1`: тест, которому не хватает внешней программы, в CI падает, а не пропускается.
+
+Те же тесты локально через nextest (`cargo install cargo-nextest`):
+
+```sh
+cargo nextest run --workspace --all-features --profile ci --run-ignored all
+```
+
+Обычный `cargo test` работает как раньше.
 
 ### Клиент демо-страницы
 
