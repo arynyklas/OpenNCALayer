@@ -476,7 +476,17 @@ pub fn embed(workspace: &Path) -> io::Result<()> {
         }
         None => {
             let target = std::env::var("TARGET").unwrap_or_default();
-            build(workspace, &shared_target_dir(&out_dir, &target), &out)?
+            let target_dir = shared_target_dir(&out_dir, &target);
+            if target_dir.parent() == Some(out_dir.as_path()) {
+                println!(
+                    "cargo:warning=OUT_DIR {} is not laid out as Cargo's \
+                     <target>/<profile>/build/<package>/out: the built-in modules are built \
+                     for this crate alone, in {}",
+                    out_dir.display(),
+                    target_dir.display()
+                );
+            }
+            build(workspace, &target_dir, &out)?
         }
     };
     write_if_changed(&out_dir.join("builtins.rs"), sources_rs(&built).as_bytes())
