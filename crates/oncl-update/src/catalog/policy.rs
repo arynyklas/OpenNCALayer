@@ -270,9 +270,9 @@ impl Publisher {
     /// Its rules, unless it is revoked: what it owns and which versions the owner revoked.
     pub fn rules(&self) -> Option<&ActivePublisher> {
         match &self.standing {
-            Standing::Active(rules) | Standing::Retired(rules) | Standing::Unknown { rules, .. } => {
-                Some(rules)
-            }
+            Standing::Active(rules)
+            | Standing::Retired(rules)
+            | Standing::Unknown { rules, .. } => Some(rules),
             Standing::Revoked { .. } => None,
         }
     }

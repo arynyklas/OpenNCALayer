@@ -420,8 +420,7 @@ fn a_retired_publisher_keeps_its_modules() {
 fn an_unknown_state_still_enforces_the_owner_revoked_versions() {
     let mut strange = ecc_entry();
     strange["state"] = json!("suspended");
-    strange["revoked_versions"] =
-        json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    strange["revoked_versions"] = json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
     let mut broken = entry(MARKET, "1.3.0");
     broken["url"] = json!("http://downloads.ecc.kz/p.onclp");
     let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.2.0"), broken]);
@@ -472,7 +471,12 @@ fn a_retired_publisher_keeps_the_versions_it_revoked_withdrawn() {
     revoked["revoked"] = json!(true);
     let mut broken = entry(MARKET, "1.3.0");
     broken["url"] = json!("http://downloads.ecc.kz/p.onclp");
-    let targets = role(&[entry(MARKET, "1.0.0"), revoked, entry(MARKET, "1.2.0"), broken]);
+    let targets = role(&[
+        entry(MARKET, "1.0.0"),
+        revoked,
+        entry(MARKET, "1.2.0"),
+        broken,
+    ]);
     let catalog = build(index(vec![]), vec![retired], &[("ecc", Some(&targets))]);
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Retired);
     assert!(catalog.releases().all(|r| r.revoked));
@@ -494,7 +498,11 @@ fn a_retired_publisher_does_not_replace_its_port() {
     retired["state"] = json!("retired");
     let owner = port(PORT, "1.0.0", SIGNER, MARKET);
     let targets = role(&[entry(MARKET, "1.0.0")]);
-    let catalog = build(index(vec![owner]), vec![retired], &[("ecc", Some(&targets))]);
+    let catalog = build(
+        index(vec![owner]),
+        vec![retired],
+        &[("ecc", Some(&targets))],
+    );
     assert!(
         catalog
             .replacement(PORT, &core(), &INSTALL, &no_bad())
