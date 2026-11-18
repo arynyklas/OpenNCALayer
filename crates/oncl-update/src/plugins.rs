@@ -101,6 +101,7 @@ pub fn plugin_bucket(install_id: &[u8; 16], id: &str, version: &Version) -> u8 {
 
 /// What to do with an installed plugin after accepting a new catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PluginChoice<'a> {
     /// Leave the installed version alone.
     Keep,
@@ -137,9 +138,10 @@ pub(crate) fn offerable(
 /// safe replacement exists the caller must unload it. An unlisted current version alone
 /// never causes a downgrade or removal.
 ///
-/// A publisher's plugin is kept as it is while its publisher is unavailable, and is
-/// [`PluginChoice::PublisherRevoked`] once its publisher is revoked. A version the owner
-/// revoked in `publishers.json` is revoked even if its publisher no longer lists it.
+/// A publisher's plugin is [`PluginChoice::PublisherRevoked`] once its publisher is revoked.
+/// While its publisher is unavailable it is kept as it is, unless the owner revoked its
+/// version in `publishers.json`: then it is [`PluginChoice::Withdrawn`]. A version the owner
+/// revoked is revoked even if its publisher no longer lists it.
 pub fn choose_plugin<'a>(
     catalog: &'a Catalog,
     id: &str,
@@ -151,6 +153,9 @@ pub fn choose_plugin<'a>(
     if let Some(publisher) = catalog.publisher_of(id) {
         match catalog.publisher_state(publisher) {
             PublisherState::Active => {}
+            PublisherState::Unavailable if catalog.is_revoked(id, current) => {
+                return PluginChoice::Withdrawn;
+            }
             PublisherState::Unavailable => return PluginChoice::Keep,
             PublisherState::Revoked => return PluginChoice::PublisherRevoked(publisher),
         }

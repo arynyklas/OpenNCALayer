@@ -329,18 +329,42 @@ fn a_publisher_publishers_json_does_not_name_is_revoked() {
 }
 
 #[test]
-fn an_unavailable_role_keeps_installed_plugins_as_they_are() {
+fn an_unavailable_role_keeps_installed_plugins_unless_the_owner_revoked_them() {
     let mut publisher = ecc_entry();
     publisher["revoked_versions"] =
         json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
     let catalog = build(index(vec![]), vec![publisher], &[("ecc", None)]);
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
     assert_eq!(catalog.releases().count(), 0);
-    assert!(!catalog.is_revoked(MARKET, &v("1.1.0")));
     assert!(matches!(
-        choose(&catalog, MARKET, "1.1.0"),
+        choose(&catalog, MARKET, "1.0.0"),
         PluginChoice::Keep
     ));
+    assert!(catalog.is_revoked(MARKET, &v("1.1.0")));
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.1.0"),
+        PluginChoice::Withdrawn
+    ));
+}
+
+#[test]
+fn an_owner_revocation_ignores_build_metadata() {
+    let mut publisher = ecc_entry();
+    publisher["revoked_versions"] =
+        json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.1.0+build.7")]);
+    let catalog = build(index(vec![]), vec![publisher], &[("ecc", Some(&targets))]);
+    let tagged = catalog
+        .releases()
+        .find(|r| r.version == v("1.1.0+build.7"))
+        .unwrap();
+    assert!(tagged.revoked);
+    assert!(catalog.is_revoked(MARKET, &v("1.1.0+x")));
+    assert!(!catalog.is_revoked(MARKET, &v("1.1.0-rc.1")));
+    let PluginChoice::Downgrade(fallback) = choose(&catalog, MARKET, "1.1.0+x") else {
+        panic!("the revoked version did not fall back");
+    };
+    assert_eq!(fallback.version, v("1.0.0"));
 }
 
 #[test]
@@ -381,6 +405,63 @@ fn a_builtin_module_in_publishers_json_makes_every_publisher_unavailable() {
         .build();
     assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
     assert!(by_module(&catalog, SIGNER).is_none());
+    let catalog = Catalog::builder(index(vec![]), Ok(policy(vec![ecc_entry()])))
+        .builtin_modules([SIGNER.to_ascii_uppercase()])
+        .role(&role_name("ecc"), &targets)
+        .build();
+    assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
+}
+
+#[test]
+fn an_owner_module_in_another_case_still_wins() {
+    let targets = role(&[entry(MARKET, "1.0.0")]);
+    let owner = port(
+        PORT,
+        "1.0.0",
+        &SIGNER.to_ascii_uppercase(),
+        "kz.owner.bundle",
+    );
+    let catalog = build(
+        index(vec![owner]),
+        vec![ecc_entry()],
+        &[("ecc", Some(&targets))],
+    );
+    assert!(matches!(
+        &catalog.rejected()[0].reason,
+        EntryRejection::OwnerModule(module) if module == SIGNER
+    ));
+}
+
+#[test]
+fn a_port_is_hidden_only_by_a_replacement_serving_all_its_modules_and_bundle() {
+    let mut wide = port(PORT, "1.0.0", SIGNER, MARKET);
+    wide["modules"] = json!([SIGNER, OTHER_MODULE]);
+    let mut both = entry(MARKET, "2.0.0");
+    both["modules"] = json!([SIGNER, OTHER_MODULE]);
+    let mut unbundled = both.clone();
+    unbundled["version"] = json!("3.0.0");
+    unbundled["replaces"] = Value::Null;
+    let cases = [
+        (vec![entry(MARKET, "1.0.0")], None),
+        (vec![unbundled], None),
+        (vec![both], Some("2.0.0")),
+    ];
+    for (entries, replaced_by) in cases {
+        let targets = role(&entries);
+        let catalog = build(
+            index(vec![wide.clone()]),
+            vec![superseding_ecc()],
+            &[("ecc", Some(&targets))],
+        );
+        assert!(catalog.rejected().is_empty());
+        let replacement = catalog.replacement(PORT, &core(), &INSTALL, &no_bad());
+        assert_eq!(
+            replacement.map(|r| r.version.to_string()).as_deref(),
+            replaced_by
+        );
+        let port_offered = offer(&catalog, &core(), &INSTALL, &no_bad(), |r| r.id == PORT);
+        assert_eq!(port_offered.is_some(), replaced_by.is_none());
+    }
 }
 
 fn superseding_ecc() -> Value {
@@ -534,7 +615,25 @@ fn each_broken_rule_leaves_a_publisher_target_out() {
         }),
         (
             Box::new(|e| e["url"] = json!("http://downloads.ecc.kz/p.onclp")),
-            |r| matches!(r, R::NotHttps),
+            |r| matches!(r, R::Url),
+        ),
+        (
+            Box::new(|e| e["url"] = json!("https://user@downloads.ecc.kz/p.onclp")),
+            |r| matches!(r, R::Url),
+        ),
+        (
+            Box::new(|e| e["url"] = json!("https://downloads.ecc.kz/p.onclp?x=1")),
+            |r| matches!(r, R::Url),
+        ),
+        (
+            Box::new(|e| e["url"] = json!("https://downloads.ecc.kz/p.onclp#top")),
+            |r| matches!(r, R::Url),
+        ),
+        (
+            Box::new(|e| {
+                e["url"] = json!(format!("https://downloads.ecc.kz/{}", "a".repeat(2048)));
+            }),
+            |r| matches!(r, R::Url),
         ),
         (Box::new(|e| e["modules"] = json!([])), |r| {
             matches!(r, R::Modules(0))
@@ -707,6 +806,42 @@ fn publishers_json_refuses_what_lies_outside_a_prefix() {
     assert!(matches!(
         refused(vec![superseding_ecc(), twice]),
         CatalogError::Supersedes { .. }
+    ));
+}
+
+#[test]
+fn publishers_json_refuses_unacceptable_display_names_and_homepages() {
+    for name in ["", " ", "ECC\u{7}", "OpenNCALayer", "ECC openncalayer"] {
+        let publisher = with(|p| p["display"]["kk"] = json!(name));
+        assert!(
+            matches!(refused(vec![publisher]), CatalogError::Display(_)),
+            "{name:?}"
+        );
+    }
+    let long = with(|p| p["display"]["en"] = json!("Е".repeat(129)));
+    assert!(matches!(refused(vec![long]), CatalogError::Display(_)));
+    for homepage in ["http://ecc.kz/", "https://ecc.kz/?a=1", "https://a@ecc.kz/"] {
+        let publisher = with(|p| p["homepage"] = json!(homepage));
+        assert!(
+            matches!(refused(vec![publisher]), CatalogError::Homepage(_)),
+            "{homepage}"
+        );
+    }
+}
+
+#[test]
+fn publishers_json_compares_module_and_bundle_names_ignoring_case() {
+    let mut taker = second("kz.second.");
+    taker["modules"] = json!([SIGNER.to_ascii_uppercase()]);
+    assert!(matches!(
+        refused(vec![ecc_entry(), taker]),
+        CatalogError::SharedModule { .. }
+    ));
+    let mut taker = second("kz.second.");
+    taker["bundles"] = json!([MARKET.to_ascii_uppercase()]);
+    assert!(matches!(
+        refused(vec![ecc_entry(), taker]),
+        CatalogError::SharedBundle { .. }
     ));
 }
 

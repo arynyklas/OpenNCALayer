@@ -5,16 +5,21 @@
 //! whole; a breach makes every publisher unavailable, never revoked.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use semver::Version;
 use serde::Deserialize;
 use time::{Date, Month};
 
 use super::names::{BundleName, IdPrefix, ModuleName, PROJECT_PREFIX, PluginId};
+use super::release::plain_https_url;
 use crate::tuf::{NameError, PublisherName};
 
+/// The longest translation of a publisher's display name, in characters.
+const MAX_DISPLAY: usize = 128;
+
 /// Why `publishers.json` is not used: every publisher is unavailable while it holds.
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CatalogError {
     /// The file is larger than [`PublisherPolicy::MAX_LEN`].
@@ -27,7 +32,7 @@ pub enum CatalogError {
     },
     /// The file is not JSON of the expected shape.
     #[error("publishers.json is malformed")]
-    Json(#[source] serde_json::Error),
+    Json(#[source] Arc<serde_json::Error>),
     /// The file has a `schema` this version does not read.
     #[error("publishers.json schema {0} is not supported")]
     Schema(u32),
@@ -108,10 +113,18 @@ pub enum CatalogError {
     /// The delegations have a role of a publisher the file does not name active.
     #[error("the delegations have a role of {0}, which is not an active publisher")]
     NotActive(PublisherName),
+    /// A translation of a publisher's display name is empty, longer than 128 characters,
+    /// has a control character or names the project.
+    #[error("the display name of publisher {0} is not acceptable")]
+    Display(PublisherName),
+    /// A publisher's homepage is not a plain `https://` URL of at most 2048 bytes.
+    #[error("the homepage of publisher {0} is not a plain https:// url")]
+    Homepage(PublisherName),
 }
 
 /// A publisher's display name in each interface language.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[non_exhaustive]
 pub struct PublisherDisplay {
     /// Russian.
     pub ru: String,
@@ -124,6 +137,7 @@ pub struct PublisherDisplay {
 /// A version of a publisher's plugin the owner revoked: revoked whatever the publisher's
 /// role says.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct RevokedVersion {
     /// The plugin, under the publisher's prefix.
     pub id: PluginId,
@@ -169,16 +183,24 @@ impl ActivePublisher {
         self.homepage.as_deref()
     }
 
-    /// Whether the owner revoked `version` of `id`.
+    /// Whether the owner revoked `version` of `id`. Build metadata does not tell versions
+    /// apart: revoking `1.1.0` revokes `1.1.0+anything`.
     pub fn revokes(&self, id: &str, version: &Version) -> bool {
-        self.revoked_versions
-            .iter()
-            .any(|r| r.id.as_str() == id && r.version == *version)
+        self.revoked_versions.iter().any(|r| {
+            r.id.as_str() == id
+                && (
+                    r.version.major,
+                    r.version.minor,
+                    r.version.patch,
+                    &r.version.pre,
+                ) == (version.major, version.minor, version.patch, &version.pre)
+        })
     }
 }
 
 /// Whether a publisher may publish.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Standing {
     /// It may, within these rules (if its role is also delegated and verified).
     Active(ActivePublisher),
@@ -262,11 +284,12 @@ impl PublisherPolicy {
                 max: PublisherPolicy::MAX_LEN,
             });
         }
-        let probe: Probe = serde_json::from_slice(bytes).map_err(CatalogError::Json)?;
+        let json = |e| CatalogError::Json(Arc::new(e));
+        let probe: Probe = serde_json::from_slice(bytes).map_err(json)?;
         if probe.schema != PublisherPolicy::SCHEMA {
             return Err(CatalogError::Schema(probe.schema));
         }
-        let raw: RawPolicy = serde_json::from_slice(bytes).map_err(CatalogError::Json)?;
+        let raw: RawPolicy = serde_json::from_slice(bytes).map_err(json)?;
         PublisherPolicy::try_from(raw)
     }
 
@@ -300,7 +323,11 @@ impl PublisherPolicy {
             let Some(active) = publisher.active() else {
                 continue;
             };
-            if let Some(module) = active.modules.iter().find(|m| builtin.contains(m.as_str())) {
+            if let Some(module) = active
+                .modules
+                .iter()
+                .find(|m| builtin.iter().any(|b| b.eq_ignore_ascii_case(m.as_str())))
+            {
                 return Err(CatalogError::BuiltinModule {
                     publisher: publisher.name.clone(),
                     module: module.clone(),
@@ -379,6 +406,26 @@ fn parse_date(publisher: &PublisherName, text: &str) -> Result<Date, CatalogErro
 impl RawPublisher {
     fn check(self) -> Result<Publisher, CatalogError> {
         let name = PublisherName::parse(&self.name)?;
+        let display = &self.display;
+        let acceptable = |text: &str| {
+            (1..=MAX_DISPLAY).contains(&text.chars().count())
+                && !text.trim().is_empty()
+                && !text.chars().any(char::is_control)
+                && !text.to_lowercase().contains("openncalayer")
+        };
+        if ![&display.ru, &display.kk, &display.en]
+            .into_iter()
+            .all(|text| acceptable(text))
+        {
+            return Err(CatalogError::Display(name));
+        }
+        if self
+            .homepage
+            .as_deref()
+            .is_some_and(|url| !plain_https_url(url))
+        {
+            return Err(CatalogError::Homepage(name));
+        }
         let id_prefix = IdPrefix::parse(&self.id_prefix)?;
         if id_prefix.overlaps(PROJECT_PREFIX) {
             return Err(CatalogError::ProjectPrefix(name));
@@ -473,6 +520,8 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
             .into_iter()
             .map(RawPublisher::check)
             .collect::<Result<Vec<_>, _>>()?;
+        // Names differing only in ASCII case count as the same: the registries match them
+        // exactly, but one publisher's name in another's case is too close to give out.
         let mut modules = BTreeSet::new();
         let mut bundles = BTreeSet::new();
         let mut ports = BTreeSet::new();
@@ -491,13 +540,21 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
             let Some(active) = publisher.active() else {
                 continue;
             };
-            if let Some(module) = active.modules.iter().find(|m| !modules.insert(*m)) {
+            if let Some(module) = active
+                .modules
+                .iter()
+                .find(|m| !modules.insert(m.as_str().to_ascii_lowercase()))
+            {
                 return Err(CatalogError::SharedModule {
                     module: module.clone(),
                     publisher: publisher.name.clone(),
                 });
             }
-            if let Some(bundle) = active.bundles.iter().find(|b| !bundles.insert(*b)) {
+            if let Some(bundle) = active
+                .bundles
+                .iter()
+                .find(|b| !bundles.insert(b.as_str().to_ascii_lowercase()))
+            {
                 return Err(CatalogError::SharedBundle {
                     bundle: bundle.clone(),
                     publisher: publisher.name.clone(),

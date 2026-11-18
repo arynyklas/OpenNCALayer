@@ -1003,6 +1003,8 @@ impl PluginService {
                 PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_) => {
                     lock(&self.pending).remove(id);
                 }
+                // A choice this core does not know leaves the plugin as it is.
+                _ => {}
             }
         }
     }

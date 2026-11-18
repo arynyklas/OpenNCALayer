@@ -36,8 +36,8 @@ pub use policy::{
     Standing,
 };
 pub use release::{
-    CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, PublisherRelease,
-    PublisherTarget,
+    CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, MAX_URL,
+    PublisherRelease, PublisherTarget,
 };
 
 use crate::index::Index;
@@ -46,6 +46,7 @@ use crate::tuf::{Delegated, PublisherName, RoleName, Target, TargetPath};
 
 /// What the catalog knows of a publisher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PublisherState {
     /// Its role was verified; its releases are in the catalog.
     Active,
@@ -153,12 +154,13 @@ impl Catalog {
     }
 
     /// Whether `version` of `id` is revoked: by its release in the catalog, or by the owner
-    /// in `publishers.json` for an active publisher's plugin, listed or not.
+    /// in `publishers.json` (build metadata aside), listed or not. The owner's revocation
+    /// holds while the publisher is active or unavailable; it needs `publishers.json`.
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
         self.releases()
             .any(|r| r.id == id && r.version == *version && r.revoked)
             || self.publisher_of(id).is_some_and(|publisher| {
-                self.publisher_state(publisher) == PublisherState::Active
+                self.publisher_state(publisher) != PublisherState::Revoked
                     && self
                         .policy
                         .as_ref()
@@ -170,8 +172,9 @@ impl Catalog {
 
     /// The release replacing the port `port`, if an active publisher replaces it
     /// (`supersedes`) and offers this installation a version of its plugin: the newest one
-    /// compatible with `core`, not revoked, not `bad` and rolled out to `install_id`. Until
-    /// then the port stays as it is.
+    /// compatible with `core`, not revoked, not `bad`, rolled out to `install_id`, serving
+    /// every module and standing for every bundle of the port's releases in the owner's
+    /// index. Until then the port stays as it is.
     pub fn replacement(
         &self,
         port: &str,
@@ -183,9 +186,20 @@ impl Catalog {
         if self.publisher_state(publisher.name()) != PublisherState::Active {
             return None;
         }
+        let ports = || self.index.plugins.iter().filter(|r| r.id == port);
+        let covers = |r: &PluginRelease| {
+            ports().all(|p| {
+                p.modules.iter().all(|m| r.modules.contains(m))
+                    && p.replaces.as_ref().is_none_or(|bundle| {
+                        r.replaces
+                            .as_ref()
+                            .is_some_and(|own| own.symname == bundle.symname)
+                    })
+            })
+        };
         self.releases
             .iter()
-            .filter(|r| r.id == plugin.as_str() && offerable(r, core, install_id, bad))
+            .filter(|r| r.id == plugin.as_str() && offerable(r, core, install_id, bad) && covers(r))
             .max_by(|a, b| a.version.cmp(&b.version))
     }
 }
@@ -314,11 +328,13 @@ fn check_delegations(
     Ok(())
 }
 
-/// What the owner's index claims: ids, and the ids serving each module and bundle.
+/// What the owner's index claims: ids, and the ids serving each module and bundle. Module
+/// and bundle names are keyed in ASCII lowercase: the registries match them exactly, but a
+/// name differing only in case is still too close to the owner's to give to a publisher.
 struct Owner<'i> {
     ids: BTreeSet<&'i str>,
-    modules: BTreeMap<&'i str, BTreeSet<&'i str>>,
-    bundles: BTreeMap<&'i str, BTreeSet<&'i str>>,
+    modules: BTreeMap<String, BTreeSet<&'i str>>,
+    bundles: BTreeMap<String, BTreeSet<&'i str>>,
 }
 
 impl<'i> Owner<'i> {
@@ -332,12 +348,16 @@ impl<'i> Owner<'i> {
             let id = release.id.as_str();
             owner.ids.insert(id);
             for module in &release.modules {
-                owner.modules.entry(module).or_default().insert(id);
+                owner
+                    .modules
+                    .entry(module.to_ascii_lowercase())
+                    .or_default()
+                    .insert(id);
             }
             if let Some(replaces) = &release.replaces {
                 owner
                     .bundles
-                    .entry(&replaces.symname)
+                    .entry(replaces.symname.to_ascii_lowercase())
                     .or_default()
                     .insert(id);
             }
@@ -383,15 +403,20 @@ fn admit(
                 .is_some_and(|plugin| plugin.as_str() == id)
         })
     };
-    if let Some(module) = modules
-        .iter()
-        .find(|m| owner.modules.get(m.as_str()).is_some_and(|p| !replaced(p)))
-    {
+    if let Some(module) = modules.iter().find(|m| {
+        owner
+            .modules
+            .get(&m.to_ascii_lowercase())
+            .is_some_and(|p| !replaced(p))
+    }) {
         return Err(EntryRejection::OwnerModule(module.clone()));
     }
-    if let Some(symname) =
-        bundle.filter(|s| owner.bundles.get(s.as_str()).is_some_and(|p| !replaced(p)))
-    {
+    if let Some(symname) = bundle.filter(|s| {
+        owner
+            .bundles
+            .get(&s.to_ascii_lowercase())
+            .is_some_and(|p| !replaced(p))
+    }) {
         return Err(EntryRejection::OwnerBundle(symname.clone()));
     }
     if active.revokes(id, &release.release().version) {

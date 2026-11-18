@@ -14,6 +14,23 @@ use crate::index::{Channel, Package, Sha256};
 use crate::plugins::{PluginName, PluginRelease, PluginReplaces};
 use crate::tuf::{PublisherName, Target, TargetPath};
 
+/// The longest URL of a publisher's package or homepage, in bytes.
+pub const MAX_URL: usize = 2048;
+
+/// Whether `url` is a plain `https://` URL of at most [`MAX_URL`] bytes: a host, no user
+/// info, query or fragment, no whitespace or control characters.
+pub(crate) fn plain_https_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else {
+        return false;
+    };
+    let authority = rest.split('/').next().unwrap_or_default();
+    url.len() <= MAX_URL
+        && !authority.is_empty()
+        && !authority.contains('@')
+        && !url.contains(['?', '#'])
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
 /// The `capabilities` of a publisher's release (`custom.oncl.capabilities`): the
 /// `[capabilities]` table of the package's manifest as a JSON object, kept as signed. This
 /// crate does not read the plugin format; the caller reads it into the plugin's
@@ -92,9 +109,10 @@ pub enum EntryRejection {
     /// `id` or `version` differ from the path.
     #[error("id or version differ from the target path")]
     PathMismatch,
-    /// `url` is not `https://`.
-    #[error("the package url is not https://")]
-    NotHttps,
+    /// `url` is not a plain `https://` URL of at most [`MAX_URL`] bytes: no user info,
+    /// query or fragment.
+    #[error("the package url is not a plain https:// url of at most 2048 bytes")]
+    Url,
     /// `rollout` is over 100.
     #[error("rollout {0} is over 100")]
     Rollout(u8),
@@ -110,9 +128,6 @@ pub enum EntryRejection {
     /// `capabilities` are not a [`DeclaredCapabilities`].
     #[error("invalid capabilities")]
     Capabilities(#[source] CapabilitiesError),
-    /// The publisher is not active in `publishers.json`.
-    #[error("the publisher is not active")]
-    PublisherNotActive,
     /// `id` is not under the publisher's prefix.
     #[error("the id is outside the publisher's prefix")]
     IdOutsidePrefix,
@@ -138,6 +153,7 @@ pub enum EntryRejection {
 /// A publisher's target left out of the catalog, and why.
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("publisher target {path} is left out")]
+#[non_exhaustive]
 pub struct EntryRejected {
     /// The target.
     pub path: TargetPath,
@@ -148,6 +164,7 @@ pub struct EntryRejected {
 
 /// A target path of a publisher's role: `plugins/<publisher>/<id>/<version>.onclp`.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PublisherTarget {
     /// The publisher.
     pub publisher: PublisherName,
@@ -245,8 +262,8 @@ impl PublisherRelease {
         if raw.id != place.id.as_str() || raw.version != place.version {
             return Err(EntryRejection::PathMismatch);
         }
-        if !raw.url.starts_with("https://") {
-            return Err(EntryRejection::NotHttps);
+        if !plain_https_url(&raw.url) {
+            return Err(EntryRejection::Url);
         }
         if raw.rollout > 100 {
             return Err(EntryRejection::Rollout(raw.rollout));
