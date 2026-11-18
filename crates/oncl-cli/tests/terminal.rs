@@ -232,8 +232,49 @@ fn inspect_command(w: &World) -> String {
         w.pki.rsa.alias
     )
 }
+/// Whether a pseudoconsole can be created here (it needs Windows 10 1809 or later and a
+/// console host the user may start).
+fn pseudoconsole_works() -> bool {
+    let (mut in_read, mut in_write, mut out_read, mut out_write) =
+        (0 as HANDLE, 0 as HANDLE, 0 as HANDLE, 0 as HANDLE);
+    let mut pseudo: HPCON = 0;
+    // SAFETY: plain Win32 calls with valid out-pointers; every handle that was created is
+    // closed before returning.
+    unsafe {
+        if CreatePipe(&mut in_read, &mut in_write, std::ptr::null(), 0) == 0 {
+            return false;
+        }
+        if CreatePipe(&mut out_read, &mut out_write, std::ptr::null(), 0) == 0 {
+            CloseHandle(in_read);
+            CloseHandle(in_write);
+            return false;
+        }
+        let created =
+            CreatePseudoConsole(COORD { X: 120, Y: 30 }, in_read, out_write, 0, &mut pseudo) == 0;
+        if created {
+            ClosePseudoConsole(pseudo);
+        }
+        for handle in [in_read, in_write, out_read, out_write] {
+            CloseHandle(handle);
+        }
+        created
+    }
+}
+
+/// Whether the test may go on: the pseudoconsole tests skip where none can be created,
+/// unless `ONCL_REQUIRE_ORACLES=1`.
+fn pseudoconsole_or_skip() -> bool {
+    static AVAILABLE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(pseudoconsole_works);
+    oncl_testkit::console::proceed(
+        "ConPTY pseudoconsole (CreatePseudoConsole failed)",
+        *AVAILABLE,
+    )
+}
 #[test]
 fn control_a_terminal_program_that_echoes_shows_typed_characters_in_the_harness() {
+    if !pseudoconsole_or_skip() {
+        return;
+    }
     // `set /p` reads a line with echo on: the harness must display the sentinel.
     let pty = Pty::start("cmd.exe /d /c \"set /p v=echo-control: \"");
     pty.wait_for("echo-control:", 20);
@@ -246,6 +287,9 @@ fn control_a_terminal_program_that_echoes_shows_typed_characters_in_the_harness(
 }
 #[test]
 fn interactive_secret_is_read_without_echo_and_the_console_mode_is_restored() {
+    if !pseudoconsole_or_skip() {
+        return;
+    }
     // The console-mode probe needs Python; its absence is a failure, not a skip.
     assert!(
         Command::new("python").arg("--version").output().is_ok(),
@@ -299,6 +343,9 @@ fn interactive_secret_is_read_without_echo_and_the_console_mode_is_restored() {
 }
 #[test]
 fn wrong_interactive_secret_and_ctrl_c_fail_closed_and_stay_silent() {
+    if !pseudoconsole_or_skip() {
+        return;
+    }
     let w = world();
     // A wrong password fails closed (exit 1) and is never shown.
     let pty = Pty::start(&inspect_command(&w));

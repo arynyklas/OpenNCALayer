@@ -7,6 +7,7 @@ use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 pub mod collide;
+pub mod console;
 #[cfg(windows)]
 pub mod dll;
 pub mod plugin;
