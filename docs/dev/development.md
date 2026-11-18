@@ -137,6 +137,7 @@ skipped: <имя теста> needs openssl (not found: tried `openssl`; ONCL_OPE
 | JDK, `keytool` в `PATH` | тест JKS в `oncl-cli` | `keytool -help` |
 | `python` в `PATH` | вспомогательные скрипты тестов (без сторонних пакетов) | `python --version` |
 | `certutil` из NSS (только Linux; пакет `libnss3-tools` или `nss-tools`) | тесты записи сертификата в базы браузеров в `oncl-trust` | `certutil -H` |
+| 7-Zip 25.01 или новее | тест `xtask` о том, что 7-Zip не пишет по символической ссылке за пределы каталога распаковки (`sevenzip_does_not_follow_a_link_out_of_the_output`) | `7z i` или `7zz i`. Ищется в `ONCL_7Z`, в Windows ещё в каталоге `7-Zip` внутри `Program Files`, затем `7z` в `PATH`. Пакеты Ubuntu (`7zip`, `p7zip`) старее: консольную версию `7zz` для Linux и macOS возьмите на [7-zip.org](https://www.7-zip.org/download.html) и укажите в `ONCL_7Z`. CI на Linux и macOS скачивает 26.06 со сверкой sha256, на Windows берёт 7-Zip из образа раннера |
 | Отдельное окружение Python | независимая проверка подписей: pyHanko, lxml, cryptography, asn1crypto, gostcrypto | см. ниже |
 | Тестовые данные NCANode | файлы для тестов | `cargo xtask fetch-fixtures` |
 
