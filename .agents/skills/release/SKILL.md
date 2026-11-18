@@ -12,6 +12,7 @@ Authoritative procedure: `docs/dev/release.md`. Read the section you need; do no
 - Never create, use or ask for signing keys (minisign, TUF). The maintainer signs locally.
 - Never run `cargo xtask sign` or `cargo xtask tuf update` with real keys, never push tags, never merge.
 - Never hand-edit `updates/v1/*` or `tuf/v1/*`; never resolve a `seq` conflict by hand.
+- Never upload to, replace assets of or delete a GitHub release. Releases are immutable once published, and a deleted release burns its tag (`docs/dev/release.md`, sections 1 and 5).
 
 ## Prepare the version bump (release.md, section 3, step 1)
 
