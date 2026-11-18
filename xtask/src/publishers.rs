@@ -22,7 +22,10 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, bail};
-use oncl_update::tuf::{KeyId, Limits, PathPattern, PublicKey, PublisherName, RoleName, Root};
+use oncl_update::tuf::ed25519::verify_threshold;
+use oncl_update::tuf::{
+    Envelope, KeyId, Limits, PathPattern, PublicKey, PublisherName, RoleKeys, RoleName, Root,
+};
 use oncl_update::{Index, Version};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -608,6 +611,50 @@ impl Registry {
         self.publishers.get(name)
     }
 
+    /// Р24: the newest role file of every active publisher in the repository `dir`
+    /// (`tuf/v2`) is signed by a threshold of the keys its `publisher.toml` keeps. A
+    /// rotation removes the old key only after the role was re-signed with the new one:
+    /// otherwise the clients would get a delegation their newest role does not verify under.
+    /// A publisher without a role file yet passes.
+    ///
+    /// # Errors
+    ///
+    /// Every publisher whose newest role file falls short, or a role file that cannot be
+    /// read.
+    pub fn check_newest_roles(&self, dir: &Path) -> anyhow::Result<()> {
+        let metadata = dir.join("metadata");
+        let mut short = Vec::new();
+        for p in self.active() {
+            let role = p.role();
+            let Some(version) = newest_role_version(&metadata, &role)? else {
+                continue;
+            };
+            let what = format!("metadata/{version}.{role}.json");
+            let bytes = fs::read(dir.join(&what)).with_context(|| format!("reading {what}"))?;
+            let envelope = Envelope::parse(&bytes, Limits::default().delegated, &what)
+                .map_err(|e| anyhow::anyhow!("{what}: {e}"))?;
+            let keys: BTreeMap<KeyId, PublicKey> =
+                p.keys.iter().map(|k| (k.key_id(), *k)).collect();
+            let role_keys = RoleKeys {
+                keyids: keys.keys().cloned().collect(),
+                threshold: p.threshold,
+            };
+            if let Err(e) = verify_threshold(&envelope, &role_keys, &keys, &what) {
+                short.push(format!(
+                    "publishers/{}: {e}: the newest role file is not signed by a threshold of \
+                     the keys publisher.toml keeps; the publisher re-signs the role with the \
+                     new key before the old key is removed (Р24)",
+                    p.name
+                ));
+            }
+        }
+        if short.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", short.join("\n"))
+        }
+    }
+
     /// No publisher's key is a key of one of `roots` (`(what, root)`): one key, one role.
     ///
     /// # Errors
@@ -772,6 +819,30 @@ fn entry(p: &Publisher) -> Value {
             value
         }
     }
+}
+
+/// The highest `N` of the files `<N>.<role>.json` in `metadata`, if any.
+fn newest_role_version(metadata: &Path, role: &RoleName) -> anyhow::Result<Option<u64>> {
+    let entries = match fs::read_dir(metadata) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", metadata.display())),
+    };
+    let suffix = format!(".{role}.json");
+    let mut newest = None;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("reading {}", metadata.display()))?;
+        let name = entry.file_name();
+        let Some(version) = name
+            .to_str()
+            .and_then(|n| n.strip_suffix(&suffix))
+            .and_then(|v| v.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        newest = newest.max(Some(version));
+    }
+    Ok(newest)
 }
 
 #[cfg(test)]

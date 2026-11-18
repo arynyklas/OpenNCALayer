@@ -312,7 +312,7 @@ cargo xtask index check updates/v1 --base origin/main
 2. job `timestamp` подписывает timestamp `tuf/v1`, как раньше, а следующим шагом `tuf timestamp --repo v2` над этим снимком. Ключ лежит в секрете `TUF_V2_TIMESTAMP_KEY` того же окружения `tuf-timestamp`: правила у двух ключей timestamp одинаковые, и отдельное окружение ничего бы не добавило. Каждый ключ виден только в `env` своего шага.
 3. `build` кладёт `tuf/v2` в `/tuf/v2/` рядом с `/tuf/v1/` и проверяет оба репозитория вместе (`tuf check --fail-on-expiring --min-days 3 --min-root-days 3`). `oracle` прогоняет python-tuf и по `tuf/v2`, а после деплоя `verify` запускает `tuf verify-published --repo v2`.
 
-Если `snapshot` падает, не деплоится ничего, в том числе `tuf/v1`: на Pages остаются прежние файлы, их timestamp действует до 7 дней.
+`tuf/v1` от `tuf/v2` не зависит. Если упал `snapshot` или шаг timestamp v2, `tuf/v1` подписывается и деплоится как обычно. `build` тогда скачивает с Pages опубликованный сейчас `tuf/v2` (timestamp, названный им снимок и все файлы дерева, которые уже отдаются), проверяет копию клиентом (`tuf verify-published --repo v2 --dir`) и публикует её ещё раз байт в байт. Если копию скачать или проверить не удалось, сайт уходит без `tuf/v2`. В обоих случаях после деплоя job `tuf-v2-status` делает запуск красным. Снимок, который опубликованный хранил рядом с собой для клиентов со старым `timestamp.json`, при таком повторе не сохраняется: его версии `build` не знает.
 
 Переменная нужна потому, что 404 бывает не только до первой публикации. Если Pages на время отключат или сайт отдаст пустую страницу, снимок, подписанный с нуля, не сверяется с опубликованным, и защита от отката пропускает этот запуск. Начинать с нуля решает владелец.
 
@@ -394,6 +394,7 @@ cargo xtask index check updates/v1 --base origin/main
 | `publishers-invalid`, `publishers-mismatch`, `publishers-not-listed`, `delegations-mismatch` | `tuf/v2`: `publishers/` нарушает правила; `publishers.json` или `delegations` в targets не то, что собрал бы `cargo xtask tuf update` |
 | `shared-key`, `index-diverged` | цепочки корней двух репозиториев (все версии, не только действующие) делят ключ иначе, чем общий ключ targets, бывший только ключом targets в обеих (или ключ издателя — ключ какого-либо корня); targets двух репозиториев перечисляют разные индексы |
 | `targets-key-differs` (предупреждение) | ключи targets двух корней разные: `cargo xtask tuf root --repo v2` после ротации targets в `tuf/v1` |
+| `role-key-removed` | `tuf/v2`, Р24: последний файл роли издателя не набирает порог ключами, которые остались в его `publisher.toml`. Старый ключ убирают только после того, как издатель переподписал роль новым; `tuf update` в этом случае ничего не пишет |
 | `role-expired`, `role-expiring` (предупреждения) | `tuf/v2`: срок роли издателя истёк или подходит; публикацию не останавливает |
 
 Остальные команды: `tuf init`, `tuf update [--refresh]`, `tuf timestamp --out <каталог> [--key-env ИМЯ | --key-file ФАЙЛ] [--anchor] [--index]`, `tuf root [--rotate-timestamp] [--rotate-snapshot] [--rotate-targets] [--rotate-root]`, `tuf verify-published --url <база> [--anchor] [--allow-missing]` (`--allow-missing` терпит ещё не опубликованный репозиторий). Для автоматизации и тестов пароль читается из файла: `--passphrase-file`; время подписи задаёт `--now`.

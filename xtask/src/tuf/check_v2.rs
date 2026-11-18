@@ -235,7 +235,13 @@ pub fn check(options: &Options) -> anyhow::Result<Outcome> {
                 );
             }
             if let Some(dir) = options.publishers {
-                compare_publishers(dir, options.index, &verified, &mut report.problems);
+                compare_publishers(
+                    dir,
+                    options.dir,
+                    options.index,
+                    &verified,
+                    &mut report.problems,
+                );
             }
             report.verified = Some(verified);
         }
@@ -961,9 +967,11 @@ pub fn rollback(old: &Snapshot, new: &Snapshot) -> Vec<Problem> {
 }
 
 /// `publishers.json` and the delegations of the newest targets against what `tuf update`
-/// makes of the registry in `dir`.
+/// makes of the registry in `dir`, and the newest role of each active publisher in the
+/// repository `repo` against the keys the registry keeps (Р24).
 fn compare_publishers(
     dir: &Path,
+    repo: &Path,
     index: Option<&Path>,
     verified: &Verified,
     problems: &mut Vec<Problem>,
@@ -978,6 +986,9 @@ fn compare_publishers(
     let roots: Vec<(&str, &Root)> = verified.roots.iter().map(|r| ("tuf/v2", r)).collect();
     if let Err(e) = registry.check_roots(&roots) {
         problems.push(problem("publishers-invalid", format!("{e:#}")));
+    }
+    if let Err(e) = registry.check_newest_roles(repo) {
+        problems.push(problem("role-key-removed", format!("{e:#}")));
     }
     if let Some(index) = index {
         match super::update::read_indexes(index).and_then(|files| {

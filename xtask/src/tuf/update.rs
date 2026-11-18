@@ -457,6 +457,7 @@ fn v2_inputs(options: &V2Options) -> anyhow::Result<V2Inputs> {
         .collect();
     registry.check_roots(&roots)?;
     registry.check_indexes(&parsed)?;
+    registry.check_newest_roles(options.out)?;
     let delegations = registry.delegations();
     let mut files = indexes;
     files.push((publishers::TARGET.to_owned(), registry.publishers_json()?));

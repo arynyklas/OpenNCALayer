@@ -1010,3 +1010,75 @@ fn a_role_file_larger_than_a_client_reads_is_refused() {
     let found = codes(&w.tree(t0()));
     assert!(found.contains(&"too-large"), "{found:?}");
 }
+
+/// Р24: the old key of a publisher goes only after the newest role is signed by the keys
+/// that stay; `tuf update` refuses before, `tuf check` finds it, and both accept after.
+#[test]
+fn a_publisher_key_is_removed_only_after_the_role_is_re_signed() {
+    let w = v2_world();
+    let new_key = format!(
+        "[[keys]]\npublic = \"{}\"\n",
+        publisher_key(5).public().to_hex()
+    );
+    // Step 1: the new key beside the old one.
+    w.write_publisher("ecc", 0, &new_key);
+    w.update(t0() + Duration::days(1), false).unwrap();
+    assert!(codes(&w.tree(t0() + Duration::days(1))).is_empty());
+
+    // The old key removed before the role was re-signed: refused, nothing written.
+    let before = files(&w.v2());
+    w.write_publisher("ecc", 5, "");
+    let e = w.update(t0() + Duration::days(2), false).unwrap_err();
+    let message = format!("{e:#}");
+    assert!(
+        message.contains("publishers/ecc") && message.contains("Р24"),
+        "{message}"
+    );
+    assert_eq!(files(&w.v2()), before);
+    let found = codes(&w.tree(t0() + Duration::days(2)));
+    assert!(found.contains(&"role-key-removed"), "{found:?}");
+
+    // Step 2: the role re-signed with the new key (under the delegation to both keys).
+    w.write_publisher("ecc", 0, &new_key);
+    w.release("ecc", 5, 2, &[("kz.ecc.market", "1.0.1")]);
+    assert!(codes(&w.tree(t0() + Duration::days(2))).is_empty());
+
+    // Step 3: now the old key goes.
+    w.write_publisher("ecc", 5, "");
+    w.update(t0() + Duration::days(3), false).unwrap();
+    let found = codes(&w.tree(t0() + Duration::days(3)));
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// `tuf verify-published --dir`: Pages verifies the served `tuf/v2` it fetched before it
+/// publishes it again; a copy whose snapshot was altered is refused.
+#[test]
+fn verify_published_reads_a_local_copy() {
+    use xtask::tuf::cli::{TufCommand, run};
+    use xtask::tuf::repo::Layout;
+
+    let w = v2_world();
+    let now = t0() + Duration::hours(1);
+    let site = w.publish("served", now, None);
+    let verify = |dir: &Path| {
+        run(TufCommand::VerifyPublished {
+            url: None,
+            dir: Some(dir.to_path_buf()),
+            anchor: Some(w.v2_anchor()),
+            allow_missing: false,
+            now: Some(now),
+            repo: Layout::V2,
+        })
+    };
+    verify(&site).unwrap();
+
+    let snapshot = files(&site)
+        .into_iter()
+        .find(|f| f.ends_with(".snapshot.json"))
+        .unwrap();
+    let path = site.join(&snapshot);
+    let mut bytes = fs::read(&path).unwrap();
+    bytes.push(b' ');
+    fs::write(&path, bytes).unwrap();
+    assert!(verify(&site).is_err());
+}
