@@ -451,7 +451,8 @@ pub fn embed(workspace: &Path) -> io::Result<()> {
 }
 
 /// Where [`embed`] builds the modules: `builtins-target` in the target directory of the
-/// build (`cargo xtask builtins build` builds in `target/builtins-target` too), so that
+/// build (`cargo xtask builtins build` builds in `builtins-target` of the same target
+/// directory, `CARGO_TARGET_DIR` included), so that
 /// every crate embedding the modules, every profile and `cargo check` share one build.
 /// Cargo gives a build script `out_dir` =
 /// `<target directory>[/<target>]/<profile>/build/<package>-<hash>/out`, the `<target>`
