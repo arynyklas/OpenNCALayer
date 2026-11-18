@@ -302,6 +302,50 @@ cargo xtask index check updates/v1 --base origin/main
 
 Каждая из этих ошибок делает запуск **красным**, и GitHub присылает письмо о падении запуска по расписанию. **Если job `timestamp` падает (репозиторий не проходит проверку, snapshot истёк, секрета нет), сайт не деплоится вовсе**: сайт без `metadata/timestamp.json` дал бы каждому клиенту 404, то есть ошибку проверки, а прежний сайт ещё отдаёт timestamp, действующий до 7 дней. Побочное следствие: пока TUF красный, не публикуются и индексы minisign и остальной сайт; чинить надо сразу (раздел ниже). Ручной запуск Pages (`workflow_dispatch`) **с ветки, отличной от `main`**, при существующем `tuf/v1` всегда красный: job `timestamp` на такой ветке не запускается, и без timestamp `build` останавливается с ошибкой; запускайте Pages только с `main` (`gh workflow run pages.yml --ref main`).
 
+### `tuf/v2` на Pages: что настроить владельцу
+
+Пока в дереве нет `tuf/v2/metadata/1.root.json`, Pages публикует только `tuf/v1`, байт в байт как раньше. Job `snapshot` в каждом запуске останавливается на первом шаге и секрет не читает.
+
+Когда файл появляется, `pages.yml` делает следующее:
+
+1. job `snapshot` (окружение `tuf-snapshot`, те же условия, что у `timestamp`: только `main`, только этот репозиторий, без кэша сборки, xtask собирается до секрета) спрашивает `https://arynyklas.github.io/OpenNCALayer/tuf/v2/metadata/timestamp.json`. Если файл есть, `cargo xtask tuf snapshot --previous …/tuf/v2/` продлевает опубликованный снимок и кладёт его рядом с новым. Если ответ 404, снимок подписывается с `--first-publication`, но только когда у окружения `tuf-snapshot` есть переменная `TUF_V2_FIRST_PUBLICATION=true`. Без неё запуск красный. Любой другой ответ тоже делает запуск красным.
+2. job `timestamp` подписывает timestamp `tuf/v1`, как раньше, а следующим шагом `tuf timestamp --repo v2` над этим снимком. Ключ лежит в секрете `TUF_V2_TIMESTAMP_KEY` того же окружения `tuf-timestamp`: правила у двух ключей timestamp одинаковые, и отдельное окружение ничего бы не добавило. Каждый ключ виден только в `env` своего шага.
+3. `build` кладёт `tuf/v2` в `/tuf/v2/` рядом с `/tuf/v1/` и проверяет оба репозитория вместе (`tuf check --fail-on-expiring --min-days 3 --min-root-days 3`). `oracle` прогоняет python-tuf и по `tuf/v2`, а после деплоя `verify` запускает `tuf verify-published --repo v2`.
+
+Если `snapshot` падает, не деплоится ничего, в том числе `tuf/v1`: на Pages остаются прежние файлы, их timestamp действует до 7 дней.
+
+Переменная нужна потому, что 404 бывает не только до первой публикации. Если Pages на время отключат или сайт отдаст пустую страницу, снимок, подписанный с нуля, не сверяется с опубликованным, и защита от отката пропускает этот запуск. Начинать с нуля решает владелец.
+
+Настройка, один раз, после церемонии `tuf/v2` (`cargo xtask tuf init --repo v2 --keys <каталог>` пишет `v2-snapshot.key` и `v2-timestamp.key`) и до слияния PR с `tuf/v2`:
+
+1. Окружение `tuf-snapshot`, которое пускает только `main` (через веб так же, как `tuf-timestamp` в церемонии выше):
+
+   ```sh
+   gh api -X PUT repos/arynyklas/OpenNCALayer/environments/tuf-snapshot \
+     -F 'deployment_branch_policy[protected_branches]=false' \
+     -F 'deployment_branch_policy[custom_branch_policies]=true'
+   gh api -X POST repos/arynyklas/OpenNCALayer/environments/tuf-snapshot/deployment-branch-policies \
+     -f name=main -f type=branch
+   ```
+
+   Если окружение уже появилось само (GitHub создаёт его при первом запуске job, который на него ссылается, без ограничений по веткам), эти же команды задают ему правило веток.
+2. Секреты, каждый только в своём окружении:
+
+   ```sh
+   gh secret set TUF_V2_SNAPSHOT_KEY --env tuf-snapshot < <каталог>/v2-snapshot.key
+   gh secret set TUF_V2_TIMESTAMP_KEY --env tuf-timestamp < <каталог>/v2-timestamp.key
+   ```
+
+   В PowerShell: `Get-Content -Raw <каталог>\v2-snapshot.key | gh secret set --env tuf-snapshot TUF_V2_SNAPSHOT_KEY`, так же для timestamp. Потом удалить оба файла: копий быть не должно, потерянный ключ заменяется ротацией (`tuf root --repo v2 --rotate-snapshot` или `--rotate-timestamp`). Среди секретов репозитория (`gh secret list` без `--env`) этих имён быть не должно.
+3. Разрешить первую публикацию: `gh variable set TUF_V2_FIRST_PUBLICATION --env tuf-snapshot --body true`.
+4. Слить PR с `tuf/v2`. Запуск Pages после слияния подписывает первый снимок.
+5. Когда `verify` зелёный, удалить переменную: `gh variable delete TUF_V2_FIRST_PUBLICATION --env tuf-snapshot`. Пока она стоит, а `tuf/v2` уже опубликован, запуск остаётся зелёным и пишет предупреждение.
+6. Проверить вручную: `cargo xtask tuf verify-published --repo v2 --url https://arynyklas.github.io/OpenNCALayer/tuf/v2/`.
+
+Сообщения красного запуска: «TUF_V2_SNAPSHOT_KEY is not set» или «TUF_V2_TIMESTAMP_KEY is not set» значат, что секрета нет в окружении (шаг 2); «no timestamp is published … (HTTP 404)» значит, что `tuf/v2` ещё не публиковался, а переменной нет (шаг 3).
+
+Еженедельный `tuf-expiry.yml` проверяет и `tuf/v2`: root и верхний `targets` по тем же порогам, что в `tuf/v1`. Сроки ролей издателей только предупреждают: `role-expired` и `role-expiring` видны как предупреждения запуска, запуск остаётся зелёным. Роль обновляет сам издатель.
+
 ### Если timestamp истёк (запуск красный, клиенты не обновляются)
 
 1. Открыть красный запуск Pages и прочитать сообщение: `expired`/`expiring` у `snapshot` или `targets` — продлить: `cargo xtask tuf update --keys <каталог> --refresh`, PR, слить (после слияния Pages подпишет timestamp); `expired` у `root` — `cargo xtask tuf root --keys <каталог>`; `no TUF repository`/`does not verify` — исправить репозиторий по коду из таблицы ниже; «the environment variable TUF_TIMESTAMP_KEY is not set» — секрет пропал: восстановить `gh secret set` из `timestamp.key` или сделать ротацию.

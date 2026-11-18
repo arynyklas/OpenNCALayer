@@ -7,6 +7,12 @@ name: TUF expiry
 # expired. It reads only the committed tree: the timestamp is Pages' business (the daily
 # Pages run goes red when it cannot be signed or published). With no `tuf/v1` and no anchor
 # yet (before the owner's ceremony) it passes. No secret is used or reachable here.
+#
+# With `tuf/v2` in the tree the same check covers it (its root and top-level targets as in
+# `tuf/v1`; its snapshot and timestamp are signed by Pages) and the roles of the publishers:
+# an expired or expiring role only warns (`warning[role-expired]`, `warning[role-expiring]`
+# become annotations of the run, which stays green): the publisher signs a new one, and a
+# publisher's role never stops the publication.
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -33,4 +39,12 @@ jobs:
         with:
           shared-key: pages
       - name: Check the expiry
-        run: cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45
+        run: |
+          status=0
+          cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45 \
+            > "$RUNNER_TEMP/expiry.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/expiry.log"
+          grep -E 'warning\[role-(expired|expiring)\]' "$RUNNER_TEMP/expiry.log" | while read -r line; do
+            echo "::warning::$line"
+          done || true
+          exit "$status"

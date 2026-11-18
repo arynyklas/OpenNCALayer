@@ -1,17 +1,28 @@
-//! The rules for the one secret CI holds, the online TUF timestamp key (`docs/dev/release.md`),
-//! checked on the workflow files as they are, and shown to catch what they claim to: the
-//! negative tests below break a copy of `pages.yml` (or add a workflow) in each way a mistake
-//! or an attack would, and each must be found.
+//! The rules for the secrets CI holds, the online TUF keys (`docs/dev/release.md`, section
+//! 7g; `docs/design/publishers.md`, "Онлайн-снимок v2"), checked on the workflow files as they
+//! are, and shown to catch what they claim to: the negative tests below break a copy of
+//! `pages.yml` (or add a workflow) in each way a mistake or an attack would, and each must be
+//! found.
 //!
-//! The rules:
+//! The secrets: `TUF_TIMESTAMP_KEY` and `TUF_V2_TIMESTAMP_KEY` in the environment
+//! `tuf-timestamp` (job `timestamp`), `TUF_V2_SNAPSHOT_KEY` in `tuf-snapshot` (job
+//! `snapshot`). The rules:
 //!
 //! - no workflow reads secrets wholesale (`toJSON(secrets)`, `secrets: inherit`, `secrets[`);
-//! - the secret and the environment are named in `pages.yml` only;
-//! - `pages.yml` is not triggered by a pull request; the secret is read once, in the `env` of
-//!   a step, of a job that runs in the environment `tuf-timestamp`, only in this repository,
-//!   only on `main`, only on events of the maintainers or the schedule (the `if` is parsed,
-//!   not searched), with `contents: read` and nothing else; every action in that job is
-//!   pinned by commit; the step with the secret is the last, uses no action and masks the key;
+//! - the secrets and the environments are named in `pages.yml` only;
+//! - `pages.yml` is not triggered by a pull request; each secret is read once, in the `env`
+//!   of a step, of a job that runs in the secret's environment, only in this repository, only
+//!   on `main`, only on events of the maintainers or the schedule (the `if` is parsed, not
+//!   searched), with `contents: read` and nothing else; an environment is used by the jobs of
+//!   its secrets only; every action in such a job is pinned by commit, none restores a cache
+//!   or uploads an artifact; xtask is built by an earlier step; the steps with a secret are
+//!   the last of the job, use no action and no `cargo`, and mask the key;
+//! - `snapshot` runs before `timestamp`, and `timestamp` and `build` do not run when it
+//!   failed; it starts from nothing (`--first-publication`) only when no timestamp is
+//!   published (HTTP 404) and the owner's variable `TUF_V2_FIRST_PUBLICATION` says so;
+//! - `tuf/v2` is published, checked by the oracle and verified after the deployment only
+//!   when `tuf/v2/metadata/1.root.json` is in the tree; the step that publishes `tuf/v1` does
+//!   not touch `tuf/v2`;
 //! - only the `deploy` job may write Pages.
 //!
 //! `pages.yml` is read by a small parser of the block-style YAML the workflows are written in
@@ -25,13 +36,18 @@ use std::path::PathBuf;
 
 use serde_json::{Map, Value};
 
-const SECRET: &str = "TUF_TIMESTAMP_KEY";
-const ENVIRONMENT: &str = "tuf-timestamp";
+/// The secrets CI holds, each with its environment and the job that reads it.
+const SECRETS: [(&str, &str, &str); 3] = [
+    ("TUF_TIMESTAMP_KEY", "tuf-timestamp", "timestamp"),
+    ("TUF_V2_TIMESTAMP_KEY", "tuf-timestamp", "timestamp"),
+    ("TUF_V2_SNAPSHOT_KEY", "tuf-snapshot", "snapshot"),
+];
+const ENVIRONMENTS: [&str; 2] = ["tuf-timestamp", "tuf-snapshot"];
 const PAGES: &str = "pages.yml";
 const REPOSITORY: &str = "arynyklas/OpenNCALayer";
-/// The events the timestamp job may run on: started by the maintainers or the schedule, never
-/// by a pull request. `repository_dispatch` (the upstream watcher) is there because `build`
-/// does not run without the timestamp this job makes.
+/// The events the jobs with a secret may run on: started by the maintainers or the schedule,
+/// never by a pull request. `repository_dispatch` (the upstream watcher) is there because
+/// `build` does not run without the timestamp they make.
 const EVENTS: [&str; 5] = [
     "push",
     "schedule",
@@ -39,6 +55,9 @@ const EVENTS: [&str; 5] = [
     "workflow_dispatch",
     "repository_dispatch",
 ];
+/// The parts a condition may have besides the three gates: they only let `timestamp` run
+/// when `snapshot` was skipped (no `tuf/v2`), never on another ref, repository or event.
+const ALLOWED_EXTRA: [&str; 2] = ["!cancelled()", "needs.snapshot.result != 'failure'"];
 
 // ---- a parser for the block-style YAML of the workflows ----
 
@@ -349,7 +368,7 @@ fn whole_group(text: &str) -> bool {
 }
 
 /// `github.ref == main && github.repository == ours && (event == a || event == b …)`, and
-/// nothing else.
+/// nothing else but [`ALLOWED_EXTRA`].
 fn check_condition(raw: &str) -> Result<(), String> {
     let text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let text = text
@@ -357,15 +376,15 @@ fn check_condition(raw: &str) -> Result<(), String> {
         .and_then(|t| t.strip_suffix("}}"))
         .map_or(text.as_str(), str::trim);
     let conjuncts = split_top(text, "&&");
-    if conjuncts.len() != 3 {
-        return Err(format!("the condition is not three `&&` parts: {text}"));
-    }
-    let (mut main, mut repository, mut events) = (false, false, false);
+    let (mut main, mut repository, mut events) = (0, 0, 0);
     for part in conjuncts.iter().map(|p| p.trim()) {
+        if ALLOWED_EXTRA.contains(&part) {
+            continue;
+        }
         if part == "github.ref == 'refs/heads/main'" {
-            main = true;
+            main += 1;
         } else if part == format!("github.repository == '{REPOSITORY}'") {
-            repository = true;
+            repository += 1;
         } else if whole_group(part) {
             let alternatives = split_top(&part[1..part.len() - 1], "||");
             for alt in alternatives {
@@ -378,12 +397,12 @@ fn check_condition(raw: &str) -> Result<(), String> {
                     return Err(format!("the event {event} is not one the job may run on"));
                 }
             }
-            events = true;
+            events += 1;
         } else {
             return Err(format!("not an allowed part of the condition: {part}"));
         }
     }
-    if main && repository && events {
+    if (main, repository, events) == (1, 1, 1) {
         Ok(())
     } else {
         Err(format!(
@@ -421,6 +440,106 @@ fn pinned(uses: &str) -> bool {
         .is_some_and(|r| r.len() == 40 && r.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// The environment `job` runs in (`environment: x` or `environment: {name: x}`).
+fn environment_of(job: &Value) -> Option<String> {
+    match job.get("environment")? {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(m) => Some(m.get("name").map_or_else(String::new, Value::to_string)),
+        other => Some(other.to_string()),
+    }
+}
+
+/// Every string inside `value`, joined.
+fn all_text(value: &Value) -> String {
+    let mut inside = Vec::new();
+    leaves(value, &mut Vec::new(), &mut inside);
+    inside
+        .into_iter()
+        .map(|(_, v)| v)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The rules of one job that reads secrets: `job_id` with the steps `secret_steps` reading
+/// them.
+fn check_secret_job(
+    job_id: &str,
+    job: &Value,
+    secret_steps: &BTreeSet<usize>,
+    bad: &mut Vec<String>,
+) {
+    match job.get("if").and_then(Value::as_str) {
+        Some(condition) => {
+            if let Err(e) = check_condition(condition) {
+                bad.push(format!("{job_id}: {e}"));
+            }
+        }
+        None => bad.push(format!("the job {job_id} has no `if`")),
+    }
+    if job.get("permissions") != Some(&serde_json::json!({"contents": "read"})) {
+        bad.push(format!(
+            "the job {job_id}'s permissions are not exactly `contents: read`"
+        ));
+    }
+    if job.get("env").is_some() {
+        bad.push(format!("the job {job_id} has an env of its own"));
+    }
+    let Some(steps) = job.get("steps").and_then(Value::as_array) else {
+        bad.push(format!("the job {job_id} has no steps"));
+        return;
+    };
+    for step in steps {
+        if let Some(uses) = step.get("uses").and_then(Value::as_str) {
+            if !pinned(uses) {
+                bad.push(format!(
+                    "an action in the secret's job {job_id} is not pinned by commit: {uses}"
+                ));
+            }
+            if uses.contains("upload-artifact") {
+                bad.push(format!("the secret's job {job_id} uploads an artifact"));
+            }
+            if uses.contains("cache") {
+                bad.push(format!(
+                    "the secret's job {job_id} restores a cache: {uses}"
+                ));
+            }
+        }
+    }
+    let Some(&first) = secret_steps.iter().next() else {
+        return;
+    };
+    if (first..steps.len()).any(|i| !secret_steps.contains(&i)) {
+        bad.push(format!(
+            "a step with a secret is not the last of its job {job_id}"
+        ));
+    }
+    let built = steps[..first].iter().any(|s| {
+        s.get("run")
+            .and_then(Value::as_str)
+            .is_some_and(|r| r.contains("cargo build -p xtask"))
+    });
+    if !built {
+        bad.push(format!(
+            "the job {job_id} does not build xtask before the secret"
+        ));
+    }
+    for &i in secret_steps {
+        let step = &steps[i];
+        if step.get("uses").is_some() {
+            bad.push(format!("a step with a secret in {job_id} is an action"));
+        }
+        let run = step.get("run").and_then(Value::as_str).unwrap_or("");
+        if !run.contains("::add-mask::$") {
+            bad.push(format!("a step with a secret in {job_id} does not mask it"));
+        }
+        if run.contains("cargo ") {
+            bad.push(format!(
+                "a step with a secret in {job_id} runs cargo (builds next to the key)"
+            ));
+        }
+    }
+}
+
 /// What is wrong with `pages_yml` (the text of `pages.yml`).
 fn check_pages(text: &str) -> Vec<String> {
     let mut bad = Vec::new();
@@ -445,98 +564,85 @@ fn check_pages(text: &str) -> Vec<String> {
     if triggers.iter().any(|t| t.starts_with("pull_request")) {
         bad.push("pages.yml is triggered by a pull request".to_owned());
     }
-    // Where the secret is read.
+    let Some(jobs) = doc.get("jobs").and_then(Value::as_object) else {
+        bad.push("pages.yml has no jobs".to_owned());
+        return bad;
+    };
+    // Where each secret is read.
     let mut all = Vec::new();
     leaves(&doc, &mut Vec::new(), &mut all);
-    let reads: Vec<&(Vec<String>, String)> = all
-        .iter()
-        .filter(|(_, v)| {
-            v.to_lowercase()
-                .contains(&format!("secrets.{}", SECRET.to_lowercase()))
-        })
-        .collect();
-    if reads.len() != 1 {
-        bad.push(format!(
-            "the secret is read {} times, not once",
-            reads.len()
-        ));
-        return bad;
-    }
-    let (path, value) = reads[0];
-    let shape = path.len() == 6
-        && path[0] == "jobs"
-        && path[2] == "steps"
-        && path[3].parse::<usize>().is_ok()
-        && path[4] == "env"
-        && path[5] == SECRET;
-    if !shape || *value != format!("${{{{ secrets.{SECRET} }}}}") {
-        bad.push(format!(
-            "the secret is read at {}, not in the env of a step",
-            path.join(".")
-        ));
-        return bad;
-    }
-    let (job_id, step_index) = (path[1].clone(), path[3].parse::<usize>().unwrap());
-    let jobs = doc["jobs"].as_object().expect("jobs");
-    let job = &jobs[&job_id];
-    // The environment is this job's alone.
-    for (id, other) in jobs {
-        let env = other.get("environment");
-        let named = env.is_some_and(|e| e.to_string().contains(ENVIRONMENT));
-        if (id == &job_id) != named {
+    let mut secret_steps: std::collections::BTreeMap<String, BTreeSet<usize>> =
+        std::collections::BTreeMap::new();
+    for (secret, environment, owner) in SECRETS {
+        let reads: Vec<&(Vec<String>, String)> = all
+            .iter()
+            .filter(|(_, v)| {
+                v.to_lowercase()
+                    .contains(&format!("secrets.{}", secret.to_lowercase()))
+            })
+            .collect();
+        if reads.len() != 1 {
             bad.push(format!(
-                "the environment {ENVIRONMENT} is not used by exactly the secret's job ({id})"
+                "the secret {secret} is read {} times, not once",
+                reads.len()
+            ));
+            continue;
+        }
+        let (path, value) = reads[0];
+        let shape = path.len() == 6
+            && path[0] == "jobs"
+            && path[2] == "steps"
+            && path[3].parse::<usize>().is_ok()
+            && path[4] == "env"
+            && path[5] == secret;
+        if !shape || *value != format!("${{{{ secrets.{secret} }}}}") {
+            bad.push(format!(
+                "the secret {secret} is read at {}, not in the env of a step",
+                path.join(".")
+            ));
+            continue;
+        }
+        if path[1] != owner {
+            bad.push(format!(
+                "the secret {secret} is read in the job {}, not {owner}",
+                path[1]
             ));
         }
-        if other.get("secrets").is_some() {
+        if environment_of(&jobs[&path[1]]).as_deref() != Some(environment) {
+            bad.push(format!(
+                "the job {} reads {secret} outside the environment {environment}",
+                path[1]
+            ));
+        }
+        if let Ok(step) = path[3].parse::<usize>() {
+            secret_steps
+                .entry(path[1].clone())
+                .or_default()
+                .insert(step);
+        }
+    }
+    // Each environment is used by the jobs of its secrets only.
+    for (id, job) in jobs {
+        if let Some(env) = environment_of(job) {
+            for environment in ENVIRONMENTS {
+                let owns = SECRETS.iter().any(|(_, e, o)| *e == environment && o == id);
+                if env.contains(environment) && !owns {
+                    bad.push(format!(
+                        "the environment {environment} is used by the job {id}, which holds none of its secrets"
+                    ));
+                }
+            }
+        }
+        if job.get("secrets").is_some() {
             bad.push(format!("the job {id} passes secrets to a workflow"));
         }
     }
-    // Its condition, permissions and environment.
-    match job.get("if").and_then(Value::as_str) {
-        Some(condition) => {
-            if let Err(e) = check_condition(condition) {
-                bad.push(e);
-            }
-        }
-        None => bad.push("the job has no `if`".to_owned()),
+    for (job_id, steps) in &secret_steps {
+        check_secret_job(job_id, &jobs[job_id], steps, &mut bad);
     }
-    if job.get("permissions") != Some(&serde_json::json!({"contents": "read"})) {
-        bad.push("the job's permissions are not exactly `contents: read`".to_owned());
-    }
-    if job.get("env").is_some() {
-        bad.push("the job has an env of its own".to_owned());
-    }
-    // Its steps: every action pinned, the step with the secret last and plain.
-    let steps = job["steps"].as_array().expect("steps");
-    for step in steps {
-        if let Some(uses) = step.get("uses").and_then(Value::as_str) {
-            if !pinned(uses) {
-                bad.push(format!(
-                    "an action in the secret's job is not pinned by commit: {uses}"
-                ));
-            }
-            if uses.contains("upload-artifact") {
-                bad.push("the secret's job uploads an artifact".to_owned());
-            }
-        }
-    }
-    if step_index != steps.len() - 1 {
-        bad.push("the step with the secret is not the last of its job".to_owned());
-    }
-    let step = &steps[step_index];
-    if step.get("uses").is_some() {
-        bad.push("the step with the secret is an action".to_owned());
-    }
-    if !step
-        .get("run")
-        .and_then(Value::as_str)
-        .is_some_and(|r| r.contains("::add-mask::$"))
-    {
-        bad.push("the step with the secret does not mask it".to_owned());
-    }
-    // The graph of jobs: nothing is deployed unless the timestamp job did not fail and the
-    // oracle did not fail; the oracle has no secret, no environment and writes no artifact.
+    // The graph of jobs: nothing is deployed unless `snapshot` and `timestamp` did not fail
+    // and the oracle did not fail; the oracle has no secret, no environment and writes no
+    // artifact.
     let list = |v: Option<&Value>| -> Vec<String> {
         match v {
             Some(Value::String(s)) => vec![s.clone()],
@@ -552,15 +658,26 @@ fn check_pages(text: &str) -> Vec<String> {
             .and_then(|j| j.get(key))
             .and_then(Value::as_str)
             .unwrap_or("")
-            .to_owned()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
     };
-    if !list(jobs.get("build").and_then(|j| j.get("needs"))).contains(&"timestamp".to_owned()) {
-        bad.push("build does not need the timestamp job".to_owned());
+    let needs = |job: &str| list(jobs.get(job).and_then(|j| j.get("needs")));
+    if !needs("timestamp").contains(&"snapshot".to_owned()) {
+        bad.push("timestamp does not need the snapshot job".to_owned());
     }
-    if !text("build", "if").contains("needs.timestamp.result != 'failure'") {
-        bad.push("build runs although the timestamp job failed".to_owned());
+    if !text("timestamp", "if").contains("needs.snapshot.result != 'failure'") {
+        bad.push("timestamp runs although the snapshot job failed".to_owned());
     }
-    let deploy_needs = list(jobs.get("deploy").and_then(|j| j.get("needs")));
+    for needed in ["snapshot", "timestamp"] {
+        if !needs("build").contains(&needed.to_owned()) {
+            bad.push(format!("build does not need the {needed} job"));
+        }
+        if !text("build", "if").contains(&format!("needs.{needed}.result != 'failure'")) {
+            bad.push(format!("build runs although the {needed} job failed"));
+        }
+    }
+    let deploy_needs = needs("deploy");
     for needed in ["build", "oracle"] {
         if !deploy_needs.contains(&needed.to_owned()) {
             bad.push(format!("deploy does not need {needed}"));
@@ -586,16 +703,13 @@ fn check_pages(text: &str) -> Vec<String> {
                     "the oracle job's permissions are not exactly `contents: read`".to_owned(),
                 );
             }
-            let mut inside = Vec::new();
-            leaves(oracle, &mut Vec::new(), &mut inside);
-            if inside
-                .iter()
-                .any(|(_, v)| v.to_lowercase().contains("secrets.") || v.contains("upload-"))
-            {
+            let inside = all_text(oracle);
+            if inside.to_lowercase().contains("secrets.") || inside.contains("upload-") {
                 bad.push("the oracle job reads secrets or uploads an artifact".to_owned());
             }
         }
     }
+    check_v2_publication(jobs, &mut bad);
     // Writing Pages: the deploy job only.
     let writes = |permissions: Option<&Value>| {
         permissions.and_then(Value::as_object).is_some_and(|p| {
@@ -614,6 +728,90 @@ fn check_pages(text: &str) -> Vec<String> {
     bad
 }
 
+/// The step of `job` with the id `id`.
+fn step_with_id<'a>(job: Option<&'a Value>, id: &str) -> Option<&'a Value> {
+    job?.get("steps")?
+        .as_array()?
+        .iter()
+        .find(|s| s.get("id").and_then(Value::as_str) == Some(id))
+}
+
+fn field<'a>(step: Option<&'a Value>, key: &str) -> &'a str {
+    step.and_then(|s| s.get(key))
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+/// `tuf/v2`: the first publication only on HTTP 404 and the owner's variable; published,
+/// checked and verified only when its root is in the tree; the `tuf/v1` step without it.
+fn check_v2_publication(jobs: &Map<String, Value>, bad: &mut Vec<String>) {
+    let snapshot = jobs.get("snapshot");
+    let probe = step_with_id(snapshot, "published");
+    let probe_env = probe.and_then(|s| s.get("env"));
+    if probe_env
+        .and_then(|e| e.get("FIRST"))
+        .and_then(Value::as_str)
+        != Some("${{ vars.TUF_V2_FIRST_PUBLICATION }}")
+    {
+        bad.push(
+            "the probe of the published tuf/v2 does not read TUF_V2_FIRST_PUBLICATION".to_owned(),
+        );
+    }
+    let probe_run = field(probe, "run");
+    if !(probe_run.contains("404)") && probe_run.contains("[ \"$FIRST\" != true ]")) {
+        bad.push(
+            "the first publication of tuf/v2 is not limited to HTTP 404 with TUF_V2_FIRST_PUBLICATION=true"
+                .to_owned(),
+        );
+    }
+    let sign = step_with_id(snapshot, "sign");
+    if sign
+        .and_then(|s| s.get("env"))
+        .and_then(|e| e.get("MODE"))
+        .and_then(Value::as_str)
+        != Some("${{ steps.published.outputs.mode }}")
+    {
+        bad.push("the snapshot is not signed in the mode the probe decided".to_owned());
+    }
+    let sign_run = field(sign, "run");
+    if !(sign_run.contains("tuf snapshot --out") && sign_run.contains("--previous \"$PUBLISHED\""))
+    {
+        bad.push("the snapshot does not extend the published one".to_owned());
+    }
+    for (id, other) in jobs {
+        if id != "snapshot" && all_text(other).contains("--first-publication") {
+            bad.push(format!("the job {id} signs a first publication of tuf/v2"));
+        }
+    }
+    let build = jobs.get("build");
+    if field(step_with_id(build, "tuf"), "run").contains("v2") {
+        bad.push("the step that publishes tuf/v1 touches tuf/v2".to_owned());
+    }
+    let publish = field(step_with_id(build, "tuf_v2"), "run");
+    if !publish.starts_with("if [ ! -f tuf/v2/metadata/1.root.json ]; then") {
+        bad.push(
+            "the publication of tuf/v2 is not gated on tuf/v2/metadata/1.root.json".to_owned(),
+        );
+    }
+    for (job, what) in [("oracle", "site/tuf/v2"), ("verify", "--repo v2")] {
+        let gated = jobs
+            .get(job)
+            .and_then(|j| j.get("steps"))
+            .and_then(Value::as_array)
+            .is_some_and(|steps| {
+                steps.iter().any(|s| {
+                    field(Some(s), "run").contains(what)
+                        && field(Some(s), "if") == "needs.build.outputs.tuf_v2 == 'signed'"
+                })
+            });
+        if !gated {
+            bad.push(format!(
+                "the job {job} does not check tuf/v2 when (and only when) it is published"
+            ));
+        }
+    }
+}
+
 /// What is wrong with the workflows `(file name, text)`.
 fn check_workflows(files: &[(String, String)]) -> Vec<String> {
     let mut bad = Vec::new();
@@ -626,11 +824,12 @@ fn check_workflows(files: &[(String, String)]) -> Vec<String> {
                 bad.push(format!("{name} reads secrets wholesale ({banned})"));
             }
         }
-        if name != PAGES && (lower.contains(&SECRET.to_lowercase()) || lower.contains(ENVIRONMENT))
-        {
-            bad.push(format!(
-                "{name} names the TUF timestamp secret or environment"
-            ));
+        let named = SECRETS
+            .iter()
+            .any(|(s, _, _)| lower.contains(&s.to_lowercase()))
+            || ENVIRONMENTS.iter().any(|e| lower.contains(e));
+        if name != PAGES && named {
+            bad.push(format!("{name} names a TUF secret or environment"));
         }
     }
     match files.iter().find(|(n, _)| n == PAGES) {
@@ -662,7 +861,7 @@ fn real_workflows() -> Vec<(String, String)> {
 }
 
 #[test]
-fn the_workflows_keep_the_rules_for_the_timestamp_secret() {
+fn the_workflows_keep_the_rules_for_the_online_secrets() {
     let bad = check_workflows(&real_workflows());
     assert!(bad.is_empty(), "{bad:#?}");
 }
@@ -880,8 +1079,40 @@ fn what_the_parser_does_not_read_is_an_error_and_not_a_pass() {
 #[test]
 fn the_graph_of_jobs_is_pinned() {
     assert_found(
-        mutated("    needs: timestamp\n", "", &[]),
+        mutated(
+            "    needs: [snapshot, timestamp]\n",
+            "    needs: [snapshot]\n",
+            &[],
+        ),
         "build does not need the timestamp job",
+    );
+    assert_found(
+        mutated(
+            "    needs: [snapshot, timestamp]\n",
+            "    needs: [timestamp]\n",
+            &[],
+        ),
+        "build does not need the snapshot job",
+    );
+    assert_found(
+        mutated(
+            "needs.snapshot.result != 'failure' && needs.timestamp",
+            "needs.timestamp",
+            &[],
+        ),
+        "build runs although the snapshot job failed",
+    );
+    assert_found(
+        mutated("  timestamp:\n    needs: snapshot\n", "  timestamp:\n", &[]),
+        "timestamp does not need the snapshot job",
+    );
+    assert_found(
+        mutated(
+            "      !cancelled() && needs.snapshot.result != 'failure'\n",
+            "      !cancelled()\n",
+            &[],
+        ),
+        "timestamp runs although the snapshot job failed",
     );
     assert_found(
         mutated("needs.timestamp.result != 'failure' && ", "", &[]),
@@ -942,4 +1173,196 @@ fn white_space_does_not_hide_a_wholesale_read_of_secrets() {
     ] {
         assert_found(mutated("", "", &[("x.yml", text)]), "wholesale");
     }
+}
+
+#[test]
+fn the_v2_secrets_keep_the_rules() {
+    // Read twice, outside its job, or outside its environment.
+    assert_found(
+        mutated(
+            "    environment: tuf-snapshot\n",
+            "    environment: tuf-snapshot\n    env:\n      K: ${{ secrets.TUF_V2_SNAPSHOT_KEY }}\n",
+            &[],
+        ),
+        "TUF_V2_SNAPSHOT_KEY is read 2 times",
+    );
+    assert_found(
+        mutated(
+            "    environment: tuf-snapshot\n",
+            "    environment: tuf-timestamp\n",
+            &[],
+        ),
+        "reads TUF_V2_SNAPSHOT_KEY outside the environment tuf-snapshot",
+    );
+    let moved: Vec<(String, String)> = mutated(
+        "          TUF_V2_TIMESTAMP_KEY: ${{ secrets.TUF_V2_TIMESTAMP_KEY }}\n",
+        "",
+        &[],
+    )
+    .into_iter()
+    .map(|(n, t)| {
+        let t = t.replacen(
+            "          TUF_V2_SNAPSHOT_KEY: ${{ secrets.TUF_V2_SNAPSHOT_KEY }}\n",
+            "          TUF_V2_SNAPSHOT_KEY: ${{ secrets.TUF_V2_SNAPSHOT_KEY }}\n          TUF_V2_TIMESTAMP_KEY: ${{ secrets.TUF_V2_TIMESTAMP_KEY }}\n",
+            1,
+        );
+        (n, t)
+    })
+    .collect();
+    assert_found(
+        moved,
+        "TUF_V2_TIMESTAMP_KEY is read in the job snapshot, not timestamp",
+    );
+    // Another job in an environment, or another workflow naming the new names.
+    assert_found(
+        mutated(
+            "  oracle:\n    needs: build\n",
+            "  oracle:\n    needs: build\n    environment: tuf-snapshot\n",
+            &[],
+        ),
+        "tuf-snapshot is used by the job oracle",
+    );
+    for name in [
+        "TUF_V2_SNAPSHOT_KEY",
+        "TUF_V2_TIMESTAMP_KEY",
+        "tuf-snapshot",
+    ] {
+        let other = format!("name: x\njobs:\n  a:\n    steps:\n      - run: echo {name}\n");
+        assert_found(mutated("", "", &[("evil.yml", &other)]), "evil.yml names");
+    }
+    // The snapshot job: a cache, cargo next to the key, a later step, no mask, no build.
+    assert_found(
+        mutated(
+            "      - name: Is there a tuf/v2?\n",
+            "      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3\n      - name: Is there a tuf/v2?\n",
+            &[],
+        ),
+        "restores a cache",
+    );
+    assert_found(
+        mutated(
+            "            previous) target/debug/xtask tuf snapshot",
+            "            previous) cargo xtask tuf snapshot",
+            &[],
+        ),
+        "runs cargo",
+    );
+    assert_found(
+        mutated(
+            "            echo \"TUF_SNAPSHOT_EOF\"\n          } >> \"$GITHUB_OUTPUT\"\n",
+            "            echo \"TUF_SNAPSHOT_EOF\"\n          } >> \"$GITHUB_OUTPUT\"\n      - run: echo later\n",
+            &[],
+        ),
+        "not the last of its job snapshot",
+    );
+    assert_found(
+        mutated(
+            "          echo \"::add-mask::$TUF_V2_SNAPSHOT_KEY\"\n",
+            "",
+            &[],
+        ),
+        "in snapshot does not mask",
+    );
+    assert_found(
+        mutated(
+            "        if: steps.tree.outputs.exists == 'true'\n        run: cargo build -p xtask\n",
+            "        if: steps.tree.outputs.exists == 'true'\n        run: echo no build\n",
+            &[],
+        ),
+        "does not build xtask before the secret",
+    );
+    // The v2 timestamp step must be at the end of `timestamp` too.
+    assert_found(
+        mutated(
+            "      - name: Sign the v2 timestamp\n",
+            "      - run: echo between\n      - name: Sign the v2 timestamp\n",
+            &[],
+        ),
+        "not the last of its job timestamp",
+    );
+    // The condition of the snapshot job.
+    assert_found(
+        mutated(
+            "  snapshot:\n    if: >-\n      github.ref == 'refs/heads/main' &&\n",
+            "  snapshot:\n    if: >-\n",
+            &[],
+        ),
+        "snapshot: the condition lacks",
+    );
+}
+
+#[test]
+fn the_first_publication_and_the_v2_gates_are_pinned() {
+    assert_found(
+        mutated(
+            "          FIRST: ${{ vars.TUF_V2_FIRST_PUBLICATION }}\n",
+            "          FIRST: \"true\"\n",
+            &[],
+        ),
+        "does not read TUF_V2_FIRST_PUBLICATION",
+    );
+    assert_found(
+        mutated(
+            "              if [ \"$FIRST\" != true ]; then\n",
+            "              if false; then\n",
+            &[],
+        ),
+        "not limited to HTTP 404",
+    );
+    assert_found(
+        mutated(
+            "          MODE: ${{ steps.published.outputs.mode }}\n",
+            "          MODE: first\n",
+            &[],
+        ),
+        "mode the probe decided",
+    );
+    assert_found(
+        mutated(
+            " --previous \"$PUBLISHED\" ;;",
+            " --first-publication ;;",
+            &[],
+        ),
+        "does not extend the published one",
+    );
+    assert_found(
+        mutated(
+            "target/debug/xtask tuf timestamp --repo v2 --out \"$copy\"",
+            "target/debug/xtask tuf timestamp --repo v2 --out \"$copy\" --first-publication",
+            &[],
+        ),
+        "the job timestamp signs a first publication",
+    );
+    assert_found(
+        mutated(
+            "          cp -R tuf/v1 _site/tuf/v1\n",
+            "          cp -R tuf/v1 _site/tuf/v1\n          cp -R tuf/v2 _site/tuf/v2\n",
+            &[],
+        ),
+        "the step that publishes tuf/v1 touches tuf/v2",
+    );
+    assert_found(
+        mutated(
+            "          if [ ! -f tuf/v2/metadata/1.root.json ]; then\n            echo \"state=none\"",
+            "          if [ ! -d tuf/v2 ]; then\n            echo \"state=none\"",
+            &[],
+        ),
+        "not gated on tuf/v2/metadata/1.root.json",
+    );
+    assert_found(
+        mutated(
+            "      - name: python-tuf over the assembled tuf/v2\n        if: needs.build.outputs.tuf_v2 == 'signed'\n",
+            "      - name: python-tuf over the assembled tuf/v2\n",
+            &[],
+        ),
+        "the job oracle does not check tuf/v2",
+    );
+    assert_found(
+        mutated(
+            " verify-published --repo v2 --url",
+            " verify-published --url",
+            &[],
+        ),
+        "the job verify does not check tuf/v2",
+    );
 }
