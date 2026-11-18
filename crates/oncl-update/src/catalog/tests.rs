@@ -1349,6 +1349,25 @@ fn a_source_is_read_by_the_rules_of_its_fields() {
             Box::new(|s| s["vcs"]["rev"] = json!("EF".repeat(20))),
             |e| matches!(e, S::Vcs),
         ),
+        (
+            Box::new(|s| s["fetch"] = json!("https://downloads.ecc.kz/\u{202e}zg.rat.gz")),
+            |e| matches!(e, S::Fetch),
+        ),
+        (
+            Box::new(|s| s["fetch"] = json!("https://downloads.ecс.kz/a.tar.gz")),
+            |e| matches!(e, S::Fetch),
+        ),
+        (
+            Box::new(|s| s["vcs"]["url"] = json!("https://git.ecc.kz/\u{200b}market.git")),
+            |e| matches!(e, S::Vcs),
+        ),
+        (
+            Box::new(|s| s["path"] = json!("crates/маркет")),
+            |e| matches!(e, S::Path),
+        ),
+        (Box::new(|s| s["path"] = json!("crates/my market")), |e| {
+            matches!(e, S::Path)
+        }),
     ];
     for (index, (change, expected)) in refused.into_iter().enumerate() {
         match parse_with_source(change) {
@@ -1487,5 +1506,26 @@ fn one_publishers_modules_and_bundles_differ_in_more_than_case() {
     assert!(matches!(
         refused(vec![with(|p| p["bundles"] = json!([MARKET, upper]))]),
         CatalogError::SharedBundle { .. }
+    ));
+}
+
+#[test]
+fn the_mirror_url_has_the_package_hash_in_lowercase_hex_only() {
+    let oncl = entry(MARKET, "1.0.0");
+    let path = path_of(&oncl);
+    let lower = format!("pub-ecc-{}", "ab".repeat(32));
+    let upper = format!("pub-ecc-{}", "AB".repeat(32));
+    let package = |url: String| {
+        let mut oncl = oncl.clone();
+        oncl["url"] = json!(url);
+        let mut target = target(oncl);
+        target.sha256 = Digest([0xab; 32]);
+        PublisherRelease::parse(&ecc(), &path, &target)
+    };
+    let url = mirrored(MARKET, "1.0.0").replace(&format!("pub-ecc-{}", package_hex()), &lower);
+    assert!(package(url.clone()).is_ok());
+    assert!(matches!(
+        package(url.replace(&lower, &upper)),
+        Err(EntryRejection::NotMirrored)
     ));
 }

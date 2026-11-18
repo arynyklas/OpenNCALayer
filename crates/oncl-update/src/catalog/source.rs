@@ -63,10 +63,12 @@ pub enum SourceError {
     /// `archive_length` is zero or over [`ReleaseSource::MAX_ARCHIVE`].
     #[error("source.archive_length {0} is not 1 to 64 MiB")]
     ArchiveLength(u64),
-    /// `fetch` is not an anonymous `https://` URL of at most 2048 bytes without a fragment.
+    /// `fetch` is not an anonymous `https://` URL of printable ASCII, at most 2048 bytes,
+    /// without a fragment.
     #[error("source.fetch is not an anonymous https:// url of at most 2048 bytes")]
     Fetch,
-    /// `path` is not a relative `/`-separated directory of at most 255 bytes.
+    /// `path` is not a relative `/`-separated directory of printable ASCII, at most 255
+    /// bytes.
     #[error("source.path is not a relative directory")]
     Path,
     /// `license` is not an SPDX license expression.
@@ -75,8 +77,8 @@ pub enum SourceError {
     /// `builder` is not `sha256:` and 64 lowercase hex digits.
     #[error("source.builder is not sha256:<64 hex>")]
     Builder,
-    /// `vcs` has a `url` that is not an anonymous `https://` URL, or a `rev` that is not
-    /// 40 or 64 lowercase hex digits.
+    /// `vcs` has a `url` that is not an anonymous `https://` URL of printable ASCII, or a
+    /// `rev` that is not 40 or 64 lowercase hex digits.
     #[error("source.vcs is not an https:// url and a 40 or 64 hex revision")]
     Vcs,
 }
@@ -118,7 +120,7 @@ impl ReleaseSource {
         if !(1..=ReleaseSource::MAX_ARCHIVE).contains(&raw.archive_length) {
             return Err(SourceError::ArchiveLength(raw.archive_length));
         }
-        if !anonymous_https_url(&raw.fetch) {
+        if !(printable_ascii(&raw.fetch) && anonymous_https_url(&raw.fetch)) {
             return Err(SourceError::Fetch);
         }
         if !is_crate_dir(&raw.path) {
@@ -138,7 +140,7 @@ impl ReleaseSource {
             .map(|vcs| {
                 let rev = crate::hex::decode::<20>(&vcs.rev).is_some()
                     || crate::hex::decode::<32>(&vcs.rev).is_some();
-                if rev && anonymous_https_url(&vcs.url) {
+                if rev && printable_ascii(&vcs.url) && anonymous_https_url(&vcs.url) {
                     Ok(SourceVcs {
                         url: vcs.url,
                         rev: vcs.rev,
@@ -160,12 +162,19 @@ impl ReleaseSource {
     }
 }
 
-/// `""`, or `/`-separated segments, none empty, `.` or `..`, without `\` or control
-/// characters, at most [`MAX_PATH`] bytes.
+/// Whether `text` is printable ASCII without spaces: no format characters (bidi overrides,
+/// zero-width ones) or look-alike letters for the site to show.
+fn printable_ascii(text: &str) -> bool {
+    text.bytes().all(|b| b.is_ascii_graphic())
+}
+
+/// `""`, or `/`-separated segments of printable ASCII, none empty, `.` or `..`, without
+/// `\`, at most [`MAX_PATH`] bytes.
 fn is_crate_dir(path: &str) -> bool {
     path.is_empty()
         || (path.len() <= MAX_PATH
-            && !path.chars().any(|c| c == '\\' || c.is_control())
+            && printable_ascii(path)
+            && !path.contains('\\')
             && path
                 .split('/')
                 .all(|segment| !matches!(segment, "" | "." | "..")))
@@ -372,7 +381,18 @@ mod tests {
             assert!(is_crate_dir(good), "{good}");
         }
         for bad in [
-            "/crates", "crates/", "a//b", "a/../b", "./a", "..", "a\\b", "a\nb",
+            "/crates",
+            "crates/",
+            "a//b",
+            "a/../b",
+            "./a",
+            "..",
+            "a\\b",
+            "a\nb",
+            "a b",
+            "crates/маркет",
+            "a\u{202e}b",
+            "a\u{200b}b",
         ] {
             assert!(!is_crate_dir(bad), "{bad:?}");
         }

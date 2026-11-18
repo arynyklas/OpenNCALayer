@@ -84,7 +84,7 @@ pub struct Catalog {
     releases: Vec<PluginRelease>,
     /// The versions (build metadata cleared) the publishers' verified roles revoke, on
     /// every channel, whatever their publisher's state: read by the target path alone.
-    self_revoked: BTreeSet<(String, Version)>,
+    self_revoked: BTreeMap<String, BTreeSet<Version>>,
     rejected: Vec<EntryRejected>,
 }
 
@@ -110,7 +110,7 @@ impl Catalog {
             policy: None,
             states: BTreeMap::new(),
             releases: Vec::new(),
-            self_revoked: BTreeSet::new(),
+            self_revoked: BTreeMap::new(),
             rejected: Vec::new(),
         }
     }
@@ -190,9 +190,13 @@ impl Catalog {
                         .and_then(|policy| policy.publisher(publisher))
                         .and_then(Publisher::rules)
                         .is_some_and(|active| active.revokes(id, version))
-                        || self
-                            .self_revoked
-                            .contains(&(id.to_owned(), without_build(version))))
+                        || self.self_revoked.get(id).is_some_and(|versions| {
+                            if version.build.is_empty() {
+                                versions.contains(version)
+                            } else {
+                                versions.contains(&without_build(version))
+                            }
+                        }))
             })
     }
 
@@ -298,7 +302,7 @@ impl<'r> CatalogBuilder<'r> {
         };
         let mut states = BTreeMap::new();
         let mut releases = Vec::new();
-        let mut self_revoked = BTreeSet::new();
+        let mut self_revoked = BTreeMap::<String, BTreeSet<Version>>::new();
         let mut rejected = Vec::new();
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
@@ -328,7 +332,9 @@ impl<'r> CatalogBuilder<'r> {
                 continue;
             };
             states.insert(name.clone(), state);
-            self_revoked.extend(self_revocations(publisher, targets));
+            for (id, version) in self_revocations(publisher, targets) {
+                self_revoked.entry(id).or_default().insert(version);
+            }
             if state != PublisherState::Active {
                 continue;
             }

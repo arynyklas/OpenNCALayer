@@ -23,6 +23,38 @@ pub const MAX_URL: usize = 2048;
 /// package.
 pub const MIRROR_BASE: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases/download/");
 
+/// Whether `repository` is a repository page on GitHub: `https://github.com/` and more,
+/// not ending in `/` or `.git`, so that [`MIRROR_BASE`] is its releases' download path.
+const fn is_github_repository(repository: &str) -> bool {
+    const PREFIX: &[u8] = b"https://github.com/";
+    const GIT: &[u8] = b".git";
+    let bytes = repository.as_bytes();
+    if bytes.len() <= PREFIX.len() || bytes[bytes.len() - 1] == b'/' {
+        return false;
+    }
+    let mut at = 0;
+    while at < PREFIX.len() {
+        if bytes[at] != PREFIX[at] {
+            return false;
+        }
+        at += 1;
+    }
+    let tail = bytes.len() - GIT.len();
+    let mut at = 0;
+    while at < GIT.len() {
+        if bytes[tail + at] != GIT[at] {
+            return true;
+        }
+        at += 1;
+    }
+    false
+}
+
+const _: () = assert!(
+    is_github_repository(env!("CARGO_PKG_REPOSITORY")),
+    "the crate's repository must be https://github.com/<owner>/<repo>"
+);
+
 /// The only `url` a publisher's release may have: the copy of its package in the project's
 /// Releases, `<MIRROR_BASE>pub-<publisher>-<sha256>/<id>-<version>.onclp`, with the
 /// package's sha256 in lowercase hex.
@@ -371,5 +403,27 @@ impl PublisherRelease {
     /// Marks the release revoked: the owner revoked its version.
     pub(crate) fn revoke(&mut self) {
         self.release.revoked = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_github_repository;
+
+    #[test]
+    fn the_mirror_needs_a_github_repository_page() {
+        assert!(is_github_repository(
+            "https://github.com/arynyklas/OpenNCALayer"
+        ));
+        for bad in [
+            "",
+            "https://github.com/",
+            "https://github.com/arynyklas/OpenNCALayer/",
+            "https://github.com/arynyklas/OpenNCALayer.git",
+            "https://gitlab.com/arynyklas/OpenNCALayer",
+            "http://github.com/arynyklas/OpenNCALayer",
+        ] {
+            assert!(!is_github_repository(bad), "{bad}");
+        }
     }
 }
