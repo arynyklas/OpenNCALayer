@@ -1221,6 +1221,7 @@ fn compare_publishers(
                 .into_iter()
                 .filter(|(id, version, revoked)| {
                     *revoked
+                        && p.may_revoke(id)
                         && !p
                             .revoked_versions
                             .iter()

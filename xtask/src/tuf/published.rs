@@ -5,7 +5,8 @@
 //! index of its channel, and `publishers.json` must read as the client reads it. With
 //! delegations, every delegated role is followed ([`TufClient::delegated`]); the active
 //! publishers of `publishers.json` must be exactly the roles delegated to, and a role
-//! without any file yet (a publisher without a release) is not a failure. The publishers'
+//! without any file yet (a publisher without a release) is not a failure, nor is an expired
+//! role (a `warning:` line, as `role-expired` in `tuf check`). The publishers'
 //! packages are not downloaded: CI checked them when their roles were merged. A line says
 //! whether the clients released before delegations (0.1.0, 0.1.1) still read the site.
 //!
@@ -117,6 +118,14 @@ pub fn verify_published<F: Fetcher>(
                 error: DelegationError::NotInSnapshot,
                 ..
             }) => lines.push(format!("{name}: no release yet")),
+            // As in `tuf check` (`role-expired`): a publisher's expired role makes that
+            // publisher unavailable to the clients and never stops the publication.
+            Err(
+                e @ TufError::Delegation {
+                    error: DelegationError::Expired { .. },
+                    ..
+                },
+            ) => lines.push(format!("warning: {name}: {e}")),
             Err(e) => anyhow::bail!("the role {name} is not trusted: {e}"),
         }
     }

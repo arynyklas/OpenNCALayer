@@ -90,8 +90,9 @@ jobs:
                 docs/dev/sdk*.md) rust=true ;;
                 docs/* | .agents/* | AGENTS.md | CLAUDE.md | CHANGELOG.md | CONTRIBUTING.md \
                   | SECURITY.md | .github/ISSUE_TEMPLATE/* | .github/PULL_REQUEST_TEMPLATE*) ;;
-                # The indexes and the TUF repository: the index check (always) and the site.
-                updates/* | tuf/*) site=true ;;
+                # The indexes, the TUF repository and its publishers: the index check (always)
+                # and the site.
+                updates/* | tuf/* | publishers/*) site=true ;;
                 *) rust=true ;;
               esac
               # What the packaging jobs and `builtins-x86` build from (web/: the daemon's pages).

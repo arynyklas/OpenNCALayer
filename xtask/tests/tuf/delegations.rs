@@ -351,7 +351,7 @@ fn update_follows_the_registry_of_the_publishers() {
     w.write_publisher(
         "ecc",
         0,
-        "[[revoked_versions]]\nid = \"kz.ecc.market\"\nversion = \"1.0.0\"\ndate = \"2027-02-10\"\n",
+        "[[revoked_versions]]\nid = \"kz.ecc.market\"\nversion = \"1.0.0\"\ndate = \"2026-09-20\"\n",
     );
     assert!(codes(&w.tree(later)).contains(&"publishers-mismatch"));
     let update::Outcome::Written(written) = w.update(later, false).unwrap() else {
@@ -369,7 +369,7 @@ fn update_follows_the_registry_of_the_publishers() {
     assert_clean(&w.tree(later));
 
     // The owner revokes a publisher: its delegation goes, its entry and its role file stay.
-    w.write_publisher("ecc", 0, "state = \"revoked\"\nrevoked = \"2027-03-01\"\n");
+    w.write_publisher("ecc", 0, "state = \"revoked\"\nrevoked = \"2026-09-21\"\n");
     assert!(codes(&w.tree(later)).contains(&"delegations-mismatch"));
     let update::Outcome::Written(written) = w.update(later, false).unwrap() else {
         panic!("a revoked publisher writes");
@@ -428,9 +428,10 @@ fn retiring_a_publisher_keeps_the_revocations_of_its_role() {
         panic!("retiring writes");
     };
     assert_eq!(written.delegated, Some(1));
+    assert_eq!(written.settled.len(), 1);
     assert_eq!(
-        written.settled,
-        [w.publishers().join("ecc").join("publisher.toml")]
+        written.settled[0].path,
+        w.publishers().join("ecc").join("publisher.toml")
     );
     let text = w.publisher_text("ecc");
     assert!(
@@ -465,7 +466,8 @@ fn revoke_all_revokes_every_version_its_role_had_in_git_on_that_date() {
     let root = w.p("");
     git(&root, &["init", "-q"]);
     git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-q", "-m", "base"]);
+    // The commit of the first release, dated a day before the leak is noticed.
+    commit_at(&root, t0());
     // A release after the commit is not in git on any date yet.
     w.release(
         "ecc",
@@ -473,10 +475,20 @@ fn revoke_all_revokes_every_version_its_role_had_in_git_on_that_date() {
         2,
         &[("kz.ecc.market", "1.0.0"), ("kz.ecc.market", "2.0.0")],
     );
+    // A date after today (UTC) is refused: a revocation is dated when it is made.
     w.write_publisher(
         "ecc",
         0,
-        "state = \"retired\"\nrevoke_all = \"2099-12-31\"   # the leak\n",
+        "state = \"retired\"\nrevoke_all = \"2099-12-31\"\n",
+    );
+    let err = w.update(t1(), false).unwrap_err();
+    assert!(format!("{err:#}").contains("after today"), "{err:#}");
+
+    let date = day(t1());
+    w.write_publisher(
+        "ecc",
+        0,
+        &format!("state = \"retired\"\nrevoke_all = \"{date}\"   # the leak\n"),
     );
     let found = codes(&w.tree(t1()));
     assert!(found.contains(&"revoke-all-pending"), "{found:?}");
@@ -484,6 +496,7 @@ fn revoke_all_revokes_every_version_its_role_had_in_git_on_that_date() {
         panic!("revoke_all writes");
     };
     assert!(written.reason.contains("revoke_all"), "{}", written.reason);
+    assert_eq!(written.settled[0].added.len(), 1);
     let text = w.publisher_text("ecc");
     assert!(!text.contains("revoke_all"), "{text}");
     let registry = Registry::read(&w.publishers()).unwrap();
@@ -498,25 +511,78 @@ fn revoke_all_revokes_every_version_its_role_had_in_git_on_that_date() {
         .collect();
     assert_eq!(
         revoked,
-        [(
-            "kz.ecc.market".to_owned(),
-            "1.0.0".to_owned(),
-            "2099-12-31".to_owned()
-        )]
+        [("kz.ecc.market".to_owned(), "1.0.0".to_owned(), date)]
     );
     assert_clean(&w.tree(t1()));
 
-    // A date before the first commit revokes nothing, and the line goes all the same.
+    // A date before the first commit finds nothing while the role has files: refused, not
+    // a revocation of nothing.
     let w = online_world();
     let root = w.p("");
     git(&root, &["init", "-q"]);
     git(&root, &["add", "-A"]);
-    git(&root, &["commit", "-q", "-m", "base"]);
-    w.write_publisher("acme", 1, "revoke_all = \"2000-01-01\"\n");
-    w.update(t1(), false).unwrap();
-    assert!(!w.publisher_text("acme").contains("revoke_all"));
-    assert!(!w.publisher_text("acme").contains("revoked_versions"));
-    assert_clean(&w.tree(t1()));
+    commit_at(&root, t0());
+    w.write_publisher("ecc", 0, "revoke_all = \"2000-01-01\"\n");
+    let before = w.publisher_text("ecc");
+    let err = w.update(t1(), false).unwrap_err();
+    assert!(format!("{err:#}").contains("finds no version"), "{err:#}");
+    assert_eq!(w.publisher_text("ecc"), before);
+
+    // A shallow clone has no history to look in (two commits, so that depth 1 cuts one).
+    fs::write(root.join("note.txt"), "x").unwrap();
+    git(&root, &["add", "note.txt"]);
+    commit_at(&root, t1());
+    let shallow = w.p("shallow");
+    let path = root.to_string_lossy().replace('\\', "/");
+    let url = if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    };
+    git(
+        &root,
+        &[
+            "clone",
+            "-q",
+            "--depth",
+            "1",
+            &url,
+            &shallow.to_string_lossy(),
+        ],
+    );
+    let copy = world_of(&shallow);
+    copy.write_publisher("ecc", 0, &format!("revoke_all = \"{}\"\n", day(t1())));
+    let err = copy.update(t1(), false).unwrap_err();
+    assert!(format!("{err:#}").contains("shallow"), "{err:#}");
+}
+
+/// `git commit` of what is staged in `root`, dated `when`.
+fn commit_at(root: &Path, when: OffsetDateTime) {
+    let date = format!("@{} +0000", when.unix_timestamp());
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "-m",
+            "base",
+        ])
+        .env("GIT_AUTHOR_DATE", &date)
+        .env("GIT_COMMITTER_DATE", &date)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -689,42 +755,16 @@ fn a_role_version_is_history_against_the_base() {
     assert!(found.contains(&"version-rollback"), "{found:?}");
 }
 
-/// Before the rotation the owner signs the snapshot, and it lists the publishers' roles: a
-/// release waits for the owner's `tuf update`.
+/// Before the rotation the owner signs the snapshot: the first publisher waits for it, or
+/// every release would wait for the owner (Р35).
 #[test]
-fn an_offline_snapshot_lists_the_roles_of_the_publishers() {
+fn the_first_publisher_waits_for_the_online_snapshot() {
     let w = world();
+    let before = files(&w.repo());
     w.write_publisher("ecc", 0, "");
-    let update::Outcome::Written(written) = w.update(t0() + Duration::days(1), false).unwrap()
-    else {
-        panic!("the first publisher writes");
-    };
-    assert_eq!(
-        (written.targets, written.snapshot, written.delegated),
-        (2, Some(2), Some(1))
-    );
-    assert_clean(&w.tree(t1()));
-    w.release("ecc", 0, 1, &[("kz.ecc.market", "1.0.0")]);
-    let found = codes(&w.tree(t1()));
-    assert!(found.contains(&"snapshot-role-missing"), "{found:?}");
-    let update::Outcome::Written(written) = w.update(t1(), false).unwrap() else {
-        panic!("a release waits for the owner's snapshot");
-    };
-    assert!(
-        written.reason.contains("does not list pub-ecc 1"),
-        "{}",
-        written.reason
-    );
-    let report = w.tree(t1());
-    assert_clean(&report);
-    assert_eq!(
-        report.verified.unwrap().snapshot.unwrap().meta["pub-ecc.json"].version,
-        1
-    );
-    w.timestamp(t1()).unwrap();
-    assert_clean(&w.check(Stage::Published, t1(), false, None));
-    let roles = delegated(&w, &w.repo(), t1());
-    assert_eq!(roles.role(&role("pub-ecc")).unwrap().unwrap().version(), 1);
+    let err = w.update(t0() + Duration::days(1), false).unwrap_err();
+    assert!(format!("{err:#}").contains("online snapshot"), "{err:#}");
+    assert_eq!(files(&w.repo()), before);
 }
 
 /// The delegations share the client's 256 KiB of the top-level targets with the targets: a
@@ -766,6 +806,8 @@ fn the_check_command_reads_the_publishers_and_the_snapshot_mode() {
             &s(w.indexes()),
             "--publishers",
             &s(w.publishers()),
+            "--config",
+            &s(w.config()),
             "--no-timestamp",
             "--now",
             &t1().unix_timestamp().to_string(),
@@ -789,7 +831,7 @@ fn the_check_command_reads_the_publishers_and_the_snapshot_mode() {
     w.write_publisher(
         "ecc",
         0,
-        "[[revoked_versions]]\nid = \"kz.ecc.market\"\nversion = \"1.0.0\"\ndate = \"2027-02-10\"\n",
+        "[[revoked_versions]]\nid = \"kz.ecc.market\"\nversion = \"1.0.0\"\ndate = \"2026-09-20\"\n",
     );
     let fail = run();
     assert_eq!(fail.status.code(), Some(1));

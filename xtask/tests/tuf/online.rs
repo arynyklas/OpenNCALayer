@@ -201,7 +201,8 @@ fn the_snapshot_refuses_what_it_cannot_extend() {
     assert!(err.to_string().contains("is not a snapshot key"), "{err:#}");
     unchanged(&site);
 
-    // A published snapshot of the last version has no next one.
+    // A published snapshot far ahead of the clock (here the last version, which would have no
+    // next one) is not extended.
     let published = w.p("published-offline");
     let seed = keystore::parse_seed(&fs::read_to_string(w.keys().join("snapshot.v2.key")).unwrap())
         .unwrap();
@@ -230,11 +231,7 @@ fn the_snapshot_refuses_what_it_cannot_extend() {
     let err = w
         .snapshot(&site, t1(), &published, "snapshot.v2.key")
         .unwrap_err();
-    let overflow = err
-        .chain()
-        .find_map(|e| e.downcast_ref::<xtask::tuf::VersionOverflow>())
-        .unwrap_or_else(|| panic!("{err:#}"));
-    assert_eq!(overflow.version, u64::MAX);
+    assert!(format!("{err:#}").contains("ahead of the clock"), "{err:#}");
     unchanged(&site);
 
     // The command line wants the published site.

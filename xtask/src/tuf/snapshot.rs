@@ -16,9 +16,10 @@
 //! signing, or one more than the previous snapshot's; it expires 7 days later.
 //!
 //! The previous snapshot is the one the published `timestamp.json` names, read with a
-//! [`Fetcher`] over the published site: verified by the timestamp and snapshot keys of a
-//! root of the chain (the first online snapshot extends the owner's last offline one, signed
-//! by the key the rotation replaced), then the guard of section 5.5.5 of the specification:
+//! [`Fetcher`] over the published site: verified by the timestamp and snapshot keys of the
+//! root in force or of the root it replaced (the first online snapshot extends the owner's
+//! last offline one, signed by the key the rotation replaced), its version no more than a day
+//! ahead of the clock, then the guard of section 5.5.5 of the specification:
 //! the new snapshot drops nothing it listed and lowers no version (a client would take it
 //! for a rollback, and every update would stop). It is also written into the copy, so that
 //! a client whose cached `timestamp.json` still names it finds it. If the published site
@@ -81,6 +82,9 @@ pub struct Signed {
     pub expires: OffsetDateTime,
 }
 
+/// How far ahead of the clock, in seconds, the version of the published snapshot may be.
+const MAX_AHEAD: u64 = 86_400;
+
 fn list(problems: &[Problem]) -> String {
     problems
         .iter()
@@ -97,7 +101,7 @@ fn signed_by_any(file: &Envelope, roots: &[Root], role: Role, what: &str) -> any
     {
         Ok(())
     } else {
-        bail!("{what} is not signed by the {role} keys of any root of the chain")
+        bail!("{what} is not signed by the {role} keys of the root in force or the one it replaced")
     }
 }
 
@@ -243,10 +247,22 @@ pub fn snapshot(options: &Options, previous: &dyn Fetcher) -> anyhow::Result<Sig
                 .join(", ")
         );
     }
-    let (previous, previous_bytes) = previous_snapshot(previous, &verified.roots)?;
+    // The published snapshot is signed by the root in force, or (the first after a rotation)
+    // by the root it replaced: never by an older one.
+    let recent = &verified.roots[verified.roots.len().saturating_sub(2)..];
+    let (previous, previous_bytes) = previous_snapshot(previous, recent)?;
 
     let now = whole_seconds(options.now);
     let unix = u64::try_from(now.unix_timestamp()).context("the clock is before 1970")?;
+    // Versions are Unix seconds, one more per publication within a second: one far ahead of
+    // the clock is a wrong clock or a forged file, and would be carried on for good.
+    if previous.version > unix.saturating_add(MAX_AHEAD) {
+        bail!(
+            "the published snapshot is of version {}, more than a day ahead of the clock \
+             ({unix}): not extending it; repair the site by hand (docs/dev/release.md)",
+            previous.version
+        );
+    }
     let version = unix.max(next_version("published snapshot", previous.version)?);
     let expires = expiry(now, ONLINE_SNAPSHOT_DAYS);
     let mut signed = build::snapshot(

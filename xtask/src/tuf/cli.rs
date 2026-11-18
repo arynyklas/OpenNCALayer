@@ -2,9 +2,9 @@
 //!
 //! One repository, `tuf/v1`. Its snapshot mode is the file `tuf/v1.toml`
 //! ([`super::repo::SnapshotMode`]): `--config` names it, by default the file beside
-//! `--dir`/`--out` for the commands on the committed tree (`update`, `root`, `check`), and
-//! the workspace's `tuf/v1.toml` for those on a copy for publication (`snapshot`,
-//! `timestamp`).
+//! `--out` for `update` and `root` (which write the repository), and the workspace's
+//! `tuf/v1.toml` for `check` (also run on the copy Pages publishes), `snapshot` and
+//! `timestamp`.
 //!
 //! Exit codes: 0 when the command did what it says (`tuf check` also when it found only
 //! warnings, or no repository yet); 1 when it refused, failed, or `tuf check` found
@@ -220,7 +220,7 @@ pub enum TufCommand {
         /// The trust anchor [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
-        /// The snapshot mode [default: the `.toml` file beside the repository directory].
+        /// The snapshot mode [default: `tuf/v1.toml` of the workspace].
         #[arg(long)]
         config: Option<PathBuf>,
         /// The time to judge expiry at, RFC 3339 or Unix seconds [default: now].
@@ -304,8 +304,14 @@ fn print_update(outcome: &update::Outcome) {
         },
         update::Outcome::Written(w) => {
             println!("tuf update: {}", w.reason);
-            for file in &w.settled {
-                println!("tuf update: settled {}", file.display());
+            for s in &w.settled {
+                println!("tuf update: settled {}", s.path.display());
+                for r in &s.added {
+                    println!(
+                        "tuf update:   {} revokes {} {} (date {})",
+                        s.name, r.id, r.version, r.date
+                    );
+                }
             }
             for file in &w.files {
                 println!("tuf update: wrote {}", file.display());
@@ -571,7 +577,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             no_timestamp,
         } => {
             let dir = workspace(dir, REPO_DIR);
-            let mode = mode_beside(config, &dir)?;
+            let mode = repo::read_mode(&workspace(config, CONFIG))?;
             let anchor = workspace(anchor, ANCHOR);
             let outcome = check::check(&check::Options {
                 dir: &dir,

@@ -181,6 +181,12 @@ impl Publisher {
     pub fn covers(&self, id: &str) -> bool {
         id.starts_with(&self.id_prefix)
     }
+
+    /// Whether the owner may revoke versions of `id` for it: a plugin id under its prefix.
+    /// [`Registry::settle`] and `tuf check` use the same filter.
+    pub fn may_revoke(&self, id: &str) -> bool {
+        self.covers(id) && is_plugin_id(id)
+    }
 }
 
 #[derive(Deserialize)]
@@ -930,15 +936,20 @@ impl Registry {
     ///   `revoked: true` becomes an owner's revoked version dated `today`, so that the
     ///   publisher's own revocations outlive its role;
     /// - `revoke_all = "<date>"`: every target of every file of the publisher's role in git
-    ///   at the last commit on or before that date becomes a revoked version of that date,
-    ///   and the line goes.
+    ///   at the last commit on or before that date (first parents of `HEAD`) becomes a
+    ///   revoked version of that date, and the line goes. A shallow clone is refused, and so
+    ///   is a date that finds nothing while the role has files: a revocation never silently
+    ///   revokes nothing.
     ///
-    /// Versions already revoked are not added again. Nothing is written here.
+    /// Only versions [`Publisher::may_revoke`] are added, and none already revoked. A date
+    /// (`revoke_all`, `revoked`, `revoked_versions`) after `today` (UTC) is refused. Nothing
+    /// is written here.
     ///
     /// # Errors
     ///
-    /// If a file cannot be read, git cannot answer for `revoke_all`, or the result does not
-    /// read back as the file it should be.
+    /// If a file cannot be read, a date is in the future, git cannot answer for
+    /// `revoke_all` (or the clone is shallow), `revoke_all` finds no version of a role that
+    /// has files, or the result does not read back as the file it should be.
     pub fn settle(
         &self,
         dir: &Path,
@@ -953,6 +964,18 @@ impl Registry {
         };
         let mut settled = Vec::new();
         for p in self.publishers() {
+            let mut dates = p
+                .revoke_all
+                .iter()
+                .chain(p.revoked.iter())
+                .chain(p.revoked_versions.iter().map(|r| &r.date));
+            if let Some(date) = dates.find(|d| d.as_str() > today) {
+                bail!(
+                    "publishers/{}: the date {date} is after today ({today}, UTC): a revocation \
+                     is dated when it is made",
+                    p.name
+                );
+            }
             let role = p.role();
             let mut added: Vec<RevokedVersion> = Vec::new();
             let mut why = Vec::new();
@@ -960,11 +983,7 @@ impl Registry {
                 let known = |list: &[RevokedVersion]| {
                     list.iter().any(|r| r.id == id && r.version == version)
                 };
-                if p.covers(&id)
-                    && is_plugin_id(&id)
-                    && !known(&p.revoked_versions)
-                    && !known(&added)
-                {
+                if p.may_revoke(&id) && !known(&p.revoked_versions) && !known(&added) {
                     added.push(RevokedVersion {
                         id,
                         version,
@@ -989,10 +1008,22 @@ impl Registry {
                 ));
             }
             if let Some(date) = &p.revoke_all {
-                for (what, bytes) in role_files_at(repo, &role, date)? {
+                let files = role_files_at(repo, &role, date)?;
+                let mut found = 0;
+                for (what, bytes) in files {
                     for (id, version, _) in role_entries(&bytes, &what)? {
+                        found += 1;
                         add(id, version, date);
                     }
+                }
+                if found == 0 && newest.contains_key(&role) {
+                    bail!(
+                        "publishers/{}: revoke_all = \"{date}\" finds no version of {role} in \
+                         git on that date, but the role has files: check the date (the commit \
+                         that added them is later?) and write the versions in revoked_versions \
+                         if need be",
+                        p.name
+                    );
                 }
                 why.push(format!(
                     "revoke_all = \"{date}\": every version of {role} in git on that date"
@@ -1129,8 +1160,19 @@ fn role_files_at(
     date: &str,
 ) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
     let (git_dir, _) = crate::index::existing_ancestor(repo)?;
+    let shallow = crate::index::git(&git_dir, &["rev-parse", "--is-shallow-repository"])?;
+    if !shallow.status.success() || String::from_utf8_lossy(&shallow.stdout).trim() != "false" {
+        bail!(
+            "revoke_all needs the whole git history of {}: this clone is shallow or not a git \
+             repository (`git fetch --unshallow`)",
+            repo.display()
+        );
+    }
     let before = format!("--before={date} 23:59:59 +0000");
-    let found = crate::index::git(&git_dir, &["rev-list", "-1", &before, "HEAD"])?;
+    let found = crate::index::git(
+        &git_dir,
+        &["rev-list", "-1", "--first-parent", &before, "HEAD"],
+    )?;
     if !found.status.success() {
         bail!(
             "revoke_all needs the git history of {}: git rev-list: {}",

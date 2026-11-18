@@ -38,6 +38,7 @@ on:
       - "updates/**"
       - "crates/oncl-update/keys/**"
       - "tuf/**"
+      - "publishers/**"
       - "site/**"
       - "plugins/*/plugin.toml"
       - "plugins/*/registry.toml"

@@ -99,8 +99,9 @@ pub struct Written {
     pub expires: OffsetDateTime,
     /// The files made, with the metadata last.
     pub files: Vec<PathBuf>,
-    /// The `publisher.toml` files settled ([`Registry::settle`]).
-    pub settled: Vec<PathBuf>,
+    /// The `publisher.toml` files settled ([`Registry::settle`]), with the versions each
+    /// gained.
+    pub settled: Vec<Settled>,
 }
 
 /// The indexes in `dir` as targets: `(target path, bytes)`, valid indexes of the channel
@@ -175,9 +176,9 @@ fn signers(
     Ok(keys)
 }
 
-/// `now` as a date, `YYYY-MM-DD`.
+/// `now` as a date in UTC, `YYYY-MM-DD`.
 fn day(now: OffsetDateTime) -> String {
-    let date = now.date();
+    let date = now.to_offset(time::UtcOffset::UTC).date();
     format!(
         "{:04}-{:02}-{:02}",
         date.year(),
@@ -282,6 +283,14 @@ pub fn update(options: &Options) -> anyhow::Result<Outcome> {
         }
         (None, None)
     } else {
+        if !had_member && offline {
+            bail!(
+                "the first publisher waits for the online snapshot: while tuf/v1.toml says \
+                 offline, every release of a publisher would wait for the owner's snapshot \
+                 (docs/design/publishers.md, Р35); move the snapshot key into CI first \
+                 (`cargo xtask tuf root --rotate-snapshot --online`)"
+            );
+        }
         (
             Some(registry.delegations()),
             Some(registry.publishers_json()?),
@@ -466,8 +475,7 @@ pub fn update(options: &Options) -> anyhow::Result<Outcome> {
     let written = (|| -> anyhow::Result<()> {
         for s in &settled {
             rewritten.push(s);
-            fs::write(&s.path, &s.after)
-                .with_context(|| format!("writing {}", s.path.display()))?;
+            replace(&s.path, &s.after)?;
         }
         write_stored(options.out, &stored, &mut created)?;
         created.push(repo::write_new(
@@ -517,8 +525,11 @@ pub fn update(options: &Options) -> anyhow::Result<Outcome> {
     if let Err(e) = verdict {
         let mut cleanup = remove_created(&created);
         for s in rewritten {
-            if let Err(e) = fs::write(&s.path, &s.before) {
-                cleanup.push_str(&format!("; could not restore: {} ({e})", s.path.display()));
+            if let Err(e) = replace(&s.path, &s.before) {
+                cleanup.push_str(&format!(
+                    "; could not restore: {} ({e:#})",
+                    s.path.display()
+                ));
             }
         }
         return Err(e.context(format!("nothing was left written{cleanup}")));
@@ -530,8 +541,18 @@ pub fn update(options: &Options) -> anyhow::Result<Outcome> {
         delegated,
         expires,
         files: created,
-        settled: settled.into_iter().map(|s| s.path).collect(),
+        settled,
     }))
+}
+
+/// Replaces the file `path` with `text`: written beside it, then renamed over it, so that it
+/// is never left half written.
+fn replace(path: &Path, text: &str) -> anyhow::Result<()> {
+    let mut temp = path.as_os_str().to_owned();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    fs::write(&temp, text).with_context(|| format!("writing {}", temp.display()))?;
+    fs::rename(&temp, path).with_context(|| format!("replacing {}", path.display()))
 }
 
 /// Writes the target files `stored` (`(path, content)`) into the repository `out`, adding the
