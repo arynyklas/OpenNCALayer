@@ -383,10 +383,10 @@ cargo nextest run --workspace --all-features --profile ci --run-ignored all
 
 ## Форки сторонних крейтов
 
-Пять крейтов с crates.io нужны нам с небольшими изменениями. Их исходников в репозитории нет: они берутся по git из форков в аккаунте `arynyklas`. Версия форка закреплена полным коммитом (`rev`) в корневом `Cargo.toml`.
+Три крейта с crates.io нужны нам с небольшими изменениями. Их исходников в репозитории нет: они берутся по git из форков в аккаунте `arynyklas`. Версия форка закреплена полным коммитом (`rev`) в корневом `Cargo.toml`.
 
-- `i-slint-backend-winit`, `velopack`, `streebog` и `hmac` подменяются в `[patch.crates-io]`.
-- `hmac`, `streebog` и `multer` указаны с тем же `git` и `rev` ещё и в `[workspace.dependencies]`, чтобы проект, который подключает SDK или сервер вне этого workspace, получил тот же исходник.
+- `i-slint-backend-winit` и `velopack` подменяются в `[patch.crates-io]`.
+- `multer` указан с `git` и `rev` в `[workspace.dependencies]`, чтобы проект, который подключает сервер вне этого workspace, получил тот же исходник.
 - Каждое изменение лежит отдельным подписанным коммитом в ветке форка `openncalayer/<крейт>-<версия>`. Ветка начинается с коммита апстрима, из которого опубликован крейт (он записан в `.cargo_vcs_info.json` пакета).
 - Ветки не переписываются. Новая правка означает новый коммит и новый `rev`.
 
@@ -394,12 +394,9 @@ cargo nextest run --workspace --all-features --profile ci --run-ignored all
 |---|---|---|---|
 | `i-slint-backend-winit` 1.18.1 | [`arynyklas/slint`](https://github.com/arynyklas/slint), `openncalayer/i-slint-backend-winit-1.18.1` | [`slint-ui/slint`](https://github.com/slint-ui/slint), каталог `internal/backends/winit` | Функция `SystemParametersInfoForDpi` (есть с Windows 10 1607) не импортируется, а ищется через `GetProcAddress` (`windows_message_font_height` в `lib.rs`, её вызывает `bind_context`). Если функции нет, вызывается `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`, и высота шрифта пересчитывается из системного DPI в 96. Так сборке для Windows 7 не нужна отсутствующая там функция, а на Windows 10/11 поведение прежнее. Для этого включена фича `Win32_System_LibraryLoader` крейта `windows`. Ещё три коммита касаются упаковки: внутренние крейты Slint и `vtable` указаны по версии, а не по пути (иначе git-зависимость принесла бы вторую копию с несовместимыми типами), а тексты лицензий в `LICENSES/` сделаны обычными файлами вместо symlink. |
 | `velopack` 1.3.39-g8d2844f | [`arynyklas/velopack`](https://github.com/arynyklas/velopack), `openncalayer/velopack-1.3.39-g8d2844f` | [`velopack/velopack`](https://github.com/velopack/velopack), каталог `src/lib-rust` | В `UpdateSource` добавлен метод `verify_full_package` (по умолчанию проверяет размер и контрольную сумму, как сам Velopack). `download_updates` проверяет им полный пакет, уже лежащий на диске (непрошедший удаляется и скачивается заново), и пакет, собранный из дельты, до переименования и до извлечения `Squirrel.exe` (Update.exe). Непрошедший пакет заменяется скачанным полным. Наш `IndexSource` принимает файл, если он совпадает с полным пакетом из подписанного индекса по sha256 и размеру или содержит те же файлы (`contents_sha256` индекса). Ещё два коммита касаются упаковки: версия крейта (в репозитории `0.0.0-local`, релиз подставляет опубликованную) и файл `LICENSE` в каталоге крейта (в пакете crates.io его нет). |
-| `streebog` 0.11.0 | [`arynyklas/hashes`](https://github.com/arynyklas/hashes), `openncalayer/streebog-0.11.0` | [`RustCrypto/hashes`](https://github.com/RustCrypto/hashes), крейт `streebog` | Фича `secret-input`: варианты `Streebog256Secret` и `Streebog512Secret`. У них один рабочий буфер, который очищается, слова таблицы выбираются без ветвлений, а состояние не сериализуется. Обычное хеширование публичных документов не меняется. |
-| `hmac` 0.13.0 | [`arynyklas/MACs`](https://github.com/arynyklas/MACs), `openncalayer/hmac-0.13.0` | [`RustCrypto/MACs`](https://github.com/RustCrypto/MACs), крейт `hmac` | Фича `secret-input`: тип `HmacSecret` очищает нормализованный ключ, блоки ipad/opad и внутренний дайджест. Обычный `Hmac` не меняется. |
 | `multer` 3.1.0 | [`arynyklas/multer`](https://github.com/arynyklas/multer), `openncalayer/multer-3.1.0` | [`rwf2/multer`](https://github.com/rwf2/multer) | `Constraints::framing_observer`: необязательный наблюдатель за служебными байтами multipart (границы, заголовки частей, отступы), разбор он не меняет. Также `cfg(nightly)` для check-cfg и `u64::MAX` и проверенное сложение счётчика размера потока (`StreamSizeExceeded` вместо переполнения). |
 
 Лицензии:
-- `streebog` и `hmac`: MIT или Apache-2.0;
 - `multer` и `velopack`: MIT;
 - `i-slint-backend-winit`: Slint Royalty-free 2.0. Она разрешает изменять программу и распространять изменённую копию в составе приложения (разделы 1 и 2), уведомления о лицензии в файлах сохранены.
 
@@ -407,8 +404,11 @@ cargo nextest run --workspace --all-features --profile ci --run-ignored all
 
 Тест `xtask/tests/forks.rs` падает, если:
 - патч не используется (`Cargo.lock` снова берёт пакет с crates.io);
-- `rev` в разных секциях не совпадают;
-- версия `i-slint-backend-winit` разошлась с версией Slint.
+- `multer` взят не из форка;
+- версия `i-slint-backend-winit` разошлась с версией Slint;
+- `streebog` или `hmac` снова взяты не из crates.io.
+
+Раньше форками были и `streebog`, и `hmac`: в них были варианты для секретного ввода. Теперь эти варианты — код самого `oncl-gost`. `src/streebog_secret.rs` — Streebog для секретов: таблица LPS не читается по секретному индексу, временные значения сжатия лежат в одной рабочей области и стираются после каждого блока, всё состояние выделено в куче одним блоком, а после вывода дайджеста обнуляется. `src/secret_hmac.rs` — HMAC поверх него для KDF из `wrap`: блок ключа, хеш длинного ключа и внутренний дайджест стираются, в том числе при панике. Откуда взят код и под какой он лицензией — в `NOTICE`. Публичные документы, PKCS#12 и PBKDF2 хешируются обычными `streebog` и `hmac` с crates.io.
 
 `cargo deny check` разрешает только git-источники этих форков (`[sources] allow-git` в `deny.toml`).
 

@@ -47,4 +47,4 @@
 
 © 2026 Aryn Yklas. [Apache-2.0](LICENSE), см. также [NOTICE](NOTICE).
 
-`web/demo/vendor/ncalayer-client.js` распространяется по лицензии MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). Velopack (MIT), бэкенд winit из Slint (LicenseRef-Slint-Royalty-free-2.0), `multer` (MIT), `streebog` и `hmac` (MIT или Apache-2.0) собираются из наших форков с небольшими изменениями. Список форков приведён в [NOTICE](NOTICE).
+`web/demo/vendor/ncalayer-client.js` распространяется по лицензии MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). Velopack (MIT), бэкенд winit из Slint (LicenseRef-Slint-Royalty-free-2.0) и `multer` (MIT) собираются из наших форков с небольшими изменениями. Streebog для секретного ввода в `oncl-gost` основан на коде `streebog` из RustCrypto (MIT или Apache-2.0). Подробности приведены в [NOTICE](NOTICE).
