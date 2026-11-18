@@ -5,6 +5,9 @@ use std::io;
 
 use time::OffsetDateTime;
 
+use super::keys::KeyId;
+use super::names::{RoleName, TargetPath};
+
 /// A top-level TUF role.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Role {
@@ -179,6 +182,20 @@ pub enum TufError {
     /// The state directory could not be read or written.
     #[error("TUF state: {0}")]
     Store(#[from] io::Error),
+    /// A top-level targets read in the delegating profile has no `delegations` member: the
+    /// delegations are unknown, which is not the same as "there are none" (an empty
+    /// `{"keys": {}, "roles": []}`).
+    #[error("the top-level targets have no delegations")]
+    DelegationsMissing,
+    /// A delegated role that is not trusted, for a reason only a delegation has. The other
+    /// roles, and the top-level metadata, are not concerned.
+    #[error("the delegated role {role}: {error}")]
+    Delegation {
+        /// The role.
+        role: RoleName,
+        /// Why it is not trusted.
+        error: DelegationError,
+    },
 }
 
 impl TufError {
@@ -188,4 +205,105 @@ impl TufError {
             why: why.into(),
         }
     }
+}
+
+/// Why one delegated role is not trusted. Every reason is the role's own: the top-level
+/// metadata and the other roles stay trusted.
+///
+/// The causes a delegated role shares with the top-level roles (a signature below its
+/// threshold, a length or sha256 other than the snapshot lists, a file not published or
+/// not readable) are [`TufError`]s of their own; only those whose top-level form names a
+/// [`Role`] are repeated here.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DelegationError {
+    /// The snapshot does not list the role's file.
+    #[error("the snapshot does not list it")]
+    NotInSnapshot,
+    /// The role's file has a `delegations` member: delegations are one level deep.
+    #[error("it delegates further")]
+    Nested,
+    /// The role lists a target outside its paths.
+    #[error("it lists the target {path}, outside its paths")]
+    PathOutside {
+        /// The target.
+        path: TargetPath,
+    },
+    /// The delegation's `paths` are not exactly `["plugins/<publisher>/*/*"]`.
+    #[error("its paths are not exactly the publisher's plugins/<name>/*/*")]
+    Pattern,
+    /// The delegation has `path_hash_prefixes`.
+    #[error("it is delegated by path_hash_prefixes")]
+    HashPrefixes,
+    /// The delegation is not `terminating`.
+    #[error("its delegation is not terminating")]
+    NotTerminating,
+    /// The delegation lists a key id twice.
+    #[error("its delegation lists the key {keyid} twice")]
+    DuplicateKey {
+        /// The key.
+        keyid: KeyId,
+    },
+    /// The delegation lists a key id the delegations' `keys` do not have.
+    #[error("its delegation lists the key {keyid}, which delegations.keys does not have")]
+    UnknownKey {
+        /// The key.
+        keyid: KeyId,
+    },
+    /// A key of the role is also a key of another delegated role or of the root.
+    #[error("its key {keyid} serves another role too")]
+    KeyReused {
+        /// The key.
+        keyid: KeyId,
+    },
+    /// A threshold of 0, or above the number of keys.
+    #[error("its threshold {threshold} is not between 1 and its {keys} keys")]
+    Threshold {
+        /// The threshold.
+        threshold: u64,
+        /// How many keys the delegation lists.
+        keys: usize,
+    },
+    /// The role comes after the most delegated roles the client follows.
+    #[error("it comes after the {max} delegated roles followed")]
+    TooMany {
+        /// [`super::Limits::max_delegations`].
+        max: u32,
+    },
+    /// The role lists more targets than the client takes from one role.
+    #[error("it lists more than {max} targets")]
+    TooManyTargets {
+        /// [`super::Limits::max_role_targets`].
+        max: u32,
+    },
+    /// The role's file is not the version the snapshot lists for it (or, for a kept file,
+    /// the version saved).
+    #[error("it is version {found}, not the version {expected} listed")]
+    VersionMismatch {
+        /// The version listed or saved.
+        expected: u64,
+        /// The version of the file.
+        found: u64,
+    },
+    /// The role's version is below one trusted before (a rollback).
+    #[error("it is version {found}, version {trusted} was trusted before")]
+    Rollback {
+        /// The version offered.
+        found: u64,
+        /// The version trusted before.
+        trusted: u64,
+    },
+    /// The role's file is past its `expires`.
+    #[error("it expired at {expires}")]
+    Expired {
+        /// Its `expires`.
+        expires: OffsetDateTime,
+    },
+    /// A kept file of the role is checked, but no version of the role was ever accepted.
+    #[error("no version of it was accepted")]
+    NotAccepted,
+    /// A kept file of the role is checked, but the saved top-level targets do not delegate
+    /// to it.
+    #[error("the top-level targets do not delegate to it")]
+    NotDelegated,
 }

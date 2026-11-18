@@ -11,7 +11,7 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 // The part of `src/tuf` that reads a root, compiled again for this script: `model` needs
-// `keys`, `canonical` and `error`, and `crate::hex`.
+// `keys`, `canonical`, `error`, `names` and `delegation`, and `crate::hex`.
 #[path = "src/hex.rs"]
 #[allow(dead_code)]
 mod hex;
@@ -21,6 +21,9 @@ mod hex;
 #[path = "src/tuf/canonical.rs"]
 #[allow(dead_code)]
 mod canonical;
+#[path = "src/tuf/delegation.rs"]
+#[allow(dead_code)]
+mod delegation;
 #[path = "src/tuf/error.rs"]
 #[allow(dead_code)]
 mod error;
@@ -30,6 +33,9 @@ mod keys;
 #[path = "src/tuf/model.rs"]
 #[allow(dead_code)]
 mod model;
+#[path = "src/tuf/names.rs"]
+#[allow(dead_code)]
+mod names;
 
 /// The most a root file may be: `tuf::Limits::default().root`.
 const MAX_ROOT_LEN: u64 = 64 << 10;

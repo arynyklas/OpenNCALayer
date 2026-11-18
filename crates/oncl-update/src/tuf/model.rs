@@ -14,8 +14,9 @@
 //! - keys are Ed25519 ([`super::keys`]); a key's id is recomputed; no key serves two roles;
 //! - `consistent_snapshot` is `true`;
 //! - hashes are sha256 only;
-//! - targets have no `delegations` (not even an empty one); a target path is made of
-//!   `A-Za-z0-9._+-` in segments separated by `/`, no segment empty, `.` or `..`.
+//! - in the [`Profile::Legacy`] profile targets have no `delegations` (not even an empty
+//!   one); in [`Profile::Delegating`] the top-level targets must have one ([`Delegations`]);
+//! - a target path is a [`TargetPath`].
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -27,8 +28,10 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::canonical;
+use super::delegation::Delegations;
 use super::error::{Role, TufError};
 use super::keys::{KeyId, PublicKey};
+use super::names::TargetPath;
 
 /// The `spec_version` this client writes.
 pub const SPEC_VERSION: &str = "1.0.31";
@@ -417,7 +420,20 @@ pub struct Target {
     pub custom: Option<Value>,
 }
 
-/// `targets.json`: the files of the repository.
+/// What a repository's top-level targets carry besides the targets, and so how the client
+/// reads them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Profile {
+    /// No delegations: a top-level targets with a `delegations` member, even an empty one, is
+    /// refused. The profile of `tuf/v1` and of every client released before delegations.
+    Legacy,
+    /// The top-level targets must have a `delegations` member (empty if there is no
+    /// publisher), read into [`Delegations`]; every entry of a snapshot's `meta` must list
+    /// its length and sha256.
+    Delegating,
+}
+
+/// `targets.json`, or a delegated role's file: the files of the repository.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Targets {
     /// The version.
@@ -425,32 +441,38 @@ pub struct Targets {
     /// When the targets stop being trusted.
     pub expires: OffsetDateTime,
     /// The files, by target path.
-    pub targets: BTreeMap<String, Target>,
+    pub targets: BTreeMap<TargetPath, Target>,
+    /// The delegations: always `Some` in the [`Profile::Delegating`] profile, always `None`
+    /// in [`Profile::Legacy`].
+    pub delegations: Option<Delegations>,
 }
 
 impl Targets {
-    /// Reads the `signed` of a targets file; the errors are those of [`Root::from_signed`],
-    /// and [`TufError::Unsupported`] for a `delegations` member.
-    pub fn from_signed(signed: &Value) -> Result<Targets, TufError> {
+    /// Reads the `signed` of a targets file in `profile`; the errors are those of
+    /// [`Root::from_signed`] and of [`Delegations`], and in [`Profile::Legacy`]
+    /// [`TufError::Unsupported`] for a `delegations` member, in [`Profile::Delegating`]
+    /// [`TufError::DelegationsMissing`] for none.
+    pub fn from_signed(signed: &Value, profile: Profile) -> Result<Targets, TufError> {
         let (members, header) = header(signed, Role::Targets)?;
-        if members.contains_key("delegations") {
-            return Err(TufError::Unsupported(
-                "delegations in targets metadata".to_owned(),
-            ));
-        }
-        let mut targets = BTreeMap::new();
-        for (path, entry) in object(field(members, "targets", "targets")?, "targets")? {
-            if !valid_target_path(path) {
-                return Err(TufError::malformed(
-                    "targets",
-                    format!("{path:?} is not a valid target path"),
+        let delegations = match (profile, members.get("delegations")) {
+            (Profile::Legacy, None) => None,
+            (Profile::Legacy, Some(_)) => {
+                return Err(TufError::Unsupported(
+                    "delegations in targets metadata".to_owned(),
                 ));
             }
+            (Profile::Delegating, None) => return Err(TufError::DelegationsMissing),
+            (Profile::Delegating, Some(delegations)) => Some(Delegations::from_value(delegations)?),
+        };
+        let mut targets = BTreeMap::new();
+        for (path, entry) in object(field(members, "targets", "targets")?, "targets")? {
+            let path = TargetPath::parse(path)
+                .map_err(|e| TufError::malformed("targets", e.to_string()))?;
             let what = format!("target {path}");
             let entry = object(entry, &what)?;
             let hashes = field(entry, "hashes", &what)?;
             targets.insert(
-                path.clone(),
+                path,
                 Target {
                     length: uint(entry, "length", &what)?,
                     sha256: hashes_of(hashes, &what)?,
@@ -462,21 +484,9 @@ impl Targets {
             version: header.version,
             expires: header.expires,
             targets,
+            delegations,
         })
     }
-}
-
-/// Whether `path` is a target path this client accepts: at most 512 bytes of
-/// `A-Za-z0-9._+-` in segments separated by `/`, no segment empty, `.` or `..`.
-pub fn valid_target_path(path: &str) -> bool {
-    !path.is_empty()
-        && path.len() <= 512
-        && path.split('/').all(|segment| {
-            !matches!(segment, "" | "." | "..")
-                && segment
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'+' | b'-'))
-        })
 }
 
 /// `Ok` if `expires` is after `now`, the fixed time the update started at.
@@ -572,19 +582,19 @@ fn header(signed: &Value, role: Role) -> Result<(&Map<String, Value>, Header), T
     Ok((members, Header { version, expires }))
 }
 
-fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, TufError> {
+pub(super) fn object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, TufError> {
     value
         .as_object()
         .ok_or_else(|| TufError::malformed(what, "not an object"))
 }
 
-fn array<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, TufError> {
+pub(super) fn array<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, TufError> {
     value
         .as_array()
         .ok_or_else(|| TufError::malformed(what, "not an array"))
 }
 
-fn field<'a>(
+pub(super) fn field<'a>(
     members: &'a Map<String, Value>,
     name: &str,
     what: &str,
@@ -604,7 +614,7 @@ fn string<'a>(
         .ok_or_else(|| TufError::malformed(what, format!("{name} is not a string")))
 }
 
-fn uint(members: &Map<String, Value>, name: &str, what: &str) -> Result<u64, TufError> {
+pub(super) fn uint(members: &Map<String, Value>, name: &str, what: &str) -> Result<u64, TufError> {
     field(members, name, what)?
         .as_u64()
         .ok_or_else(|| TufError::malformed(what, format!("{name} is not a non-negative integer")))
@@ -922,7 +932,9 @@ mod tests {
             ("root", |v| Root::from_signed(v).map(drop)),
             ("timestamp", |v| Timestamp::from_signed(v).map(drop)),
             ("snapshot", |v| Snapshot::from_signed(v).map(drop)),
-            ("targets", |v| Targets::from_signed(v).map(drop)),
+            ("targets", |v| {
+                Targets::from_signed(v, Profile::Legacy).map(drop)
+            }),
         ];
         for (offered, _) in views {
             for (read_as, read) in views {
@@ -939,7 +951,7 @@ mod tests {
         // (A timestamp, snapshot or targets that is right passes its own view.)
         Timestamp::from_signed(&signed("timestamp")).unwrap();
         Snapshot::from_signed(&signed("snapshot")).unwrap();
-        Targets::from_signed(&signed("targets")).unwrap();
+        Targets::from_signed(&signed("targets"), Profile::Legacy).unwrap();
     }
 
     fn hash(n: u8) -> String {
@@ -979,12 +991,15 @@ mod tests {
         .unwrap();
         assert_eq!(snap.targets().version, 2);
 
-        let targets = Targets::from_signed(&json!({
-            "_type": "targets", "spec_version": "1.0.31", "version": 2,
-            "expires": "2026-12-15T00:00:00Z",
-            "targets": {"indexes/stable.json": {
-                "length": 77, "hashes": {"sha256": hash(3)}, "custom": {"a": 1}}},
-        }))
+        let targets = Targets::from_signed(
+            &json!({
+                "_type": "targets", "spec_version": "1.0.31", "version": 2,
+                "expires": "2026-12-15T00:00:00Z",
+                "targets": {"indexes/stable.json": {
+                    "length": 77, "hashes": {"sha256": hash(3)}, "custom": {"a": 1}}},
+            }),
+            Profile::Legacy,
+        )
         .unwrap();
         let target = &targets.targets["indexes/stable.json"];
         assert_eq!((target.length, target.sha256), (77, Digest([3; 32])));
@@ -1053,7 +1068,7 @@ mod tests {
             if let Some(extra) = extra.as_object() {
                 v.as_object_mut().unwrap().extend(extra.clone());
             }
-            Targets::from_signed(&v)
+            Targets::from_signed(&v, Profile::Legacy)
         };
         targets(json!({}), "indexes/stable.json").unwrap();
         targets(json!({}), "a/b-c_d+e.1").unwrap();
@@ -1074,8 +1089,8 @@ mod tests {
                 "{path:?}"
             );
         }
-        assert!(!valid_target_path(&"a".repeat(513)));
-        assert!(valid_target_path(&"a".repeat(512)));
+        assert!(TargetPath::parse(&"a".repeat(513)).is_err());
+        assert!(TargetPath::parse(&"a".repeat(512)).is_ok());
     }
 
     #[test]

@@ -30,19 +30,35 @@
 //!   cannot be compared with those of roots it does not chain from);
 //! - the targets file accepted is saved beside its version, so that a target kept from an
 //!   earlier download can be checked again offline ([`TufClient::verify_cached_target`]);
-//! - there are no delegations: step 5.6.7 is only the top-level targets.
+//! - in the legacy profile ([`Profile::Legacy`]) there are no delegations: step 5.6.7 is only
+//!   the top-level targets;
+//! - in the delegating profile ([`Profile::Delegating`]) every entry of the snapshot's `meta`
+//!   must list its length and sha256, and step 5.6.7 is [`TufClient::delegated`], kept apart
+//!   from [`TufClient::refresh`] (the updater of the program never needs a publisher's role).
+//!   Step 5.6.7 searches for one target; the plugin catalog needs every target of every
+//!   publisher, so `delegated` visits every delegated role with the same bounds: in order,
+//!   each name once, at most [`Limits::max_delegations`], every target inside the role's
+//!   paths. With the profile's disjoint, terminating, one-level delegations that gives, for
+//!   any path, the answer the search of 5.6.7 gives. Stricter than the specification: a role
+//!   that lists a target outside its paths, or delegates further, is not trusted at all, and
+//!   the profile of each delegation ([`super::delegation`]) is enforced; and one role that is
+//!   not trusted never touches the others or the top-level metadata.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use time::OffsetDateTime;
 
-use super::ed25519::verify_role;
-use super::error::{Role, TufError};
+use super::delegation::{DelegatedRole, Delegations, RefusedRole};
+use super::ed25519::{verify_role, verify_threshold};
+use super::error::{DelegationError, Role, TufError};
 use super::fetch::{Fetcher, Response};
 use super::layout;
 use super::model::{
-    Digest, Envelope, MetaFile, Root, Snapshot, TARGETS_META, Target, Targets, Timestamp,
+    Digest, Envelope, MetaFile, Profile, Root, Snapshot, TARGETS_META, Target, Targets, Timestamp,
     ensure_fresh,
 };
-use super::store::{SnapshotState, Store, TimestampState, TrustState};
+use super::names::{RoleName, TargetPath};
+use super::store::{RoleState, SnapshotState, Store, TimestampState, TrustState};
 
 /// The most each kind of file may be, when its size is not listed by the role above (and the
 /// most a listed size may be).
@@ -58,11 +74,20 @@ pub struct Limits {
     pub targets: u64,
     /// How many new roots one refresh follows (the specification's Y of step 5.3.3).
     pub max_roots: u32,
+    /// A delegated role's file.
+    pub delegated: u64,
+    /// How many delegated roles [`TufClient::delegated`] follows; the roles after them are
+    /// not trusted ([`DelegationError::TooMany`]).
+    pub max_delegations: u32,
+    /// How many targets a delegated role may list; a role that lists more is not trusted
+    /// ([`DelegationError::TooManyTargets`]).
+    pub max_role_targets: u32,
 }
 
 impl Default for Limits {
     /// 64 KiB per root, 16 KiB for the timestamp, 128 KiB for the snapshot, 256 KiB for the
-    /// targets, 128 roots.
+    /// targets, 128 roots, 128 KiB per delegated role, 32 delegated roles, 256 targets per
+    /// delegated role.
     fn default() -> Self {
         Limits {
             root: 64 << 10,
@@ -70,7 +95,89 @@ impl Default for Limits {
             snapshot: 128 << 10,
             targets: 256 << 10,
             max_roots: 128,
+            delegated: 128 << 10,
+            max_delegations: 32,
+            max_role_targets: 256,
         }
+    }
+}
+
+/// A delegated role that passed every check: signed by a threshold of the keys its
+/// delegation names, the version the snapshot lists (or the version saved), not older than
+/// one trusted before, not expired, no further delegations, every target inside its paths.
+/// Only [`TufClient::delegated`] and [`TufClient::verify_cached_role`] make one.
+#[derive(Clone, Debug)]
+pub struct VerifiedRole {
+    name: RoleName,
+    targets: Targets,
+    file: Vec<u8>,
+    valid_until: OffsetDateTime,
+}
+
+impl VerifiedRole {
+    /// The role.
+    pub fn name(&self) -> &RoleName {
+        &self.name
+    }
+
+    /// Its version.
+    pub fn version(&self) -> u64 {
+        self.targets.version
+    }
+
+    /// When the role's own file stops being trusted.
+    pub fn expires(&self) -> OffsetDateTime {
+        self.targets.expires
+    }
+
+    /// The earliest moment the role, or the metadata it was checked against, stops being
+    /// trusted: for [`TufClient::delegated`] also the four top-level files, for
+    /// [`TufClient::verify_cached_role`] the root and the top-level targets.
+    pub fn valid_until(&self) -> OffsetDateTime {
+        self.valid_until
+    }
+
+    /// The role's targets, every one inside its paths.
+    pub fn targets(&self) -> &BTreeMap<TargetPath, Target> {
+        &self.targets.targets
+    }
+
+    /// What the role says of the target `path`.
+    pub fn target(&self, path: &str) -> Option<&Target> {
+        self.targets.targets.get(path)
+    }
+
+    /// The role's file as it was checked: what a caller keeps to check it again offline
+    /// ([`TufClient::verify_cached_role`]).
+    pub fn file(&self) -> &[u8] {
+        &self.file
+    }
+}
+
+/// What [`TufClient::delegated`] found: each delegated role of the top-level targets, in
+/// their order, trusted or with the reason it is not.
+#[derive(Debug)]
+pub struct Delegated {
+    roles: Vec<(RoleName, Result<VerifiedRole, TufError>)>,
+}
+
+impl Delegated {
+    /// Every role, in the order of the delegations.
+    pub fn roles(&self) -> impl Iterator<Item = (&RoleName, Result<&VerifiedRole, &TufError>)> {
+        self.roles.iter().map(|(name, role)| (name, role.as_ref()))
+    }
+
+    /// The role `name`, if the top-level targets delegate to it.
+    pub fn role(&self, name: &RoleName) -> Option<Result<&VerifiedRole, &TufError>> {
+        self.roles
+            .iter()
+            .find(|(role, _)| role == name)
+            .map(|(_, role)| role.as_ref())
+    }
+
+    /// Every role, in the order of the delegations, owned.
+    pub fn into_roles(self) -> Vec<(RoleName, Result<VerifiedRole, TufError>)> {
+        self.roles
     }
 }
 
@@ -147,6 +254,7 @@ pub struct TufClient<F, S> {
     /// The root built into the program.
     anchor: Root,
     limits: Limits,
+    profile: Profile,
     /// Why the last refresh that reset the saved state did (also when it then failed).
     last_reset: Option<String>,
 }
@@ -175,7 +283,20 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             anchor: root,
             limits,
             last_reset: None,
+            profile: Profile::Legacy,
         })
+    }
+
+    /// This client with the repository profile `profile` ([`Profile::Legacy`] unless set).
+    #[must_use]
+    pub fn with_profile(mut self, profile: Profile) -> TufClient<F, S> {
+        self.profile = profile;
+        self
+    }
+
+    /// The repository profile this client reads.
+    pub fn profile(&self) -> Profile {
+        self.profile
     }
 
     /// A client trusting the root built into this program, or `None` if the build has none:
@@ -294,11 +415,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
                     // 5.3.11: if the timestamp, snapshot (or targets) keys were rotated, the
                     // versions trusted before are forgotten.
                     if root.rotates(&new_root) {
-                        state.timestamp = None;
-                        state.snapshot = None;
-                        state.targets = None;
-                        state.targets_file = None;
-                        state.keys_epoch = new_root.version;
+                        state.forget_versions(new_root.version);
                     }
                     // 5.3.7: the new root is the trusted root.
                     state.roots.push(file);
@@ -385,11 +502,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         if state.root_version != 0 && state.root_version < anchor.version {
             // A built-in root newer than anything saved: the keys of the roles in between
             // are not known, so the versions saved under them are not kept.
-            state.timestamp = None;
-            state.snapshot = None;
-            state.targets = None;
-            state.targets_file = None;
-            state.keys_epoch = anchor.version;
+            state.forget_versions(anchor.version);
         }
         state.roots = kept;
         state.root_version = trusted.version;
@@ -498,6 +611,24 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         }
         // 5.5.6: a freeze attack.
         ensure_fresh(Role::Snapshot, snapshot.expires, now)?;
+        // The delegating profile: every file listed by its length and sha256, so that the
+        // targets key shared with another repository cannot bring a file of that one here.
+        match self.profile {
+            Profile::Legacy => {}
+            Profile::Delegating => {
+                if let Some(name) = snapshot
+                    .meta
+                    .iter()
+                    .find(|(_, meta)| meta.length.is_none() || meta.sha256.is_none())
+                    .map(|(name, _)| name)
+                {
+                    return Err(TufError::malformed(
+                        "snapshot",
+                        format!("{name} is listed without its length and sha256"),
+                    ));
+                }
+            }
+        }
         // 5.5.7: persist.
         state.snapshot = Some(SnapshotState {
             version: snapshot.version,
@@ -531,7 +662,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         let file = Envelope::parse(&body, self.limits.targets, TARGETS_META)?;
         // 5.6.3: signed by a threshold of the targets keys of the trusted root.
         verify_role(&file, root, Role::Targets, "the targets")?;
-        let targets = Targets::from_signed(&file.signed)?;
+        let targets = Targets::from_signed(&file.signed, self.profile)?;
         // 5.6.4: the version the snapshot lists.
         if targets.version != listed.version {
             return Err(TufError::VersionMismatch {
@@ -583,31 +714,32 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
     ) -> Result<Vec<u8>, TufError> {
         trusted.ensure_fresh(now)?;
         // 5.7.1-5.7.2: the metadata of the target.
-        let target = trusted
-            .target(path)
+        let (path, target) = trusted
+            .targets
+            .targets
+            .get_key_value(path)
             .ok_or_else(|| TufError::NoSuchTarget(path.to_owned()))?;
         if target.length > max_len {
             return Err(TufError::TargetTooLarge {
-                path: path.to_owned(),
+                path: path.to_string(),
                 len: target.length,
                 max: max_len,
             });
         }
         // 5.7.3: download up to the listed length, from the name with the hash ...
-        let stored = layout::target_file_path(path, &target.sha256)
-            .ok_or_else(|| TufError::NoSuchTarget(path.to_owned()))?;
+        let stored = layout::target_file_path(path, &target.sha256);
         let body = self.get_required(&stored, target.length)?;
         // ... and verify its length and hash.
         if body.len() as u64 != target.length {
             return Err(TufError::Length {
-                what: path.to_owned(),
+                what: path.to_string(),
                 expected: target.length,
                 actual: body.len() as u64,
             });
         }
         if Digest::of(&body) != target.sha256 {
             return Err(TufError::Hash {
-                what: path.to_owned(),
+                what: path.to_string(),
             });
         }
         Ok(body)
@@ -638,23 +770,9 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         bytes: &[u8],
         now: OffsetDateTime,
     ) -> Result<OffsetDateTime, TufError> {
-        let mut state = self.store.load()?;
-        let root = self
-            .replay(&mut state)
-            .map_err(|why| TufError::malformed("the saved TUF state", why))?;
-        ensure_fresh(Role::Root, root.expires, now)?;
-        let (Some(version), Some(file)) = (state.targets, &state.targets_file) else {
+        let Some((root, targets, _)) = self.cached_targets(now)? else {
             return Err(TufError::NoSuchTarget(path.to_owned()));
         };
-        verify_role(file, &root, Role::Targets, "the saved targets")?;
-        let targets = Targets::from_signed(&file.signed)?;
-        if targets.version != version {
-            return Err(TufError::malformed(
-                "the saved targets",
-                format!("version {} is not the {version} saved", targets.version),
-            ));
-        }
-        ensure_fresh(Role::Targets, targets.expires, now)?;
         let target = targets
             .targets
             .get(path)
@@ -672,6 +790,220 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             });
         }
         Ok(root.expires.min(targets.expires))
+    }
+
+    /// The saved top-level targets, checked again offline as
+    /// [`TufClient::verify_cached_target`] says, with the root in force and the state; `None`
+    /// if no targets are saved.
+    fn cached_targets(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<Option<(Root, Targets, TrustState)>, TufError> {
+        let mut state = self.store.load()?;
+        let root = self
+            .replay(&mut state)
+            .map_err(|why| TufError::malformed("the saved TUF state", why))?;
+        ensure_fresh(Role::Root, root.expires, now)?;
+        let (Some(version), Some(file)) = (state.targets, &state.targets_file) else {
+            return Ok(None);
+        };
+        verify_role(file, &root, Role::Targets, "the saved targets")?;
+        let targets = Targets::from_signed(&file.signed, self.profile)?;
+        if targets.version != version {
+            return Err(TufError::malformed(
+                "the saved targets",
+                format!("version {} is not the {version} saved", targets.version),
+            ));
+        }
+        ensure_fresh(Role::Targets, targets.expires, now)?;
+        Ok(Some((root, targets, state)))
+    }
+
+    /// Step 5.6.7 in the delegating profile: every delegated role of `trusted`'s top-level
+    /// targets, in order, each name once, at most [`Limits::max_delegations`]. A role is
+    /// trusted if its delegation keeps the profile, none of its keys is a key of the root, the
+    /// snapshot lists its file, the file is exactly the length and sha256 listed, signed by a
+    /// threshold of the delegation's keys, the version listed and not below the version saved,
+    /// not expired, without delegations of its own, and lists only targets inside its paths.
+    /// The version of each role trusted is saved, never lowered.
+    ///
+    /// A role that is not trusted is in the result with its error; it touches neither the
+    /// other roles nor `trusted`.
+    ///
+    /// # Errors
+    ///
+    /// [`TufError::Expired`] if `trusted` is no longer fresh at `now`,
+    /// [`TufError::DelegationsMissing`] if its targets have no delegations (the legacy
+    /// profile), and the errors of [`Store::load`] and [`Store::save`]: the state of the
+    /// roles is all or nothing.
+    pub fn delegated(
+        &mut self,
+        trusted: &Trusted,
+        now: OffsetDateTime,
+    ) -> Result<Delegated, TufError> {
+        trusted.ensure_fresh(now)?;
+        let delegations = trusted
+            .targets
+            .delegations
+            .as_ref()
+            .ok_or(TufError::DelegationsMissing)?;
+        // The state is read here and saved once below, merged under the store's lock. If
+        // another process rotates the keys in between (a refresh that forgets every version),
+        // the merge keeps the newer epoch, so the versions saved below are dropped, not
+        // brought back; and if it is the other way round, the next refresh starts the epoch
+        // over anyway. Neither ever lowers a version within an epoch.
+        let mut state = self.store.load()?;
+        let loaded = state.clone();
+        let max = self.limits.max_delegations;
+        let mut visited = BTreeSet::new();
+        let mut roles = Vec::new();
+        for (index, entry) in delegations.roles().iter().enumerate() {
+            let name = match entry {
+                Ok(role) => role.name(),
+                Err(refused) => &refused.name,
+            };
+            // 5.6.7.1: a role visited before is skipped.
+            if !visited.insert(name.clone()) {
+                continue;
+            }
+            let result = if u32::try_from(index).map_or(true, |index| index >= max) {
+                Err(TufError::Delegation {
+                    role: name.clone(),
+                    error: DelegationError::TooMany { max },
+                })
+            } else {
+                self.fetch_role(
+                    trusted,
+                    delegations,
+                    entry.as_ref(),
+                    state.delegated.get(name).map(|accepted| accepted.version),
+                    now,
+                )
+            };
+            if let Ok(role) = &result {
+                // 5.6.6: persist (below, once for every role), with the hash of the very
+                // file accepted: the only bytes `verify_cached_role` takes for it.
+                state.delegated.insert(
+                    name.clone(),
+                    RoleState {
+                        version: role.version(),
+                        sha256: Digest::of(role.file()),
+                    },
+                );
+            }
+            roles.push((name.clone(), result));
+        }
+        if state != loaded {
+            self.store.save(&state)?;
+        }
+        Ok(Delegated { roles })
+    }
+
+    /// One delegated role of `trusted`, from the repository.
+    fn fetch_role(
+        &self,
+        trusted: &Trusted,
+        delegations: &Delegations,
+        entry: Result<&DelegatedRole, &RefusedRole>,
+        saved: Option<u64>,
+        now: OffsetDateTime,
+    ) -> Result<VerifiedRole, TufError> {
+        let role = usable(entry, &trusted.root)?;
+        let name = role.name();
+        let meta_name = name.meta_name();
+        // The snapshot lists the role's file.
+        let listed = trusted
+            .snapshot
+            .meta
+            .get(&meta_name)
+            .ok_or_else(|| delegation_error(name, DelegationError::NotInSnapshot))?;
+        // 5.6.1-5.6.2: at most the listed length (and the limit), then exactly the listed
+        // length and sha256, before the signature.
+        let body = self.get_listed(
+            &layout::delegated_path(listed.version, name),
+            &meta_name,
+            listed,
+            self.limits.delegated,
+        )?;
+        let targets = check_role_file(
+            role,
+            delegations,
+            &body,
+            &self.limits,
+            listed.version,
+            saved,
+            now,
+        )?;
+        let valid_until = trusted.expires().min(targets.expires);
+        Ok(VerifiedRole {
+            name: name.clone(),
+            targets,
+            file: body,
+            valid_until,
+        })
+    }
+
+    /// The delegated role `role` as a file kept from an earlier [`TufClient::delegated`]
+    /// (`bytes`), checked again without the network: `bytes` must be exactly the file that
+    /// `delegated` accepted (its sha256 is saved), the saved top-level targets are checked as
+    /// [`TufClient::verify_cached_target`] checks them, their delegation of `role` as
+    /// [`TufClient::delegated`] checks it, and `bytes` signed by a threshold of its keys,
+    /// exactly the version saved, not expired at `now`, without delegations, every target
+    /// inside its paths. Nothing is read from the repository and nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TufClient::verify_cached_target`] for the saved targets;
+    /// [`TufError::DelegationsMissing`] if they have no delegations;
+    /// [`TufError::Delegation`] if they do not delegate to `role`
+    /// ([`DelegationError::NotDelegated`]), no version of it was accepted
+    /// ([`DelegationError::NotAccepted`]), or for the rules of [`TufClient::delegated`]; and
+    /// [`TufError::Hash`] if `bytes` are not the file accepted; [`TufError::Signature`] or
+    /// the errors of [`Envelope::parse`] for `bytes`.
+    pub fn verify_cached_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<VerifiedRole, TufError> {
+        let Some((root, targets, state)) = self.cached_targets(now)? else {
+            return Err(delegation_error(role, DelegationError::NotAccepted));
+        };
+        let delegations = targets
+            .delegations
+            .as_ref()
+            .ok_or(TufError::DelegationsMissing)?;
+        let entry = delegations
+            .role(role)
+            .ok_or_else(|| delegation_error(role, DelegationError::NotDelegated))?;
+        let delegated = usable(entry, &root)?;
+        let accepted = *state
+            .delegated
+            .get(role)
+            .ok_or_else(|| delegation_error(role, DelegationError::NotAccepted))?;
+        // Only the file accepted: another file of the same version, even one signed by the
+        // delegation's keys, was never checked against the snapshot.
+        if Digest::of(bytes) != accepted.sha256 {
+            return Err(TufError::Hash {
+                what: format!("the kept file of the role {role}"),
+            });
+        }
+        let role_targets = check_role_file(
+            delegated,
+            delegations,
+            bytes,
+            &self.limits,
+            accepted.version,
+            None,
+            now,
+        )?;
+        let valid_until = root.expires.min(targets.expires).min(role_targets.expires);
+        Ok(VerifiedRole {
+            name: role.clone(),
+            targets: role_targets,
+            file: bytes.to_vec(),
+            valid_until,
+        })
     }
 
     /// The file at `path`, or `None` for a 404; never more than `max_len` bytes, whatever
@@ -759,4 +1091,115 @@ fn accept_root(trusted: &Root, next: u64, file: Envelope) -> Result<(Envelope, R
         });
     }
     Ok((file, new_root))
+}
+
+fn delegation_error(role: &RoleName, error: DelegationError) -> TufError {
+    TufError::Delegation {
+        role: role.clone(),
+        error,
+    }
+}
+
+/// The role of a delegation entry, if it keeps the profile and none of its keys is a key of
+/// `root` (one key, one role).
+fn usable<'a>(
+    entry: Result<&'a DelegatedRole, &RefusedRole>,
+    root: &Root,
+) -> Result<&'a DelegatedRole, TufError> {
+    let role = entry.map_err(|refused| delegation_error(&refused.name, refused.error.clone()))?;
+    if let Some(keyid) = role
+        .keys()
+        .keyids
+        .iter()
+        .find(|id| root.keys.contains_key(id))
+    {
+        return Err(delegation_error(
+            role.name(),
+            DelegationError::KeyReused { keyid: *keyid },
+        ));
+    }
+    Ok(role)
+}
+
+/// 5.6.3-5.6.5 for the file `body` of the delegated role `role`: signed by a threshold of
+/// its keys, a targets file of version `expected` and not below `trusted`, not expired at
+/// `now`, without delegations, at most [`Limits::max_role_targets`] targets, every one
+/// inside the role's paths.
+fn check_role_file(
+    role: &DelegatedRole,
+    delegations: &Delegations,
+    body: &[u8],
+    limits: &Limits,
+    expected: u64,
+    trusted: Option<u64>,
+    now: OffsetDateTime,
+) -> Result<Targets, TufError> {
+    let name = role.name();
+    let what = name.meta_name();
+    let file = Envelope::parse(body, limits.delegated, &what)?;
+    // 5.6.3: signed by a threshold of the keys of the delegation.
+    verify_threshold(
+        &file,
+        role.keys(),
+        delegations.keys(),
+        &format!("the role {name}"),
+    )?;
+    // Delegations are one level deep.
+    if file
+        .signed
+        .as_object()
+        .is_some_and(|members| members.contains_key("delegations"))
+    {
+        return Err(delegation_error(name, DelegationError::Nested));
+    }
+    let targets = Targets::from_signed(&file.signed, Profile::Legacy)?;
+    // 5.6.4: the version listed (or saved).
+    if targets.version != expected {
+        return Err(delegation_error(
+            name,
+            DelegationError::VersionMismatch {
+                expected,
+                found: targets.version,
+            },
+        ));
+    }
+    if let Some(trusted) = trusted
+        && targets.version < trusted
+    {
+        return Err(delegation_error(
+            name,
+            DelegationError::Rollback {
+                found: targets.version,
+                trusted,
+            },
+        ));
+    }
+    // 5.6.5: a freeze attack.
+    if targets.expires <= now {
+        return Err(delegation_error(
+            name,
+            DelegationError::Expired {
+                expires: targets.expires,
+            },
+        ));
+    }
+    let max = limits.max_role_targets;
+    if u32::try_from(targets.targets.len()).map_or(true, |count| count > max) {
+        return Err(delegation_error(
+            name,
+            DelegationError::TooManyTargets { max },
+        ));
+    }
+    // Section 4.5: every target inside the role's paths, or the role is not trusted.
+    if let Some(path) = targets
+        .targets
+        .keys()
+        .find(|path| !role.pattern().matches(path))
+    {
+        return Err(delegation_error(
+            name,
+            DelegationError::PathOutside { path: path.clone() },
+        ));
+    }
+    Ok(targets)
 }

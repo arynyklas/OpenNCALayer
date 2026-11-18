@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, bail};
 use oncl_update::tuf::build;
 use oncl_update::tuf::ed25519::verify_role;
-use oncl_update::tuf::{Digest, Envelope, Limits, Role, Snapshot, Targets, layout};
+use oncl_update::tuf::{Digest, Envelope, Limits, Profile, Role, Snapshot, Targets, layout};
 use oncl_update::{Channel, Index, MAX_INDEX_LEN};
 use time::OffsetDateTime;
 
@@ -114,7 +114,8 @@ fn read_targets(dir: &Path, version: u64) -> anyhow::Result<(Envelope, Targets)>
     let bytes = repo::read(dir, &path)?;
     let env = Envelope::parse(&bytes, Limits::default().targets, &path)
         .map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
-    let targets = Targets::from_signed(&env.signed).map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
+    let targets = Targets::from_signed(&env.signed, Profile::Legacy)
+        .map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
     Ok((env, targets))
 }
 
