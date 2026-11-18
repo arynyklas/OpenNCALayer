@@ -138,7 +138,7 @@ pub fn init(options: &Options) -> anyhow::Result<Initialized> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("creating {}", parent.display()))?;
     }
-    crate::sign::write_new(options.anchor, &file, false)
+    crate::files::write_new(options.anchor, &file, false)
         .context("the keys and the root are written; the trust anchor is not")?;
     Ok(Initialized {
         key_ids,

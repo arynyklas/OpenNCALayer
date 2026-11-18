@@ -1,77 +1,50 @@
 # OpenNCALayer
 
-OpenNCALayer — открытая замена NCALayer на Rust. Сайты (egov.kz, госзакупки, банки, ЭДО), которые работают с оригиналом через `wss://127.0.0.1:13579`, должны работать с OpenNCALayer без изменений: тот же протокол, те же модули.
+Открытая замена NCALayer для подписи документов ЭЦП на сайтах: egov.kz, госзакупки, банки, ЭДО. Сайты работают с ней так же, как с оригиналом, и менять на них ничего не нужно.
 
-OpenNCALayer — независимый проект и не связан с НУЦ РК.
+Проект независимый и не связан с НУЦ РК.
 
-Чат проекта в Telegram: [t.me/OpenNCALayer](https://t.me/OpenNCALayer) — вопросы по установке и работе, обсуждение. Об ошибках лучше сообщать в [Issues](https://github.com/arynyklas/OpenNCALayer/issues), чтобы они не потерялись. Об уязвимостях — только приватно, см. [`SECURITY.md`](SECURITY.md).
+## Установка
 
-## Статус
+1. Скачайте установщик для своей системы со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/): Windows (в том числе Windows 7), macOS или Linux.
+2. Установите [расширение браузера](docs/user/browser-extension.md). Так сайт проще всего увидит программу.
+3. Откройте сайт и подпишите документ как обычно.
 
-Выпускаются релизы и предварительные версии ([Releases](https://github.com/arynyklas/OpenNCALayer/releases)); каналы обновлений — `stable` (релизы) и `beta` (релизы и предварительные версии). Что надёжно и что нет:
+Можно обойтись и без расширения: выпустите сертификат в меню значка программы, пункт «Сертификат для браузера…» ([инструкция](docs/user/tls.md)).
 
-- **Работает:** протокол оригинала для файловых хранилищ (вход на eGov проверен на Windows 11 в Chrome — и через `wss` с установленным CA, и через расширение), проверка сертификатов НУЦ, расширение браузера, программа в области уведомлений.
-- **Экспериментально:** токены и удостоверение личности (выключены по умолчанию, проверены только на программных эмуляторах), плагины-порты модулей оригинала и подпись из окна «Инструменты» (настоящим ключом и службами НУЦ не проверена), установщик на macOS (`.pkg` ставится, запускается, обновляет себя и удаляется в CI на Mac с Apple Silicon и с Intel; сборка не подписана и не нотаризована, окно Gatekeeper и значок в строке меню на Mac не проверялись).
-- **Нет:** шифрования и расшифрования, WinGet-пакета (подробности в [`docs/dev/winget.md`](docs/dev/winget.md)).
+Подробнее, в том числе как удалить программу: [`docs/user/install.md`](docs/user/install.md).
 
-Подробно о границах — в [`docs/user/compatibility.md`](docs/user/compatibility.md), [`docs/user/tokens.md`](docs/user/tokens.md) и [`docs/user/plugins.md`](docs/user/plugins.md). Сравнение с оригиналом для этого релиза не повторялось.
+## Что работает
 
-## С чего начать
+- Подпись и вход по ключам из файлов `.p12`, `.pfx`, `.jks`.
+- Проверка сертификатов НУЦ.
+- Плагины сторонних сайтов, перенесённые из оригинала.
+- Автоматическое обновление.
 
-**Я пользователь сайта (egov, госзакупки…).** Поставьте программу и настройте доступ браузера:
-1. Скачайте установщик со страницы [«Загрузка»](https://arynyklas.github.io/OpenNCALayer/download/) сайта проекта или из [Releases](https://github.com/arynyklas/OpenNCALayer/releases): Windows — `openncalayer-<версия>-win-x64-setup.exe` (32-битная — `win-x86`; Windows 7 SP1 — `win7-*`), macOS — `openncalayer-<версия>-osx.pkg`, Linux — `openncalayer-<версия>-linux-x64.AppImage`, Arch Linux — файл `openncalayer-bin-*-x86_64.pkg.tar.zst` оттуда же (или AppImage).
-2. Либо установите расширение браузера ([`docs/user/browser-extension.md`](docs/user/browser-extension.md)) — сертификат тогда не нужен, либо выпустите сертификат мастером «Сертификат для браузера…» в меню значка ([`docs/user/tls.md`](docs/user/tls.md)).
-3. Если вы выбрали сертификат, откройте `https://127.0.0.1:13579/openncalayer/selftest`: страница должна открыться без предупреждения о сертификате. С расширением эта проверка не нужна.
+Пока не работает или не проверено:
+- шифрования и расшифрования нет;
+- токены и удостоверение личности поддерживаются экспериментально и выключены по умолчанию;
+- установщики не подписаны, поэтому Windows покажет предупреждение SmartScreen, а macOS предупреждение Gatekeeper.
 
-Подробности по каждой ОС, удаление и Windows 7 — в [`docs/user/install.md`](docs/user/install.md).
+Отличия от оригинала описаны в [`docs/user/compatibility.md`](docs/user/compatibility.md).
 
-**Я разработчик, интегратор.** Три независимых способа использовать ту же подпись и проверку без десктопа:
-- SDK `oncl-core` — встраиваемая Rust-библиотека (не в crates.io, подключается по path или git): [`docs/dev/sdk-overview.md`](docs/dev/sdk-overview.md), контракты — [`docs/dev/sdk.md`](docs/dev/sdk.md);
-- CLI `oncl` — подпись, проверка, хеширование, метки времени: [`docs/user/cli.md`](docs/user/cli.md);
-- HTTP-сервис `oncl-server` — API выключен, пока оператор не включит его: [`docs/user/server.md`](docs/user/server.md), [`docs/user/http-api.md`](docs/user/http-api.md).
+## Помощь
 
-Архивы `oncl` и `oncl-server` workflow релиза собирает только как артефакты запуска (`platform-*`), к релизу они не прикладываются: собирайте из исходников ([`docs/dev/development.md`](docs/dev/development.md)).
+- Вопросы задавайте в Telegram-чате [t.me/OpenNCALayer](https://t.me/OpenNCALayer).
+- Об ошибках сообщайте в [Issues](https://github.com/arynyklas/OpenNCALayer/issues).
+- Об уязвимостях сообщайте только приватно, см. [`SECURITY.md`](SECURITY.md).
 
-## Что умеет сейчас
+## Для разработчиков
 
-| Возможность | Состояние |
-|---|---|
-| Подпись CMS, `raw` и XML (XMLDSig) ключами PKCS#12 (`.p12`, `.pfx`) и JKS (только чтение): ГОСТ 2004, ГОСТ 2015-512, RSA | работает |
-| Создание ключей и запросов на сертификат, установка выданных сертификатов | работает для файловых хранилищ |
-| Проверка ключей в окне выбора: цепочка до корней НУЦ, OCSP, дата отзыва | работает |
-| Расширение браузера (Chromium; Firefox 115 и новее) | работает; в Firefox — временная установка |
-| Значок в области уведомлений, настройки, мастер TLS, окно инструментов | работает |
-| Самообновление (индекс, проверяемый по TUF) | работает, каналы `stable` и `beta`; проверено на опубликованных файлах: на Windows в лаборатории, на macOS в CI |
-| Сборки для Windows 7 SP1 (x64, x86) | есть; проверены в лаборатории проекта и в CI |
-| Плагины: порты сторонних модулей оригинала (WebAssembly) | каталог в каналах `stable` (порты со сверкой) и `beta`; установка из каталога или из файла `.onclp` |
-| Токены и удостоверение личности | экспериментально, выключено по умолчанию |
-| Шифрование и расшифрование | нет |
+Ту же подпись можно использовать без программы для рабочего стола:
+- библиотека для Rust: [`docs/dev/sdk-overview.md`](docs/dev/sdk-overview.md);
+- командная строка `oncl`: [`docs/user/cli.md`](docs/user/cli.md);
+- HTTP-сервис `oncl-server`: [`docs/user/server.md`](docs/user/server.md).
 
-## Документация
-
-Пользователям:
-- [`docs/user/install.md`](docs/user/install.md) — готовые сборки, установщики, Windows 7, сайт проекта;
-- [`docs/user/desktop.md`](docs/user/desktop.md) — значок, настройки, мастер TLS, оригинальный NCALayer;
-- [`docs/user/tls.md`](docs/user/tls.md) — сертификат OpenNCALayer: выпуск, установка, удаление, перевыпуск;
-- [`docs/user/browser-extension.md`](docs/user/browser-extension.md) — расширение браузера;
-- [`docs/user/updates.md`](docs/user/updates.md) — обновления;
-- [`docs/user/compatibility.md`](docs/user/compatibility.md) — модули и отличия от оригинала;
-- [`docs/user/plugins.md`](docs/user/plugins.md) и [`docs/user/manual-plugins.md`](docs/user/manual-plugins.md) — плагины и подпись из окна «Инструменты»;
-- [`docs/user/tokens.md`](docs/user/tokens.md) — токены (экспериментально);
-- [`docs/user/cli.md`](docs/user/cli.md), [`docs/user/server.md`](docs/user/server.md), [`docs/user/http-api.md`](docs/user/http-api.md) — `oncl` и `oncl-server`.
-
-Разработчикам:
-- [`docs/dev/development.md`](docs/dev/development.md) — сборка, запуск, тесты, проверки перед отправкой изменений;
-- [`docs/dev/sdk-overview.md`](docs/dev/sdk-overview.md), [`docs/dev/sdk.md`](docs/dev/sdk.md), [`docs/dev/audit.md`](docs/dev/audit.md) — SDK и журнал аудита;
-- [`docs/dev/release.md`](docs/dev/release.md) — выпуск версии и подпись индекса: инструкция мейнтейнера;
-- [`docs/dev/upstream-watch.md`](docs/dev/upstream-watch.md) — наблюдатель за оригиналом: ветка `upstream`, issues, резервный путь;
-- [`docs/design/roadmap.md`](docs/design/roadmap.md) — решения и дорожная карта; [`docs/design/update-index.md`](docs/design/update-index.md), [`docs/design/plugins.md`](docs/design/plugins.md), [`docs/design/tokens.md`](docs/design/tokens.md) — устройство;
-- [`docs/original/architecture.md`](docs/original/architecture.md) — архитектура оригинального NCALayer.
-
-Сайт проекта — [arynyklas.github.io/OpenNCALayer](https://arynyklas.github.io/OpenNCALayer/): каталог плагинов, загрузка и история оригинала (на русском, казахском и английском).
+Как собрать и проверить проект: [`docs/dev/development.md`](docs/dev/development.md). Как устроен оригинальный NCALayer: [`docs/original/architecture.md`](docs/original/architecture.md).
 
 ## Лицензия
 
-© 2026 Aryn Yklas.
+© 2026 Aryn Yklas. [Apache-2.0](LICENSE), см. также [NOTICE](NOTICE).
 
-[Apache-2.0](LICENSE), см. также [NOTICE](NOTICE). `web/demo/vendor/ncalayer-client.js` — MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). Velopack (MIT), бэкенд winit из Slint (LicenseRef-Slint-Royalty-free-2.0), `multer` (MIT), `streebog` и `hmac` (MIT или Apache-2.0) собираются из наших форков с небольшими изменениями; форки, их ветки и коммиты перечислены в [NOTICE](NOTICE) и в [docs/dev/development.md](docs/dev/development.md#форки-сторонних-крейтов).
+`web/demo/vendor/ncalayer-client.js` распространяется по лицензии MIT, см. [`web/demo/vendor/LICENSE`](web/demo/vendor/LICENSE). Velopack (MIT), бэкенд winit из Slint (LicenseRef-Slint-Royalty-free-2.0), `multer` (MIT), `streebog` и `hmac` (MIT или Apache-2.0) собираются из наших форков с небольшими изменениями. Список форков приведён в [NOTICE](NOTICE).

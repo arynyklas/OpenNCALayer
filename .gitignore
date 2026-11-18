@@ -21,3 +21,5 @@
 # Python bytecode and per-task cargo target directories (e.g. target-native-smoke).
 __pycache__/
 /target-*/
+# Python virtual environment of the test oracles (docs/dev/development.md).
+/.venv-oracle/
