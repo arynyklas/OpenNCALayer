@@ -64,8 +64,16 @@ struct Sandbox {
     server: Arc<Server>,
     ui: Arc<FakeUi>,
     notices: Arc<Mutex<Vec<PluginNotice>>>,
+    /// Signalled after every notice: tests wait on it, not on a clock.
+    noticed: Arc<std::sync::Condvar>,
     modules: Arc<PluginModules>,
+    /// The services' [`PluginConfig::offer_timeout`]: the daemon's, or [`PATIENCE`].
+    offer_timeout: Duration,
 }
+
+/// A budget no download of these tests reaches even on a loaded machine: a test given it
+/// waits for the event, and the bound only turns a hang into a failure.
+const PATIENCE: Duration = Duration::from_secs(300);
 
 impl Sandbox {
     /// Updates on (or off), the stable channel; the user says yes.
@@ -92,12 +100,21 @@ impl Sandbox {
                 ..FakeUi::default()
             }),
             notices: Arc::default(),
+            noticed: Arc::default(),
             modules: Arc::new(PluginModules::new(
                 Arc::new(Engine::new()),
                 services,
                 builtin,
             )),
+            offer_timeout: OFFER_TIMEOUT,
         }
+    }
+
+    /// Offers wait for the catalog as long as its download takes (up to [`PATIENCE`]), not
+    /// the daemon's [`OFFER_TIMEOUT`]: for tests of what an offer does, not of its budget.
+    fn patient(mut self) -> Sandbox {
+        self.offer_timeout = PATIENCE;
+        self
     }
 
     /// The repository the services read through: this sandbox's, trusting its server's root.
@@ -115,6 +132,7 @@ impl Sandbox {
 
     fn service_with(&self, repository: Option<Arc<Repository>>) -> Arc<PluginService> {
         let notices = Arc::clone(&self.notices);
+        let noticed = Arc::clone(&self.noticed);
         PluginService::new(PluginConfig {
             data_dir: self.dir.path().to_owned(),
             settings: self.dir.path().join("settings.json"),
@@ -123,7 +141,11 @@ impl Sandbox {
             http: Arc::clone(&self.transport) as _,
             modules: Arc::clone(&self.modules),
             ui: Arc::clone(&self.ui) as _,
-            notify: Arc::new(move |notice| lock(&notices).push(notice)),
+            notify: Arc::new(move |notice| {
+                lock(&notices).push(notice);
+                noticed.notify_all();
+            }),
+            offer_timeout: self.offer_timeout,
         })
         .unwrap()
     }
@@ -793,23 +815,23 @@ fn missing_module_offers_install() {
     );
 }
 
-/// The notices, waited for until there are `n` (at most 30 s).
+/// The notices, once there are `n`: woken by each notice, so it waits exactly as long as the
+/// background work takes (up to [`PATIENCE`]).
 fn wait_for_notices(sandbox: &Sandbox, n: usize) -> Vec<PluginNotice> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while lock(&sandbox.notices).len() < n {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{:?}",
-            lock(&sandbox.notices)
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    let (notices, timeout) = sandbox
+        .noticed
+        .wait_timeout_while(lock(&sandbox.notices), PATIENCE, |notices| {
+            notices.len() < n
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(!timeout.timed_out(), "{:?}", *notices);
+    drop(notices);
     sandbox.notices()
 }
 
 #[test]
 fn install_bundle_installs_the_port_in_the_background() {
-    let sandbox = Sandbox::new(false);
+    let sandbox = Sandbox::new(false).patient();
     let service = sandbox.service();
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
     let bundles: &dyn Bundles = &*service;
@@ -1476,19 +1498,23 @@ fn a_local_install_during_an_update_download_is_kept() {
 
 #[test]
 fn an_offer_waits_for_a_download_running_within_its_budget() {
-    let sandbox = Sandbox::new(true);
+    let sandbox = Sandbox::new(true).patient();
     let service = sandbox.service();
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
-    // Another download holds the catalog and brings it in a moment.
+    // Another download holds the catalog and brings it as soon as the offer has started:
+    // no clock decides the order. The offer finds the download running (and waits for it)
+    // or done; either way it uses that catalog and downloads none of its own.
     let (held_tx, held) = std::sync::mpsc::channel();
+    let (asking_tx, asking) = std::sync::mpsc::channel::<()>();
     let other = Arc::clone(&service);
     let downloading = thread::spawn(move || {
         let one = lock(&other.checking);
         held_tx.send(()).unwrap();
-        thread::sleep(Duration::from_millis(500));
+        asking.recv().unwrap();
         other.refresh_locked(&one, INDEX_TIMEOUT).unwrap();
     });
     held.recv().unwrap();
+    asking_tx.send(()).unwrap();
     assert!(Bundles::request_install(
         &*service,
         "kz.example.echo",
@@ -1594,7 +1620,7 @@ fn a_catalog_downloaded_on_demand_is_applied() {
     sandbox.publish(1, vec![old, new]);
     assert!(
         service
-            .catalog_offer_for_symname("kz.example.echo", OFFER_TIMEOUT)
+            .catalog_offer_for_symname("kz.example.echo", PATIENCE)
             .is_some()
     );
     assert_eq!(
