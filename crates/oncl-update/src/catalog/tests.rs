@@ -348,6 +348,73 @@ fn an_unavailable_role_keeps_installed_plugins_unless_the_owner_revoked_them() {
 }
 
 #[test]
+fn an_unknown_state_makes_only_that_publisher_unavailable() {
+    let targets = role(&[entry(MARKET, "1.0.0")]);
+    let strange = json!({
+        "name": "next", "state": "suspended", "display": display(),
+        "id_prefix": "kz.next."
+    });
+    let catalog = build(
+        index(vec![]),
+        vec![ecc_entry(), strange],
+        &[("ecc", Some(&targets)), ("next", None)],
+    );
+    let next = PublisherName::parse("next").unwrap();
+    assert_eq!(catalog.publisher_state(&next), PublisherState::Unavailable);
+    assert_eq!(
+        catalog
+            .policy()
+            .unwrap()
+            .publisher(&next)
+            .unwrap()
+            .standing(),
+        &Standing::Unknown {
+            state: "suspended".to_owned()
+        }
+    );
+    assert!(matches!(
+        choose(&catalog, "kz.next.tool", "1.0.0"),
+        PluginChoice::Keep
+    ));
+    assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Active);
+    assert_eq!(by_module(&catalog, SIGNER).unwrap().version, v("1.0.0"));
+}
+
+#[test]
+fn a_retired_publisher_offers_nothing_new_and_keeps_installed_plugins() {
+    let mut retired = ecc_entry();
+    retired["state"] = json!("retired");
+    retired["revoked_versions"] = json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    let targets = role(&[entry(MARKET, "1.0.0"), entry(MARKET, "1.2.0")]);
+    for roles in [&[("ecc", Some(&targets))][..], &[]] {
+        let catalog = build(index(vec![]), vec![retired.clone()], roles);
+        assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Retired);
+        assert_eq!(catalog.releases().count(), 0);
+        assert!(matches!(
+            choose(&catalog, MARKET, "1.0.0"),
+            PluginChoice::Keep
+        ));
+        assert!(catalog.is_revoked(MARKET, &v("1.1.0")));
+        assert!(matches!(
+            choose(&catalog, MARKET, "1.1.0"),
+            PluginChoice::Withdrawn
+        ));
+    }
+}
+
+#[test]
+fn a_retired_publisher_keeps_its_modules() {
+    let mut retired = ecc_entry();
+    retired["state"] = json!("retired");
+    let mut other = second("kz.other.");
+    other["modules"] = json!([SIGNER]);
+    assert!(matches!(
+        refused(vec![retired, other]),
+        CatalogError::SharedModule { .. }
+    ));
+}
+
+#[test]
 fn an_owner_revocation_ignores_build_metadata() {
     let mut publisher = ecc_entry();
     publisher["revoked_versions"] =
@@ -860,7 +927,7 @@ fn publishers_json_refuses_bad_shapes_and_sizes() {
         CatalogError::Name(_)
     ));
     assert!(matches!(
-        refused(vec![with(|p| p["state"] = json!("paused"))]),
+        refused(vec![with(|p| p["state"] = json!(7))]),
         CatalogError::Json(_)
     ));
     let bad_date = with(|p| {

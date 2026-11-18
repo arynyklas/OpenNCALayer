@@ -147,7 +147,8 @@ pub struct RevokedVersion {
     pub date: Date,
 }
 
-/// What an active publisher may publish.
+/// What a publisher may publish while active, and the owner's rules that still hold once it
+/// retires.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivePublisher {
     modules: BTreeSet<ModuleName>,
@@ -204,13 +205,25 @@ impl ActivePublisher {
 pub enum Standing {
     /// It may, within these rules (if its role is also delegated and verified).
     Active(ActivePublisher),
+    /// It no longer publishes: no new versions are offered, installed plugins keep working
+    /// unless the owner revokes their versions. Its modules, bundles and prefix stay its own.
+    Retired(ActivePublisher),
     /// The owner revoked it: its plugins are turned off. The entry stays so its prefix is
     /// never given to another publisher, and its plugins are still recognised by it.
     Revoked {
         /// When, if the file says.
         date: Option<Date>,
     },
+    /// A `state` this version does not know: the publisher is unavailable, its installed
+    /// plugins stay as they are. The rest of the file is used.
+    Unknown {
+        /// The value read, cut to 32 characters.
+        state: String,
+    },
 }
+
+/// The most characters of an unknown `state` kept for the logs.
+const MAX_STATE: usize = 32;
 
 /// One publisher of `publishers.json`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,7 +250,7 @@ impl Publisher {
         &self.id_prefix
     }
 
-    /// Whether it is active or revoked.
+    /// Whether it is active, retired, revoked or of an unknown state.
     pub fn standing(&self) -> &Standing {
         &self.standing
     }
@@ -246,7 +259,16 @@ impl Publisher {
     pub fn active(&self) -> Option<&ActivePublisher> {
         match &self.standing {
             Standing::Active(active) => Some(active),
-            Standing::Revoked { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// Its rules, if it is active or retired: what it owns and which versions the owner
+    /// revoked.
+    pub fn rules(&self) -> Option<&ActivePublisher> {
+        match &self.standing {
+            Standing::Active(rules) | Standing::Retired(rules) => Some(rules),
+            _ => None,
         }
     }
 }
@@ -317,10 +339,10 @@ impl PublisherPolicy {
         })
     }
 
-    /// Checks no active publisher lists a module of `builtin`.
+    /// Checks no active or retired publisher lists a module of `builtin`.
     pub(crate) fn check_builtin(&self, builtin: &BTreeSet<String>) -> Result<(), CatalogError> {
         for publisher in &self.publishers {
-            let Some(active) = publisher.active() else {
+            let Some(active) = publisher.rules() else {
                 continue;
             };
             if let Some(module) = active
@@ -344,16 +366,11 @@ struct RawPolicy {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "lowercase")]
-enum RawState {
-    Active,
-    Revoked,
-}
-
-#[derive(Deserialize)]
 struct RawPublisher {
     name: String,
-    state: RawState,
+    /// `active`, `retired`, `revoked`; any other value makes this publisher alone
+    /// unavailable.
+    state: String,
     display: PublisherDisplay,
     id_prefix: String,
     #[serde(default)]
@@ -430,15 +447,15 @@ impl RawPublisher {
         if id_prefix.overlaps(PROJECT_PREFIX) {
             return Err(CatalogError::ProjectPrefix(name));
         }
-        let standing = match self.state {
-            RawState::Revoked => Standing::Revoked {
+        let standing = match self.state.as_str() {
+            "revoked" => Standing::Revoked {
                 date: self
                     .revoked
                     .as_deref()
                     .map(|date| parse_date(&name, date))
                     .transpose()?,
             },
-            RawState::Active => {
+            state @ ("active" | "retired") => {
                 let mut modules = BTreeSet::new();
                 for module in &self.modules {
                     let module = ModuleName::parse(module)?;
@@ -487,14 +504,22 @@ impl RawPublisher {
                         date: parse_date(&name, &revoked.date)?,
                     });
                 }
-                Standing::Active(ActivePublisher {
+                let rules = ActivePublisher {
                     modules,
                     bundles,
                     supersedes,
                     revoked_versions,
                     homepage: self.homepage,
-                })
+                };
+                if state == "active" {
+                    Standing::Active(rules)
+                } else {
+                    Standing::Retired(rules)
+                }
             }
+            other => Standing::Unknown {
+                state: other.chars().take(MAX_STATE).collect(),
+            },
         };
         Ok(Publisher {
             name,
@@ -537,7 +562,7 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
                     ));
                 }
             }
-            let Some(active) = publisher.active() else {
+            let Some(active) = publisher.rules() else {
                 continue;
             };
             if let Some(module) = active

@@ -11,8 +11,10 @@
 //!    owner's index is left out, unless the publisher replaces that port (`supersedes`);
 //! 4. a publisher's release outside its prefix, modules or bundles is left out.
 //!
-//! Each publisher is [`PublisherState::Active`], [`PublisherState::Unavailable`] (its role,
-//! `publishers.json` or the delegations did not hold up: its plugins are neither updated nor
+//! Each publisher is [`PublisherState::Active`], [`PublisherState::Retired`] (it publishes no
+//! more: no new versions, installed ones stay unless the owner revoked them),
+//! [`PublisherState::Unavailable`] (its role, `publishers.json` or the delegations did not
+//! hold up, or its `state` is unknown to this version: its plugins are neither updated nor
 //! revoked) or [`PublisherState::Revoked`] (the verified `publishers.json` says so, or does
 //! not name it). An error never revokes.
 //!
@@ -50,8 +52,11 @@ use crate::tuf::{Delegated, PublisherName, RoleName, Target, TargetPath};
 pub enum PublisherState {
     /// Its role was verified; its releases are in the catalog.
     Active,
-    /// Its role, `publishers.json` or the delegations did not hold up: its installed plugins
-    /// stay as they are until they do.
+    /// It publishes no more: none of its releases is offered, its installed plugins stay
+    /// unless the owner revoked their versions in `publishers.json`.
+    Retired,
+    /// Its role, `publishers.json` or the delegations did not hold up, or its `state` is
+    /// unknown to this version: its installed plugins stay as they are until they do.
     Unavailable,
     /// The verified `publishers.json` names it revoked, or does not name it: its plugins are
     /// turned off.
@@ -155,7 +160,8 @@ impl Catalog {
 
     /// Whether `version` of `id` is revoked: by its release in the catalog, or by the owner
     /// in `publishers.json` (build metadata aside), listed or not. The owner's revocation
-    /// holds while the publisher is active or unavailable; it needs `publishers.json`.
+    /// holds while the publisher is active, retired or unavailable; it needs
+    /// `publishers.json`.
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
         self.releases()
             .any(|r| r.id == id && r.version == *version && r.revoked)
@@ -165,7 +171,7 @@ impl Catalog {
                         .policy
                         .as_ref()
                         .and_then(|policy| policy.publisher(publisher))
-                        .and_then(Publisher::active)
+                        .and_then(Publisher::rules)
                         .is_some_and(|active| active.revokes(id, version))
             })
     }
@@ -268,9 +274,21 @@ impl<'r> CatalogBuilder<'r> {
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
             let name = publisher.name();
-            let Some(active) = publisher.active() else {
-                states.insert(name.clone(), PublisherState::Revoked);
-                continue;
+            let active = match publisher.standing() {
+                Standing::Active(active) => active,
+                Standing::Retired(_) => {
+                    states.insert(name.clone(), PublisherState::Retired);
+                    continue;
+                }
+                Standing::Unknown { state } => {
+                    warn!(publisher = %name, state = %state, "a publisher of an unknown state is unavailable");
+                    states.insert(name.clone(), PublisherState::Unavailable);
+                    continue;
+                }
+                Standing::Revoked { .. } => {
+                    states.insert(name.clone(), PublisherState::Revoked);
+                    continue;
+                }
             };
             let Some(targets) = roles
                 .iter()
@@ -307,15 +325,17 @@ impl<'r> CatalogBuilder<'r> {
     }
 }
 
-/// The active publishers are exactly those with a delegated role.
+/// The active publishers are exactly those with a delegated role; a retired publisher or one
+/// of an unknown state may keep its role or not, a revoked or unnamed one has none.
 fn check_delegations(
     policy: &PublisherPolicy,
     roles: &[(PublisherName, Option<&BTreeMap<TargetPath, Target>>)],
 ) -> Result<(), CatalogError> {
-    if let Some((name, _)) = roles
-        .iter()
-        .find(|(name, _)| policy.publisher(name).and_then(Publisher::active).is_none())
-    {
+    if let Some((name, _)) = roles.iter().find(|(name, _)| {
+        policy
+            .publisher(name)
+            .is_none_or(|p| matches!(p.standing(), Standing::Revoked { .. }))
+    }) {
         return Err(CatalogError::NotActive(name.clone()));
     }
     if let Some(publisher) = policy

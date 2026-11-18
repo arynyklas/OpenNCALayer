@@ -139,9 +139,9 @@ pub(crate) fn offerable(
 /// never causes a downgrade or removal.
 ///
 /// A publisher's plugin is [`PluginChoice::PublisherRevoked`] once its publisher is revoked.
-/// While its publisher is unavailable it is kept as it is, unless the owner revoked its
-/// version in `publishers.json`: then it is [`PluginChoice::Withdrawn`]. A version the owner
-/// revoked is revoked even if its publisher no longer lists it.
+/// While its publisher is retired or unavailable it is kept as it is, unless the owner
+/// revoked its version in `publishers.json`: then it is [`PluginChoice::Withdrawn`]. A
+/// version the owner revoked is revoked even if its publisher no longer lists it.
 pub fn choose_plugin<'a>(
     catalog: &'a Catalog,
     id: &str,
@@ -153,10 +153,12 @@ pub fn choose_plugin<'a>(
     if let Some(publisher) = catalog.publisher_of(id) {
         match catalog.publisher_state(publisher) {
             PublisherState::Active => {}
-            PublisherState::Unavailable if catalog.is_revoked(id, current) => {
+            PublisherState::Retired | PublisherState::Unavailable
+                if catalog.is_revoked(id, current) =>
+            {
                 return PluginChoice::Withdrawn;
             }
-            PublisherState::Unavailable => return PluginChoice::Keep,
+            PublisherState::Retired | PublisherState::Unavailable => return PluginChoice::Keep,
             PublisherState::Revoked => return PluginChoice::PublisherRevoked(publisher),
         }
     }
