@@ -117,19 +117,30 @@ const CLEARED_VARS: &[&str] = &[
 ///
 /// Builds in one `target_dir` run one at a time (a lock on a file there): the build scripts
 /// of several crates and `cargo xtask` share it, and none reads a module another rewrites.
+/// On a file system without locks the build goes on unlocked, with a `cargo:warning`, as
+/// Cargo does.
 ///
 /// # Errors
 ///
 /// The build fails, or a manifest is not a built-in module's of this version.
 pub fn build(workspace: &Path, target_dir: &Path, out: &Path) -> io::Result<Vec<Built>> {
-    let digest = source_digest(workspace)?;
     fs::create_dir_all(target_dir)?;
+    let lock_path = target_dir.join(LOCK);
     let lock = fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(target_dir.join(LOCK))?;
-    lock.lock()?;
+        .open(&lock_path)?;
+    match lock.lock() {
+        Ok(()) => {}
+        Err(e) if locks_unsupported(&e) => println!(
+            "cargo:warning=building the built-in modules without a lock: {}: {e}",
+            lock_path.display()
+        ),
+        Err(e) => return Err(e),
+    }
+    // After the lock: sources edited while waiting for it are those built.
+    let digest = source_digest(workspace)?;
     let mut cargo = Command::new("cargo");
     cargo
         .current_dir(workspace)
@@ -172,6 +183,27 @@ pub fn build(workspace: &Path, target_dir: &Path, out: &Path) -> io::Result<Vec<
     write_sums(out, &built)?;
     write_if_changed(&out.join(SOURCE), format!("{digest}\n").as_bytes())?;
     Ok(built)
+}
+
+/// Whether `e`, from locking a file, means the file system has no locks (`ENOTSUP`,
+/// `ENOLCK`; `ERROR_NOT_SUPPORTED`, `ERROR_INVALID_FUNCTION` on Windows), where Cargo too
+/// goes on without one.
+fn locks_unsupported(e: &io::Error) -> bool {
+    #[cfg(target_os = "linux")]
+    const CODES: &[i32] = &[95, 37]; // ENOTSUP (EOPNOTSUPP), ENOLCK
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    const CODES: &[i32] = &[45, 102, 77]; // ENOTSUP, EOPNOTSUPP, ENOLCK
+    #[cfg(windows)]
+    const CODES: &[i32] = &[50, 1]; // ERROR_NOT_SUPPORTED, ERROR_INVALID_FUNCTION
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "freebsd",
+        windows
+    )))]
+    const CODES: &[i32] = &[];
+    e.kind() == io::ErrorKind::Unsupported || e.raw_os_error().is_some_and(|c| CODES.contains(&c))
 }
 
 /// The output of `rustc args` in `workspace`, with its toolchain, trimmed.
