@@ -310,10 +310,7 @@ fn keyless_extend_b_to_t_to_lt_to_lta_with_no_key_provider_and_tampered_evidence
         assert_eq!(code, Some(0), "{level}: {report}");
         assert_eq!(report["ades_level"], label);
         if let Some(openssl) = &openssl {
-            assert!(
-                openssl_verify(openssl, &w, &next, &doc),
-                "{level}: OpenSSL"
-            );
+            assert!(openssl_verify(openssl, &w, &next, &doc), "{level}: OpenSSL");
         }
         current = next;
     }

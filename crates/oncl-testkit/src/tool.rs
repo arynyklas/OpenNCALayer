@@ -577,11 +577,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "oncl-no-such-program is missing: a program the tests need is not \
+    #[should_panic(
+        expected = "oncl-no-such-program is missing: a program the tests need is not \
                     installed. Executables tried: `oncl-no-such-program`. Override: set \
                     ONCL_TOOL_THAT_IS_NEVER_SET to the path of the executable (it is not set). \
                     Provided by: nothing. See docs/dev/development.md, section «Что нужно для \
-                    тестов». The test fails rather than skips because ONCL_REQUIRE_ORACLES is set")]
+                    тестов». The test fails rather than skips because ONCL_REQUIRE_ORACLES is set"
+    )]
     fn a_missing_program_fails_the_test_with_the_full_message_when_required() {
         let _ = decide(ABSENT.lookup_with(&["--version"], unset), true);
     }
