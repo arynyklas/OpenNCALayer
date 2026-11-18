@@ -82,8 +82,10 @@ gost94 = { version = "0.11.0", default-features = false }
 hashbrown = { version = "0.17.1", default-features = false }
 hex-literal = "1.1.0"
 # Ordinary HMAC (PKCS#12 MACs, PBKDF2). The KDF HMAC of `oncl-gost::wrap` is its own code over
-# its secret-input Streebog (`crates/oncl-gost/src/secret_hmac.rs`).
-hmac = "0.13.0"
+# its secret-input Streebog (`crates/oncl-gost/src/secret_hmac.rs`). `zeroize` turns on
+# `digest/zeroize` for the whole graph: hash cores and block buffers wipe themselves on drop
+# (e.g. the PBKDF2 `Hmac<Sha256>` state of PKCS#12).
+hmac = { version = "0.13.0", features = ["zeroize"] }
 httparse = "1.10.1"
 # The tray on Linux (StatusNotifierItem over D-Bus, no GTK): zbus on async-io, like the AT-SPI
 # of Slint's winit backend; `blocking` runs the service in a thread of its own.
@@ -146,7 +148,7 @@ slint-build = "~1.18.1"
 spki = { version = "0.8.1", features = ["alloc"] }
 # Public-document hashing. Secret input (VKO shared point, KDF key blocks) goes through the
 # secret-input Streebog of `oncl-gost` (`crates/oncl-gost/src/streebog_secret.rs`).
-streebog = { version = "0.11.0", default-features = false }
+streebog = { version = "0.11.0", default-features = false, features = ["zeroize"] }
 # Constant-time selection of the secret-input Streebog of `oncl-gost`. Pinned: its selection
 # code was reviewed in optimized builds at this version.
 subtle = { version = "=2.6.1", default-features = false }

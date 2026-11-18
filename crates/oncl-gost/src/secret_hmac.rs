@@ -8,7 +8,7 @@
 //! pointers.
 
 use crate::streebog_secret::{SecretStreebog, Wiped};
-use zeroize::{ZeroizeOnDrop, Zeroizing};
+use zeroize::ZeroizeOnDrop;
 
 /// Streebog block size, the HMAC `B`.
 const BLOCK: usize = 64;
@@ -23,10 +23,16 @@ pub(crate) struct SecretHmac<const N: usize> {
 
 impl<const N: usize> SecretHmac<N> {
     pub(crate) fn new(key: &[u8]) -> Self {
+        Self::new_in(key, &mut [0u8; BLOCK])
+    }
+
+    /// Keys the HMAC through `storage`, which is wiped before this returns (also on unwind).
+    fn new_in(key: &[u8], storage: &mut [u8; BLOCK]) -> Self {
         // Both states are allocated before any key byte is copied anywhere.
         let mut inner = SecretStreebog::<N>::new();
         let mut outer = SecretStreebog::<N>::new();
-        let mut block = Zeroizing::new([0u8; BLOCK]);
+        let mut block = Wiped::new(storage);
+        block.fill(0);
         if key.len() > BLOCK {
             // A key longer than the block is replaced by its hash, written straight into the
             // wiped block.
@@ -55,9 +61,13 @@ impl<const N: usize> SecretHmac<N> {
     }
 
     pub(crate) fn finalize_into(self, out: &mut [u8; N]) {
+        self.finalize_in(out, &mut [0u8; N]);
+    }
+
+    /// Finalizes with the inner digest in `storage`, which is wiped before this returns.
+    fn finalize_in(self, out: &mut [u8; N], storage: &mut [u8; N]) {
         let Self { inner, mut outer } = self;
-        let mut storage = [0u8; N];
-        let mut digest = Wiped::new(&mut storage);
+        let mut digest = Wiped::new(storage);
         inner.finalize_into(&mut digest);
         outer.update(&digest[..]);
         outer.finalize_into(out);
@@ -178,6 +188,44 @@ mod tests {
         fn assert_zeroize_on_drop<T: ZeroizeOnDrop>() {}
         assert_zeroize_on_drop::<SecretHmac<32>>();
         assert_zeroize_on_drop::<SecretHmac<64>>();
-        assert_zeroize_on_drop::<Zeroizing<[u8; BLOCK]>>();
+    }
+
+    #[test]
+    fn key_block_storage_is_wiped_after_keying() {
+        // Short key (copied) and long key (its hash written into the block), both widths.
+        let long = [0xa7_u8; 100];
+        for key in [&[0x5c_u8; 32][..], &long[..]] {
+            let mut storage = [0xff_u8; BLOCK];
+            let mac = SecretHmac::<32>::new_in(key, &mut storage);
+            assert_eq!(storage, [0; BLOCK], "256, key {} bytes", key.len());
+            let mut out = [0; 32];
+            mac.finalize_into(&mut out);
+            assert_eq!(out.as_slice(), public256(key, b"").as_slice());
+            let mut storage = [0xff_u8; BLOCK];
+            let mac = SecretHmac::<64>::new_in(key, &mut storage);
+            assert_eq!(storage, [0; BLOCK], "512, key {} bytes", key.len());
+            let mut out = [0; 64];
+            mac.finalize_into(&mut out);
+            assert_eq!(out.as_slice(), public512(key, b"").as_slice());
+        }
+    }
+
+    #[test]
+    fn inner_digest_storage_is_wiped_after_finalization() {
+        let (key, message) = (hex(KEY), hex(MESSAGE));
+        let mut mac = SecretHmac::<32>::new(&key);
+        mac.update(&message);
+        let mut storage = [0xff_u8; 32];
+        let mut out = [0; 32];
+        mac.finalize_in(&mut out, &mut storage);
+        assert_eq!(storage, [0; 32]);
+        assert_eq!(out.as_slice(), hex(HMAC256).as_slice());
+        let mut mac = SecretHmac::<64>::new(&key);
+        mac.update(&message);
+        let mut storage = [0xff_u8; 64];
+        let mut out = [0; 64];
+        mac.finalize_in(&mut out, &mut storage);
+        assert_eq!(storage, [0; 64]);
+        assert_eq!(out.as_slice(), hex(HMAC512).as_slice());
     }
 }

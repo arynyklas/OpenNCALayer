@@ -1,3 +1,7 @@
+// Derived from RustCrypto `streebog` 0.11.0 `src/block_api.rs` (MIT OR Apache-2.0; Copyright
+// (c) 2016-2026 The RustCrypto Project Developers, Copyright (c) 2016 Artyom Pavlov; used here
+// under Apache-2.0, see NOTICE). Modified for secret input as described below.
+
 //! Streebog (GOST R 34.11-2012, RFC 6986) for secret input: the VKO shared point
 //! ([`crate::agreement`]) and the key blocks of the KDF HMAC ([`crate::secret_hmac`]).
 //!
