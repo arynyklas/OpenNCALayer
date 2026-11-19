@@ -162,7 +162,7 @@ jobs:
           else
             res INFO sha256-vs-SHA256SUMS "SKIP: $TAG is a draft, SHA256SUMS is not readable; the provenance check below covers the file"
           fi
-          gh attestation verify "$DL/$PKG" --repo "$GITHUB_REPOSITORY" > "$OUT/attestation.log" 2>&1
+          gh attestation verify "$DL/$PKG" --repo "$GITHUB_REPOSITORY" --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" > "$OUT/attestation.log" 2>&1
           ck provenance-attestation $? "gh attestation verify: $(tail -n 3 "$OUT/attestation.log")"
           res INFO pkg-signature "$(pkgutil --check-signature "$DL/$PKG" 2>&1)"
           pkgutil --payload-files "$DL/$PKG" > "$OUT/payload.txt" 2>&1

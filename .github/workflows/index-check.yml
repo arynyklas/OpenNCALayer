@@ -7,11 +7,16 @@ name: Index check
 # request or a push to `main` changes the update indexes or the trust root, and
 # `cargo xtask tuf check --no-timestamp` (the TUF repository `tuf/v1` verified with the
 # client's code from the trust anchor, its targets equal to the indexes, history unchanged
-# against the base) when it changes `tuf/`, `publishers/` or the anchor too. Without `tuf/` and the anchor
-# (before the owner's ceremony) that check says so and passes. ci.yml calls it (job `index`)
-# on every pull request and push to `main`, and it decides in the job whether those changed,
+# against the base) and `cargo xtask vendor check-onboarding` (the registry `publishers/`: each
+# `publisher.toml`, the rules between publishers, against the base no entry removed or renamed
+# and `builders.toml` only appended to) when it changes `tuf/`, `publishers/` or the anchor
+# too. Without `tuf/` and the anchor (before the owner's ceremony) the TUF check says so and
+# passes. ci.yml calls it (job `index`) on every pull request and push to `main`, and it
+# decides in the job whether those changed,
 # so it always reports and is part of ci.yml's required `check`: with nothing relevant
-# changed, only the cargo step is skipped and the job passes.
+# changed, only the cargo steps are skipped and the job passes. An onboarding pull request
+# (`publishers/<name>/publisher.toml`, docs/design/publishers.md, «Подключение издателя») is
+# merged by the owner only once this passes.
 on:
   workflow_call:
 
@@ -92,4 +97,15 @@ jobs:
             cargo xtask tuf check --no-timestamp --base "$BASE"
           else
             cargo xtask tuf check --no-timestamp
+          fi
+      # The registry of publishers, against the base.
+      - name: Check the publishers
+        if: steps.changes.outputs.relevant == 'true'
+        env:
+          BASE: ${{ steps.changes.outputs.base }}
+        run: |
+          if [ -n "$BASE" ]; then
+            cargo xtask vendor check-onboarding --base "$BASE"
+          else
+            cargo xtask vendor check-onboarding
           fi

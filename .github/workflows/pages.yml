@@ -11,7 +11,9 @@ name: Pages
 # no workflow, so `release` never fires for it), when the maintainer publishes, edits or
 # deletes a release (`release`), and by hand. `workflow_run` runs on the default branch; a
 # `release` event runs on the release's tag, which the `github-pages` environment does not
-# deploy: it only starts this workflow again on the default branch.
+# deploy: it only starts this workflow again on the default branch. A release `pub-*` (a copy
+# of a publisher's package, docs/design/publishers.md, «Копии пакетов в наших Releases») is
+# not on the site and starts nothing: the bot that makes them starts Pages after the merge.
 #
 # Pages must be enabled with "GitHub Actions" as the source in the repository settings;
 # until then the site is built and checked, and nothing is deployed.
@@ -251,7 +253,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
   dispatch:
-    if: github.event_name == 'release'
+    if: github.event_name == 'release' && !startsWith(github.event.release.tag_name, 'pub-')
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
