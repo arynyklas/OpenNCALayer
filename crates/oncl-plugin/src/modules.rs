@@ -235,6 +235,11 @@ impl PluginModules {
         self.inner.lock().memory
     }
 
+    /// The module names served by the core, which no plugin may take.
+    pub fn builtin_modules(&self) -> impl Iterator<Item = &str> {
+        self.inner.builtin.iter().map(String::as_str)
+    }
+
     /// Has `f` called for every request naming a module nothing serves.
     pub fn set_on_missing(&self, f: OnMissing) {
         *lock(&self.inner.on_missing) = Some(f);

@@ -80,38 +80,10 @@ oncl-registry = { path = "../oncl-registry", features = ["testing"] }
 # `listen` with a backlog of 0: a local address whose connections never complete.
 libc.workspace = true
 
-[[test]]
-name = "envelope"
-required-features = ["testing"]
-
-[[test]]
-name = "tsp"
-required-features = ["testing"]
-
-[[test]]
-name = "pkix"
-required-features = ["testing"]
-
-[[test]]
-name = "ocsp"
-required-features = ["testing"]
-
-[[test]]
-name = "crl"
-required-features = ["testing"]
-
-[[test]]
-name = "keystore"
-required-features = ["testing"]
-
-[[test]]
-name = "cms_report"
-required-features = ["testing"]
-
+# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files,
+# each a module of it; the modules that need `testing` are `#[cfg(feature = "testing")]`
+# there) and `cms_stream` and `metadata_intake`, which install their own
+# `#[global_allocator]`.
 [[test]]
 name = "cms_stream"
-required-features = ["testing"]
-
-[[test]]
-name = "cms_stream_sign"
 required-features = ["testing"]

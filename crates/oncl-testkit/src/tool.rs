@@ -143,11 +143,7 @@ impl Missing {
     /// the program, what was tried and where the test dependencies are listed.
     #[must_use]
     pub fn skip_line(&self) -> String {
-        let thread = std::thread::current();
-        let test = thread
-            .name()
-            .filter(|name| *name != "main")
-            .unwrap_or("this check");
+        let test = current_test();
         let mut tried = Vec::new();
         if !self.tried.is_empty() {
             tried.push(format!("tried {}", quoted(&self.tried)));
@@ -162,6 +158,16 @@ impl Missing {
             tried.join("; ")
         )
     }
+}
+
+/// The running test, as a skip line names it: the name of the current thread, which the test
+/// harness names after the test.
+pub(crate) fn current_test() -> String {
+    std::thread::current()
+        .name()
+        .filter(|name| *name != "main")
+        .unwrap_or("this check")
+        .to_owned()
 }
 
 impl std::fmt::Display for Missing {

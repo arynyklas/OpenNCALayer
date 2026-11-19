@@ -6,6 +6,9 @@
 //!   chosen;
 //! - `catalog/<channel>.json`: the last update index of the channel accepted, checked again
 //!   whenever it is read, against the targets metadata of the TUF state ([`Store::load_catalog`]);
+//! - `catalog/publishers.json` and `catalog/roles/pub-<publisher>.json`: the publishers'
+//!   rules and each publisher's delegated role as last verified, kept beside the index and
+//!   checked again offline the same way ([`Store::load_publishers`], [`Store::load_role`]);
 //! - `settings/<id>.json`: a plugin's settings (`settings_*`), kept across its updates and
 //!   removed with it.
 //!
@@ -18,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use oncl_pki::fsutil::{Access, write_atomically};
+use oncl_update::tuf::{PublisherName, RoleName};
 use oncl_update::{Channel, Index, Sha256, Version};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -40,6 +44,10 @@ pub struct StoreState {
     /// Versions of plugins that failed to load here, by id: never offered again.
     #[serde(default)]
     pub bad: BTreeMap<String, BTreeSet<Version>>,
+    /// Ports the user would not have replaced by a publisher's plugin: the port's id, the
+    /// id of the plugin declined. Not asked again for that plugin.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub declined_replacements: BTreeMap<String, String>,
 }
 
 /// An installed plugin.
@@ -54,6 +62,34 @@ pub struct Installed {
     /// Its version is revoked in the catalog with nothing to move to: it is not loaded.
     #[serde(default)]
     pub withdrawn: bool,
+    /// The publisher whose delegated role signed the release installed; `None` for a port of
+    /// the owner's index and for a file the user chose. A state written before publishers has
+    /// none, nor has one whose name this version does not accept (logged, the rest of the
+    /// state is kept): it is restored from the publishers' prefixes.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_publisher"
+    )]
+    pub publisher: Option<PublisherName>,
+}
+
+/// [`Installed::publisher`] as read: anything but a valid publisher name is `None` (logged),
+/// never an error that would lose the whole state.
+fn lenient_publisher<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PublisherName>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let publisher = value
+        .as_str()
+        .and_then(|name| PublisherName::parse(name).ok());
+    if publisher.is_none() {
+        tracing::warn!(publisher = %value, "the recorded publisher of a plugin is not a publisher's name; dropped");
+    }
+    Ok(publisher)
 }
 
 /// Where an installed plugin came from.
@@ -109,6 +145,7 @@ impl StoreState {
             last_seq: BTreeMap::new(),
             plugins: BTreeMap::new(),
             bad: BTreeMap::new(),
+            declined_replacements: BTreeMap::new(),
         }
     }
 }
@@ -152,16 +189,23 @@ impl Store {
         lock(&self.state).clone()
     }
 
-    /// Installs `package`, whose file is `bytes`, from `source`: the package file is written,
-    /// then the state; the package of the version installed before, if another, is removed
-    /// after that. A plugin installed before keeps whether it is enabled; a new one is
-    /// enabled. It is no longer withdrawn.
+    /// Installs `package`, whose file is `bytes`, from `source`, released by `publisher` (a
+    /// publisher's plugin of the catalog, else `None`): the package file is written, then the
+    /// state; the package of the version installed before, if another, is removed after that.
+    /// A plugin installed before keeps whether it is enabled; a new one is enabled. It is no
+    /// longer withdrawn.
     ///
     /// # Errors
     ///
     /// [`io::ErrorKind::InvalidInput`] if `bytes` is not `package`'s file; any I/O error
     /// writing the package or the state (nothing is installed then).
-    pub fn install(&self, package: &Package, bytes: &[u8], source: Source) -> io::Result<()> {
+    pub fn install(
+        &self,
+        package: &Package,
+        bytes: &[u8],
+        source: Source,
+        publisher: Option<&PublisherName>,
+    ) -> io::Result<()> {
         let sha256 = Sha256::of(bytes);
         if sha256.0 != package.sha256 {
             return Err(io::Error::new(
@@ -185,6 +229,7 @@ impl Store {
                 source,
                 enabled: before.as_ref().is_none_or(|b| b.enabled),
                 withdrawn: false,
+                publisher: publisher.cloned(),
             },
         );
         if let Err(e) = self.save(&next) {
@@ -241,6 +286,35 @@ impl Store {
     /// [`io::ErrorKind::NotFound`] if it is not installed; any I/O error saving the state.
     pub fn set_withdrawn(&self, id: &str, withdrawn: bool) -> io::Result<()> {
         self.change_installed(id, |installed| installed.withdrawn = withdrawn)
+    }
+
+    /// Records `publisher` as the one that released the installed `id` (`None`: a port, or
+    /// a file the user chose).
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::NotFound`] if it is not installed; any I/O error saving the state.
+    pub fn set_publisher(&self, id: &str, publisher: Option<PublisherName>) -> io::Result<()> {
+        self.change_installed(id, |installed| installed.publisher = publisher)
+    }
+
+    /// Records that the user declined to replace the port `port` by the plugin `plugin`
+    /// (`None`: forgets it, the replacement may be offered again).
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error saving the state.
+    pub fn set_declined_replacement(&self, port: &str, plugin: Option<&str>) -> io::Result<()> {
+        self.change(|state| match plugin {
+            Some(plugin) => {
+                state
+                    .declined_replacements
+                    .insert(port.to_owned(), plugin.to_owned());
+            }
+            None => {
+                state.declined_replacements.remove(port);
+            }
+        })
     }
 
     /// Marks `version` of `id` as failing here: it is not offered again.
@@ -341,6 +415,80 @@ impl Store {
         }
     }
 
+    /// Keeps `publishers.json`, the bytes the TUF client verified.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error.
+    pub fn save_publishers(&self, bytes: &[u8]) -> io::Result<()> {
+        std::fs::create_dir_all(self.dir.join("catalog"))?;
+        write_atomically(&self.publishers_path(), bytes, Access::Default)
+    }
+
+    /// The kept `publishers.json`, if there is one and `check` vouches for its bytes (for
+    /// the TUF client, [`oncl_update::tuf::TufClient::verify_cached_target`]) and says until
+    /// when they hold. `None` if there is none, or it no longer holds (logged).
+    pub fn load_publishers(
+        &self,
+        check: impl FnOnce(&[u8]) -> Result<OffsetDateTime, String>,
+    ) -> Option<(Vec<u8>, OffsetDateTime)> {
+        let bytes = read_kept(&self.publishers_path(), PUBLISHERS_MAX)?;
+        match check(&bytes) {
+            Ok(valid_until) => Some((bytes, valid_until)),
+            Err(e) => {
+                tracing::info!(error = %e, "the kept publishers' rules no longer hold");
+                None
+            }
+        }
+    }
+
+    /// Keeps the file of the delegated role `role`, the bytes the TUF client verified.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error.
+    pub fn save_role(&self, role: &RoleName, bytes: &[u8]) -> io::Result<()> {
+        std::fs::create_dir_all(self.roles_dir())?;
+        write_atomically(&self.role_path(role), bytes, Access::Default)
+    }
+
+    /// The kept file of the role `role`, if there is one, with what `check` says of its
+    /// bytes (for the TUF client, [`oncl_update::tuf::TufClient::verify_cached_role`]). A file
+    /// longer than a role may be, or that cannot be read, is none (logged).
+    pub fn load_role<T>(&self, role: &RoleName, check: impl FnOnce(&[u8]) -> T) -> Option<T> {
+        read_kept(&self.role_path(role), role_max()).map(|bytes| check(&bytes))
+    }
+
+    /// Removes the kept role files of every role not in `keep`: the roles the top-level
+    /// targets no longer delegate to. A temporary file of a write ([`write_atomically`],
+    /// `*.tmp`) is left alone: it may be a role being saved now.
+    ///
+    /// # Errors
+    ///
+    /// Any I/O error reading the directory (a file that cannot be removed is only logged).
+    pub fn prune_roles(&self, keep: &BTreeSet<RoleName>) -> io::Result<()> {
+        let entries = match std::fs::read_dir(self.roles_dir()) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        for entry in entries {
+            let path = entry?.path();
+            let name = path.file_name().and_then(|name| name.to_str());
+            if name.is_some_and(|name| name.ends_with(".tmp")) {
+                continue;
+            }
+            let kept = name
+                .and_then(|name| name.strip_suffix(".json"))
+                .and_then(|name| RoleName::parse(name).ok())
+                .is_some_and(|role| keep.contains(&role));
+            if !kept {
+                remove_file(&path);
+            }
+        }
+        Ok(())
+    }
+
     /// `settings/`: the folder of the plugins' settings files
     /// ([`HostServices::settings_dir`](crate::HostServices::settings_dir)).
     pub fn settings_dir(&self) -> PathBuf {
@@ -366,6 +514,18 @@ impl Store {
 
     fn catalog_path(&self, channel: Channel) -> PathBuf {
         self.dir.join("catalog").join(format!("{channel}.json"))
+    }
+
+    fn publishers_path(&self) -> PathBuf {
+        self.dir.join("catalog").join("publishers.json")
+    }
+
+    fn roles_dir(&self) -> PathBuf {
+        self.dir.join("catalog").join("roles")
+    }
+
+    fn role_path(&self, role: &RoleName) -> PathBuf {
+        self.roles_dir().join(role.meta_name())
     }
 
     /// Applies `f` to the installed `id` and saves the state.
@@ -407,6 +567,36 @@ fn not_installed(id: &str) -> io::Error {
         io::ErrorKind::NotFound,
         format!("the plugin {id} is not installed"),
     )
+}
+
+/// The longest kept `publishers.json` read: what the client downloads at most.
+const PUBLISHERS_MAX: u64 = oncl_update::PublisherPolicy::MAX_LEN as u64;
+
+/// The longest kept role file read: what the client downloads at most.
+fn role_max() -> u64 {
+    oncl_update::tuf::Limits::default().delegated
+}
+
+/// The kept file at `path`, at most `max` bytes; `None` if there is none, it is longer or
+/// it cannot be read (logged).
+fn read_kept(path: &Path, max: u64) -> Option<Vec<u8>> {
+    let read = std::fs::File::open(path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(max + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    match read {
+        Ok(bytes) if bytes.len() as u64 > max => {
+            tracing::warn!(path = %path.display(), max, "a kept catalog file is longer than any the client keeps");
+            None
+        }
+        Ok(bytes) => Some(bytes),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "cannot read a kept catalog file");
+            None
+        }
+    }
 }
 
 /// Removes a file of a plugin that is no longer installed (or no longer that version); a

@@ -195,6 +195,7 @@ fn check_updates(open: &Open) {
     let updates = UpdateSettings {
         enabled: form.updates_enabled,
         channel: form.update_channel,
+        check_revocations: form.check_revocations,
     };
     open.ui
         .set_update_state(Texts::of(open.desktop.locale.get()).update_checking.into());
@@ -299,6 +300,7 @@ fn show_form(ui: &SettingsWindow, form: &SettingsForm) {
     ui.set_proxy_url(form.proxy_url.as_str().into());
     ui.set_updates_enabled(form.updates_enabled);
     ui.set_update_channel(index_of(&CHANNELS, &form.update_channel));
+    ui.set_check_revocations(form.check_revocations);
     ui.set_tokens_enabled(form.tokens_enabled);
     ui.set_scale(index_of(&UiScale::ALL, &form.scale));
 }
@@ -311,6 +313,7 @@ fn form_of(ui: &SettingsWindow) -> SettingsForm {
         proxy_url: ui.get_proxy_url().to_string(),
         updates_enabled: ui.get_updates_enabled(),
         update_channel: item(&CHANNELS, ui.get_update_channel()),
+        check_revocations: ui.get_check_revocations(),
         tokens_enabled: ui.get_tokens_enabled(),
         scale: item(&UiScale::ALL, ui.get_scale()),
     }
@@ -428,6 +431,7 @@ mod tests {
             proxy_url: String::new(),
             updates_enabled: true,
             update_channel: oncl_desktop::settings::Channel::Stable,
+            check_revocations: true,
             tokens_enabled: false,
             scale: UiScale::P100,
         };
@@ -463,6 +467,28 @@ mod tests {
         assert_eq!(form_of(&window.ui), form);
         window.ui.set_tokens_enabled(false);
         assert!(!form_of(&window.ui).tokens_enabled);
+    }
+
+    #[test]
+    fn the_revocations_box_shows_and_gives_the_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let _ = desktop(dir.path());
+        open(&crate::windows::desktop().unwrap());
+        let window = the_window();
+        assert!(window.ui.get_check_revocations(), "on by default");
+        let form = SettingsForm {
+            updates_enabled: false,
+            check_revocations: false,
+            ..form_of(&window.ui)
+        };
+        show_form(&window.ui, &form);
+        assert!(!window.ui.get_check_revocations());
+        assert_eq!(form_of(&window.ui), form);
+        // Updates on show the box ticked but keep what is saved for when they are off.
+        window.ui.set_updates_enabled(true);
+        assert!(!form_of(&window.ui).check_revocations);
+        window.ui.set_check_revocations(true);
+        assert!(form_of(&window.ui).check_revocations);
     }
 
     #[test]

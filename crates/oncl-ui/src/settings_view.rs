@@ -106,6 +106,9 @@ pub struct SettingsForm {
     /// «Обновлять автоматически».
     pub updates_enabled: bool,
     pub update_channel: Channel,
+    /// «Проверять отзывы плагинов»: what is saved, whatever the box shows while updates are
+    /// on (it shows ticked and inactive then).
+    pub check_revocations: bool,
     /// «Масштаб окон».
     pub scale: UiScale,
     /// «Токены и удостоверение личности (экспериментально)».
@@ -137,6 +140,7 @@ impl SettingsForm {
             proxy_url,
             updates_enabled: settings.updates.enabled,
             update_channel: settings.updates.channel,
+            check_revocations: settings.updates.check_revocations,
             tokens_enabled: settings.tokens.enabled,
             scale: settings.ui.scale,
         }
@@ -168,6 +172,7 @@ impl SettingsForm {
             updates: UpdateSettings {
                 enabled: self.updates_enabled,
                 channel: self.update_channel,
+                check_revocations: self.check_revocations,
             },
             tokens: TokenSettings {
                 enabled: self.tokens_enabled,
@@ -680,6 +685,7 @@ mod tests {
             proxy_url: url.to_owned(),
             updates_enabled: true,
             update_channel: Channel::Stable,
+            check_revocations: true,
             tokens_enabled: false,
             scale: UiScale::P100,
         }
@@ -696,6 +702,7 @@ mod tests {
                 updates: UpdateSettings {
                     enabled: false,
                     channel: Channel::Beta,
+                    check_revocations: false,
                 },
                 tokens: TokenSettings::default(),
                 ui: UiSettings {

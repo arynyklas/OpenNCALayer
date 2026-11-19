@@ -80,7 +80,7 @@ cargo run -p oncl-core --features plugins,tokens --example sdk_probe -- --case L
 Происхождение метаданных подтверждают только закрытые преобразования SDK `SnapshotEncoding::{Identity,PdfByteString}`, декодер вызывающей стороны для этого не годится. Повторный захват подлинного снимка Source той же операции не увеличивает `bytes_in`, а снимок чужой операции отклоняется до ввода-вывода. Каждая новая копия держит реальный резерв временного диска и памяти, освобождение (Drop) копии возвращает её дисковую ёмкость. Повторное чтение сохраняет исходные дедлайн и управление и читает ограниченные упорядоченные диапазоны, новой операции и нового лимита времени оно не получает.
 
 ```
-cargo test -p oncl-pdf --test verify
+cargo test -p oncl-pdf --test all verify::
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P01 --out target/p01-smoke
 ```
 
@@ -99,7 +99,7 @@ Core требует обычного права `Action::Sign`, текущей �
 Закрытый `PdfSignatureOutput` работает только с пустым промежуточным выводом (OUTPUT) той же операции. Добавление учитывает вывод и временные данные один раз, ByteRange фиксируется до хеширования, после этого меняется только зарегистрированный шестнадцатеричный `Contents`. Он не открывает `File`, не даёт произвольного позиционирования и правки и не даёт записи в `FrozenInput`. `shared_view()` у `ResourceScope` даёт ещё один дескриптор той же операции с теми же общими счётчиками, дедлайном, управлением и арендой допуска; новой квоты для другого запроса он не создаёт.
 
 ```
-cargo test -p oncl-pdf --features testing --test sign
+cargo test -p oncl-pdf --features testing --test all sign::
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out target/p02-smoke
 ```
 

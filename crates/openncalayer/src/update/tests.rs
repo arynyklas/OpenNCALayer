@@ -1267,6 +1267,7 @@ fn with_updates_off_only_a_check_now_looks_and_nothing_is_installed() {
     let form = UpdateSettings {
         enabled: true,
         channel: Channel::Stable,
+        check_revocations: true,
     };
     assert_eq!(u.check_now(Some(form)), available("0.2.0", false));
     assert!(lock(&u.queue).plan.is_none());

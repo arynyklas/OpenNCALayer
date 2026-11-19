@@ -139,6 +139,11 @@ fn cargo_bin() -> OsString {
 }
 
 /// Runs `cargo <args>` in `dir`, returning stdout.
+///
+/// # Errors
+///
+/// [`crate::licenses::PackagesMissing`] if offline cargo lacks a package; otherwise cargo's
+/// error.
 fn cargo(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
     let out = Command::new(cargo_bin())
         .args(args)
@@ -146,12 +151,14 @@ fn cargo(dir: &Path, args: &[&str]) -> anyhow::Result<String> {
         .output()
         .with_context(|| format!("running cargo {}", args.join(" ")))?;
     if !out.status.success() {
-        bail!(
-            "cargo {} failed ({}): {}",
-            args.join(" "),
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if crate::licenses::needs_download(&stderr) {
+            return Err(crate::licenses::PackagesMissing {
+                detail: stderr.trim().to_owned(),
+            }
+            .into());
+        }
+        bail!("cargo {} failed ({}): {stderr}", args.join(" "), out.status);
     }
     String::from_utf8(out.stdout).context("cargo output is not UTF-8")
 }

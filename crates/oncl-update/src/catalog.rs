@@ -82,9 +82,10 @@ pub struct Catalog {
     states: BTreeMap<PublisherName, PublisherState>,
     /// The releases of the active publishers offered on the index's channel.
     releases: Vec<PluginRelease>,
-    /// The versions (build metadata cleared) the publishers' verified roles revoke, on
-    /// every channel, whatever their publisher's state: read by the target path alone.
-    self_revoked: BTreeMap<String, BTreeSet<Version>>,
+    /// The versions (build metadata cleared) the publishers' verified roles revoke, by
+    /// publisher and id, on every channel, whatever their publisher's state: read by the
+    /// target path alone.
+    self_revoked: BTreeMap<PublisherName, BTreeMap<String, BTreeSet<Version>>>,
     rejected: Vec<EntryRejected>,
 }
 
@@ -99,6 +100,22 @@ pub struct CatalogBuilder<'r> {
     builtin_modules: BTreeSet<String>,
     /// The delegated roles, in order, each name once: its targets if it was verified.
     roles: Vec<(PublisherName, Option<&'r BTreeMap<TargetPath, Target>>)>,
+    /// The delegations could not be read ([`CatalogBuilder::delegations_unavailable`]).
+    delegations_unavailable: bool,
+    capabilities: Option<CapabilitiesReader<'r>>,
+}
+
+/// How a publisher's declared capabilities are read ([`CatalogBuilder::capabilities`]).
+type ReadCapabilities<'r> = dyn Fn(&DeclaredCapabilities) -> Result<(), String> + 'r;
+
+/// What reads a publisher's declared capabilities by the rules of a plugin manifest
+/// ([`CatalogBuilder::capabilities`]).
+struct CapabilitiesReader<'r>(Box<ReadCapabilities<'r>>);
+
+impl std::fmt::Debug for CapabilitiesReader<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CapabilitiesReader")
+    }
 }
 
 impl Catalog {
@@ -132,6 +149,8 @@ impl Catalog {
                 .cloned(),
             builtin_modules: BTreeSet::new(),
             roles: Vec::new(),
+            delegations_unavailable: false,
+            capabilities: None,
         }
     }
 
@@ -175,28 +194,87 @@ impl Catalog {
         Some(self.policy.as_ref()?.covering(id)?.name())
     }
 
+    /// The publisher of the installed plugin `id` and its state. Its publishers are
+    /// `recorded`, the one recorded when it was installed, and [`Catalog::publisher_of`],
+    /// the one whose prefix covers `id`; they are the same one unless the record or
+    /// `publishers.json` is wrong, and then the stricter state of the two holds (revoked,
+    /// then unavailable, then retired, then active; the recorded one when as strict). A
+    /// recorded publisher `publishers.json` does not name is unavailable, not revoked.
+    /// `None` for a port of the owner's index, or a plugin no publisher's prefix covers,
+    /// without a recorded publisher.
+    pub fn publisher_state_of<'a>(
+        &'a self,
+        id: &str,
+        recorded: Option<&'a PublisherName>,
+    ) -> Option<(&'a PublisherName, PublisherState)> {
+        recorded
+            .into_iter()
+            .chain(self.publisher_of(id))
+            .map(|publisher| (publisher, self.publisher_state(publisher)))
+            .reduce(|first, other| {
+                if strictness(other.1) > strictness(first.1) {
+                    other
+                } else {
+                    first
+                }
+            })
+    }
+
     /// Whether `version` of `id` is revoked: by its release in the catalog, by the owner in
     /// `publishers.json`, or by a verified role of its publisher on any channel (build
     /// metadata aside, listed in the catalog or not). The publisher's revocations hold while
-    /// it is active, retired or unavailable; they need `publishers.json`.
+    /// it is active, retired or unavailable; they need `publishers.json`. The publisher is
+    /// found by the prefixes of `publishers.json` ([`Catalog::is_installed_revoked`] also
+    /// takes the one recorded).
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
+        self.is_revoked_for(id, version, self.publisher_of(id))
+    }
+
+    /// [`Catalog::is_revoked`] of the installed `id`: revoked for the publisher whose prefix
+    /// covers it or for the publisher `recorded` when it was installed, if there is one
+    /// ([`Catalog::publisher_state_of`]).
+    pub fn is_installed_revoked(
+        &self,
+        id: &str,
+        version: &Version,
+        recorded: Option<&PublisherName>,
+    ) -> bool {
+        let covering = self.publisher_of(id);
+        self.is_revoked_for(id, version, covering)
+            || recorded.is_some_and(|recorded| {
+                covering != Some(recorded) && self.is_revoked_for(id, version, Some(recorded))
+            })
+    }
+
+    /// [`Catalog::is_revoked`] for a plugin of `publisher`: its owner's revocations and its
+    /// own, unless it is revoked.
+    fn is_revoked_for(
+        &self,
+        id: &str,
+        version: &Version,
+        publisher: Option<&PublisherName>,
+    ) -> bool {
         self.releases()
             .any(|r| r.id == id && r.version == *version && r.revoked)
-            || self.publisher_of(id).is_some_and(|publisher| {
+            || publisher.is_some_and(|publisher| {
                 self.publisher_state(publisher) != PublisherState::Revoked
                     && (self
                         .policy
                         .as_ref()
                         .and_then(|policy| policy.publisher(publisher))
                         .and_then(Publisher::rules)
-                        .is_some_and(|active| active.revokes(id, version))
-                        || self.self_revoked.get(id).is_some_and(|versions| {
-                            if version.build.is_empty() {
-                                versions.contains(version)
-                            } else {
-                                versions.contains(&without_build(version))
-                            }
-                        }))
+                        .is_some_and(|rules| rules.revokes(id, version))
+                        || self
+                            .self_revoked
+                            .get(publisher)
+                            .and_then(|ids| ids.get(id))
+                            .is_some_and(|versions| {
+                                if version.build.is_empty() {
+                                    versions.contains(version)
+                                } else {
+                                    versions.contains(&without_build(version))
+                                }
+                            }))
             })
     }
 
@@ -242,6 +320,17 @@ impl<'r> CatalogBuilder<'r> {
         self
     }
 
+    /// How a publisher's declared capabilities are read (for the core, as a manifest's
+    /// `[capabilities]` table): a release whose capabilities `read` refuses is left out
+    /// ([`EntryRejection::CapabilitiesUnreadable`]). Without one they are taken as signed.
+    pub fn capabilities(
+        mut self,
+        read: impl Fn(&DeclaredCapabilities) -> Result<(), String> + 'r,
+    ) -> Self {
+        self.capabilities = Some(CapabilitiesReader(Box::new(read)));
+        self
+    }
+
     /// The verified role `role` and its targets.
     pub fn role(mut self, role: &RoleName, targets: &'r BTreeMap<TargetPath, Target>) -> Self {
         self.add(role, Some(targets));
@@ -269,28 +358,43 @@ impl<'r> CatalogBuilder<'r> {
         }
     }
 
+    /// The delegations of the top-level targets could not be read (or their step failed as
+    /// a whole): every publisher with a role is unavailable, as with an unverified role, and
+    /// the roles given are not used. The owner's revocations in `publishers.json` still hold.
+    pub fn delegations_unavailable(mut self) -> Self {
+        self.delegations_unavailable = true;
+        self
+    }
+
     /// The catalog. A publisher's target among the top-level targets, or a
     /// `publishers.json` that gives a publisher a built-in module, names a publisher active
     /// without a delegated role, or does not name (or names revoked) the publisher of a
-    /// delegated role, is not used: every publisher is unavailable. Active publishers'
-    /// targets are offered. Of every verified role, whatever its publisher's state, the
-    /// versions it revokes are read by their target path alone, on every channel, so they
-    /// stay withdrawn even when the rest of the target no longer holds. Each target left out
-    /// of an active role is logged once.
+    /// delegated role, is not used: every publisher is unavailable. Unless the delegations
+    /// are unavailable, active publishers' targets are offered. Of every verified role,
+    /// whatever its publisher's state, the versions it revokes are read by their target path
+    /// alone, on every channel, so they stay withdrawn even when the rest of the target no
+    /// longer holds. Each target left out of an active role is logged once.
     pub fn build(self) -> Catalog {
         let CatalogBuilder {
             index,
             policy,
             owner_plugin,
             builtin_modules,
-            roles,
+            mut roles,
+            delegations_unavailable,
+            capabilities,
         } = self;
+        if delegations_unavailable {
+            roles.clear();
+        }
         let policy = policy.and_then(|policy| {
             if let Some(path) = owner_plugin {
                 return Err(CatalogError::OwnerPluginTarget(path));
             }
             policy.check_builtin(&builtin_modules)?;
-            check_delegations(&policy, &roles)?;
+            if !delegations_unavailable {
+                check_delegations(&policy, &roles)?;
+            }
             Ok(policy)
         });
         let policy = match policy {
@@ -302,7 +406,8 @@ impl<'r> CatalogBuilder<'r> {
         };
         let mut states = BTreeMap::new();
         let mut releases = Vec::new();
-        let mut self_revoked = BTreeMap::<String, BTreeSet<Version>>::new();
+        let mut self_revoked =
+            BTreeMap::<PublisherName, BTreeMap<String, BTreeSet<Version>>>::new();
         let mut rejected = Vec::new();
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
@@ -333,13 +438,26 @@ impl<'r> CatalogBuilder<'r> {
             };
             states.insert(name.clone(), state);
             for (id, version) in self_revocations(publisher, targets) {
-                self_revoked.entry(id).or_default().insert(version);
+                self_revoked
+                    .entry(name.clone())
+                    .or_default()
+                    .entry(id)
+                    .or_default()
+                    .insert(version);
             }
             if state != PublisherState::Active {
                 continue;
             }
             for (path, target) in targets {
-                match admit(publisher, rules, &owner, path, target) {
+                let admitted = admit(publisher, rules, &owner, path, target).and_then(|release| {
+                    match (&capabilities, &release.release().capabilities) {
+                        (Some(CapabilitiesReader(read)), Some(declared)) => read(declared)
+                            .map_err(EntryRejection::CapabilitiesUnreadable)
+                            .map(|()| release),
+                        _ => Ok(release),
+                    }
+                });
+                match admitted {
                     Ok(release) if release.offered_on(index.channel) => {
                         releases.push(release.into_release());
                     }
@@ -362,6 +480,18 @@ impl<'r> CatalogBuilder<'r> {
             self_revoked,
             rejected,
         }
+    }
+}
+
+/// How strict `state` is with an installed plugin: revoked turns it off, unavailable and
+/// retired keep it unless revoked (unavailable first: nothing about it held up), active
+/// updates it.
+fn strictness(state: PublisherState) -> u8 {
+    match state {
+        PublisherState::Active => 0,
+        PublisherState::Retired => 1,
+        PublisherState::Unavailable => 2,
+        PublisherState::Revoked => 3,
     }
 }
 

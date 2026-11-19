@@ -178,7 +178,8 @@ const RESERVED_PUBLISHERS: [&str; 10] = [
 
 /// The name of a third-party publisher: `^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$` (3 to 32
 /// bytes), none of the reserved names.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct PublisherName(String);
 
 impl PublisherName {
@@ -427,6 +428,24 @@ mod tests {
         assert_eq!(json, "\"pub-ecc\"");
         assert_eq!(serde_json::from_str::<RoleName>(&json).unwrap(), role);
         assert!(serde_json::from_str::<RoleName>("\"targets\"").is_err());
+    }
+
+    #[test]
+    fn a_publisher_name_round_trips_through_serde_and_refuses_bad_names() {
+        let name = PublisherName::parse("ecc").unwrap();
+        let json = serde_json::to_string(&name).unwrap();
+        assert_eq!(json, "\"ecc\"");
+        assert_eq!(serde_json::from_str::<PublisherName>(&json).unwrap(), name);
+        for bad in [
+            "\"root\"",
+            "\"Ecc\"",
+            "\"ab\"",
+            "\"-ecc\"",
+            "\"pub-ecc/x\"",
+            "7",
+        ] {
+            assert!(serde_json::from_str::<PublisherName>(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
