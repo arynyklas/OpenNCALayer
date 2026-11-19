@@ -1,7 +1,7 @@
 //! `oncl verify --profile cms --pem`: bounded, explicit PEM intake (the daemon's demo page
 //! used to hand out PEM and the removed `openncalayer cms-verify` read it). The PEM is
 //! decoded before parsing; nothing is inferred from the file's content.
-mod support;
+use crate::support;
 use std::path::Path;
 use support::*;
 

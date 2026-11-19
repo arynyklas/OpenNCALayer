@@ -4,8 +4,7 @@
 //! responder holds until the test releases it, after item 1 is signed and
 //! published. Isolated binary: console events are delivered only to the owned
 //! child's process group.
-#![cfg(windows)]
-mod support;
+use crate::support;
 use serde_json::json;
 use std::{
     os::windows::process::CommandExt,

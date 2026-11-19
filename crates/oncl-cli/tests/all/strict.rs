@@ -1,5 +1,5 @@
 //! Real `oncl` private sign -> strict verify through a loopback OCSP responder.
-mod support;
+use crate::support;
 use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;

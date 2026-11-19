@@ -2,8 +2,7 @@
 //! hosts the actual `oncl` process. Keystrokes are written to the pseudoconsole's
 //! input; everything the terminal displays is read back from its output. A control
 //! program that does echo proves the harness would show typed characters.
-#![cfg(windows)]
-mod support;
+use crate::support;
 use std::{
     fs::File,
     io::{Read, Write},

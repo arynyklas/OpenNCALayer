@@ -2,7 +2,7 @@
 //! emulator (`oncl-token` feature `emulator`, loaded by the `token-emulator`
 //! feature of this CLI through `ONCL_TOKEN_EMULATOR`). No physical token and no
 //! system smart-card service is involved. Synthetic keys only.
-mod support;
+use crate::support;
 use der::Encode;
 use oncl_pki::private_fs::PrivateDirectory;
 use serde_json::json;

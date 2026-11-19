@@ -4,7 +4,7 @@
 //! working directory) keep their protected ACL over SMB, so `sign` publishes there and
 //! `verify` spools there. A share that cannot keep that ACL fails closed by design,
 //! like FAT; this proves an ordinary NTFS-backed share is not such a share.
-mod support;
+use crate::support;
 use support::*;
 
 #[test]

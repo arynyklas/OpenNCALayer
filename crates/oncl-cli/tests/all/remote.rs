@@ -2,7 +2,7 @@
 //! process against a real loopback server, real (synthetic) crypto and independent oracles.
 //! Every local file is read and written by the client; the server works in its own
 //! directory. Fault tests cut the real response with a raw TCP proxy.
-mod remote_support;
+use crate::remote_support;
 use remote_support::*;
 use std::{
     path::{Path, PathBuf},
@@ -189,7 +189,7 @@ fn sign_verify_extract_round_trip_with_client_files_and_a_different_server_direc
     assert!(left.is_empty(), "scratch must be empty: {left:?}");
 }
 
-mod remote {
+mod server {
     use super::*;
     use oncl_api::{
         client::{

@@ -2,9 +2,9 @@
 //! cross-reference streams, several revisions): the object count of a real document is
 //! not a metadata ceiling (D4/D6), while a lying or hostile cross-reference table is
 //! refused before any key use.
-#[path = "../../oncl-pdf/tests/support/dense_gen.rs"]
+#[path = "../../../oncl-pdf/tests/support/dense_gen.rs"]
 mod dense_gen;
-mod support;
+use crate::support;
 use std::{path::Path, time::Instant};
 use support::*;
 

@@ -1,6 +1,6 @@
 //! WS-Security sign options observed in the produced SOAP, parsed by an
 //! independent lxml script, plus exact negative exits.
-mod support;
+use crate::support;
 use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;
