@@ -1,0 +1,103 @@
+name: Plugin builder
+
+# The reference builder of publishers' plugins (docs/design/publishers.md, «Сборщик»): the
+# image of xtask/assets/plugin-builder/Dockerfile at the commit the workflow runs on, pushed as
+# ghcr.io/arynyklas/oncl-plugin-builder:<commit> with a build provenance attestation.
+#
+# Run by hand on main only. Before anything is pushed, a port of this repository is built in
+# the image twice, in fresh containers without the network, and the two packages must be the
+# same (`oncl-pack`'s ignored test `image`), and `oncl-pack verify` must accept the package and
+# refuse it with one byte changed. The registry login comes after that step, so the code those
+# builds run never sees a credential.
+#
+# Publishing the image makes it usable by nobody yet: the digest this job prints becomes a
+# builder only once the owner's pull request adds it to publishers/builders.toml. Pushing again
+# from another commit gives another digest; listed digests are never replaced or removed.
+#
+# Third-party actions are pinned to a commit, with the release tag in a comment.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-builder
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  IMAGE: ghcr.io/arynyklas/oncl-plugin-builder
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: The workflow runs on main
+        if: github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::the plugin builder is published from main only, not $GITHUB_REF"
+          exit 1
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Build the image
+        timeout-minutes: 40
+        run: |
+          docker build --provenance=false --sbom=false \
+            --build-arg REVISION="$GITHUB_SHA" \
+            -f xtask/assets/plugin-builder/Dockerfile \
+            -t "$IMAGE:$GITHUB_SHA" .
+          echo "image size: $(docker image inspect --format '{{.Size}}' "$IMAGE:$GITHUB_SHA") bytes"
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Two builds of a port in the image are the same
+        timeout-minutes: 40
+        env:
+          ONCL_BUILDER_IMAGE: ${{ env.IMAGE }}:${{ github.sha }}
+        run: cargo test --locked -p oncl-pack --test image -- --ignored --nocapture
+      - name: Log in to ghcr.io
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: echo "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+      - name: Push the image
+        id: push
+        timeout-minutes: 15
+        run: |
+          docker push "$IMAGE:$GITHUB_SHA"
+          reference="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE:$GITHUB_SHA")"
+          digest="${reference#*@}"
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no digest for the pushed image: $reference"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
+      - name: The entry for publishers/builders.toml
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          rust="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          {
+            echo "Pushed \`$IMAGE@$DIGEST\` (tag \`$GITHUB_SHA\`). To make it a builder, the owner appends to \`publishers/builders.toml\` by a pull request:"
+            echo
+            echo '```toml'
+            echo '[[builder]]'
+            echo "digest = \"$DIGEST\""
+            echo "commit = \"$GITHUB_SHA\""
+            echo "rust = \"$rust\""
+            echo "added = $(date -u +%F)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

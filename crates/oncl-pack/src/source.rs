@@ -215,7 +215,9 @@ impl Tree {
             let (Some(mode), Some(_kind), Some(oid), None) =
                 (fields.next(), fields.next(), fields.next(), fields.next())
             else {
-                return Err(ArchiveError::Git(format!("unexpected ls-tree line {record:?}")));
+                return Err(ArchiveError::Git(format!(
+                    "unexpected ls-tree line {record:?}"
+                )));
             };
             let executable = match mode {
                 "100644" => false,
@@ -231,7 +233,9 @@ impl Tree {
                     )));
                 }
                 other => {
-                    return Err(ArchiveError::Git(format!("{path}: unexpected mode {other}")));
+                    return Err(ArchiveError::Git(format!(
+                        "{path}: unexpected mode {other}"
+                    )));
                 }
             };
             check_path(path)?;
@@ -292,7 +296,11 @@ impl Tree {
                 None => (format!("{path}/"), MODE_EXEC, b'5', &[][..]),
                 Some(file) => (
                     path,
-                    if file.executable { MODE_EXEC } else { MODE_FILE },
+                    if file.executable {
+                        MODE_EXEC
+                    } else {
+                        MODE_FILE
+                    },
                     b'0',
                     file.data.as_slice(),
                 ),
@@ -420,10 +428,12 @@ fn walk(dir: &Path, prefix: &str, tree: &mut Tree) -> Result<(), ArchiveError> {
     for entry in fs::read_dir(dir).map_err(io_error(dir))? {
         let entry = entry.map_err(io_error(dir))?;
         let path = entry.path();
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|name| invalid(format!("{}: the name is not UTF-8", Path::new(&name).display())))?;
+        let name = entry.file_name().into_string().map_err(|name| {
+            invalid(format!(
+                "{}: the name is not UTF-8",
+                Path::new(&name).display()
+            ))
+        })?;
         if name == ".git" {
             continue;
         }
@@ -521,9 +531,30 @@ fn cat_blobs<'a>(
             .take()
             .ok_or_else(|| ArchiveError::Git("cat-file has no output".into()))?,
     );
+    let read = read_batch(&mut stdout, &oids);
+    drop(stdout);
+    if read.is_err() {
+        // Nothing more is read: git must not wait on a full pipe for ever.
+        let _ = child.kill();
+    }
+    let written = writer.join();
+    let status = child.wait().map_err(failed)?;
+    let blobs = read?;
+    written
+        .map_err(|_| ArchiveError::Git("the cat-file writer panicked".into()))?
+        .map_err(failed)?;
+    if !status.success() {
+        return Err(ArchiveError::Git(format!("cat-file failed ({status})")));
+    }
+    Ok(blobs)
+}
+
+/// The answers of `git cat-file --batch` to `oids`.
+fn read_batch(stdout: &mut impl BufRead, oids: &[&str]) -> Result<Vec<Vec<u8>>, ArchiveError> {
+    let failed = |e: io::Error| ArchiveError::Git(format!("cat-file: {e}"));
     let mut blobs = Vec::with_capacity(oids.len());
     let mut total = 0u64;
-    for oid in &oids {
+    for oid in oids {
         let mut line = String::new();
         stdout.read_line(&mut line).map_err(failed)?;
         let mut fields = line.trim_end().split(' ');
@@ -535,19 +566,21 @@ fn cat_blobs<'a>(
                 line.trim_end()
             )));
         };
+        if got != *oid {
+            return Err(ArchiveError::Git(format!(
+                "cat-file answered {got} for {oid}"
+            )));
+        }
         let size: u64 = size
             .parse()
             .map_err(|_| ArchiveError::Git(format!("unexpected size in {line:?}")))?;
         total = total.saturating_add(size);
-        if got != *oid || total > MAX_UNPACKED {
-            return Err(if got == *oid {
-                ArchiveError::UnpackedTooLarge
-            } else {
-                ArchiveError::Git(format!("cat-file answered {got} for {oid}"))
-            });
+        if total > MAX_UNPACKED {
+            return Err(ArchiveError::UnpackedTooLarge);
         }
         let mut data = Vec::new();
-        (&mut stdout)
+        stdout
+            .by_ref()
             .take(size)
             .read_to_end(&mut data)
             .map_err(failed)?;
@@ -557,15 +590,6 @@ fn cat_blobs<'a>(
             return Err(ArchiveError::Git(format!("cat-file cut {oid} short")));
         }
         blobs.push(data);
-    }
-    drop(stdout);
-    writer
-        .join()
-        .map_err(|_| ArchiveError::Git("the cat-file writer panicked".into()))?
-        .map_err(failed)?;
-    let status = child.wait().map_err(failed)?;
-    if !status.success() {
-        return Err(ArchiveError::Git(format!("cat-file failed ({status})")));
     }
     Ok(blobs)
 }
@@ -735,13 +759,15 @@ fn read_tar(tar: &[u8]) -> Result<Tree, ArchiveError> {
                     })?)?;
                 }
                 if size != 0 || mode != MODE_EXEC {
-                    return Err(invalid(format!("{path}: a directory must be empty and 0755")));
+                    return Err(invalid(format!(
+                        "{path}: a directory must be empty and 0755"
+                    )));
                 }
             }
             b'0' => {
-                let path = name
-                    .strip_prefix("src/")
-                    .ok_or_else(|| invalid(format!("{name}: outside the root directory {ROOT}/")))?;
+                let path = name.strip_prefix("src/").ok_or_else(|| {
+                    invalid(format!("{name}: outside the root directory {ROOT}/"))
+                })?;
                 let executable = match mode {
                     MODE_FILE => false,
                     MODE_EXEC => true,
@@ -776,8 +802,15 @@ mod tests {
         for value_len in [0, 1, 85, 86, 87, 94, 95, 96, 300, 994, 995, 996] {
             let value = vec![b'a'; value_len];
             let record = pax_record("path", &value);
-            let (length, _) = std::str::from_utf8(&record).unwrap().split_once(' ').unwrap();
-            assert_eq!(length.parse::<usize>().unwrap(), record.len(), "{value_len}");
+            let (length, _) = std::str::from_utf8(&record)
+                .unwrap()
+                .split_once(' ')
+                .unwrap();
+            assert_eq!(
+                length.parse::<usize>().unwrap(),
+                record.len(),
+                "{value_len}"
+            );
             assert_eq!(parse_pax(&record).unwrap().len(), value_len);
         }
     }
@@ -785,7 +818,10 @@ mod tests {
     #[test]
     fn a_header_reads_back() {
         let block = header(b"src/a", MODE_EXEC, 1234, b'0');
-        assert_eq!(parse_octal(&block[148..156], "checksum").unwrap(), checksum(&block));
+        assert_eq!(
+            parse_octal(&block[148..156], "checksum").unwrap(),
+            checksum(&block)
+        );
         assert_eq!(parse_octal(&block[124..136], "size").unwrap(), 1234);
         assert_eq!(parse_octal(&block[136..148], "mtime").unwrap(), MTIME);
         assert_eq!(&block[100..108], b"0000755\0");

@@ -52,6 +52,9 @@ enum Command {
         /// The directory for the package.
         #[arg(long)]
         out: PathBuf,
+        /// Cargo's `--jobs` (the bytes do not depend on it).
+        #[arg(long)]
+        jobs: Option<NonZeroU32>,
     },
     /// Rebuilds the package from the archive and compares it with a published one.
     Verify {
@@ -66,6 +69,9 @@ enum Command {
         /// The crates are in `CARGO_HOME` already (`oncl-pack fetch`): no download.
         #[arg(long)]
         offline: bool,
+        /// Cargo's `--jobs` (the bytes do not depend on it).
+        #[arg(long)]
+        jobs: Option<NonZeroU32>,
     },
 }
 
@@ -80,17 +86,15 @@ struct Input {
     /// The work directory; the archive is unpacked into `<work>/src`, which must not exist.
     #[arg(long, default_value = WORK)]
     work: PathBuf,
-    /// Cargo's `--jobs` (the bytes do not depend on it).
-    #[arg(long)]
-    jobs: Option<NonZeroU32>,
 }
 
 fn main() -> anyhow::Result<()> {
     match Cli::parse().command {
         Command::Source { dir, git, rev, out } => {
             let tree = match (dir, git, rev) {
-                (Some(dir), None, None) => Tree::from_dir(&dir)
-                    .with_context(|| format!("reading {}", dir.display()))?,
+                (Some(dir), None, None) => {
+                    Tree::from_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
+                }
                 (None, Some(git), Some(rev)) => Tree::from_git(&git, &rev)
                     .with_context(|| format!("reading {rev} of {}", git.display()))?,
                 _ => unreachable!("clap requires --dir or --git with --rev"),
@@ -103,15 +107,20 @@ fn main() -> anyhow::Result<()> {
         Command::Check { archive } => {
             let bytes = read_limited(&archive, MAX_ARCHIVE)?;
             Tree::from_archive(&bytes).with_context(|| format!("reading {}", archive.display()))?;
-            println!("{}  {}  {}", sha256_hex(&bytes), bytes.len(), archive.display());
+            println!(
+                "{}  {}  {}",
+                sha256_hex(&bytes),
+                bytes.len(),
+                archive.display()
+            );
         }
         Command::Fetch(input) => {
             let prepared = builder::prepare(&input.source, &input.path, &input.work)?;
             builder::fetch(&prepared)?;
         }
-        Command::Build { input, out } => {
+        Command::Build { input, out, jobs } => {
             let prepared = builder::prepare(&input.source, &input.path, &input.work)?;
-            let packed = builder::build(&prepared, input.jobs)?;
+            let packed = builder::build(&prepared, jobs)?;
             std::fs::create_dir_all(&out).with_context(|| format!("creating {}", out.display()))?;
             let path = out.join(packed.file_name());
             write_atomically(&path, &packed.bytes, Access::Default)
@@ -123,6 +132,7 @@ fn main() -> anyhow::Result<()> {
             sha256,
             package,
             offline,
+            jobs,
         } => {
             let expected = match (sha256, package) {
                 (Some(sha256), None) => sha256,
@@ -135,7 +145,7 @@ fn main() -> anyhow::Result<()> {
             if !offline {
                 builder::fetch(&prepared)?;
             }
-            let packed = builder::verify(&prepared, &expected, input.jobs)?;
+            let packed = builder::verify(&prepared, &expected, jobs)?;
             println!(
                 "{}: the rebuild from the archive (sha256 {}) gives the same bytes, sha256 {}",
                 packed.file_name(),

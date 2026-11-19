@@ -100,7 +100,8 @@ impl Prepared {
 pub fn prepare(archive: &Path, crate_path: &str, work: &Path) -> anyhow::Result<Prepared> {
     source::check_dir_path(crate_path).context("the crate path")?;
     let bytes = read_limited(archive, source::MAX_ARCHIVE)?;
-    let tree = Tree::from_archive(&bytes).with_context(|| format!("reading {}", archive.display()))?;
+    let tree =
+        Tree::from_archive(&bytes).with_context(|| format!("reading {}", archive.display()))?;
     check_crate(&tree, crate_path)?;
     let work = std::path::absolute(work)?;
     fs::create_dir_all(&work).with_context(|| format!("creating {}", work.display()))?;
@@ -196,7 +197,9 @@ fn build_once(prepared: &Prepared, mode: &Mode, target: &str) -> anyhow::Result<
         mode,
     })
     .map_err(|e| {
-        e.context("the reference build failed (were the crates fetched first with `oncl-pack fetch`?)")
+        e.context(
+            "the reference build failed (were the crates fetched first with `oncl-pack fetch`?)",
+        )
     })
 }
 
