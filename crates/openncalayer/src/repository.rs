@@ -124,7 +124,14 @@ impl Fetcher for Offline {
 pub struct Repository {
     client: Mutex<TufClient<DeadlineFetcher, FileStore>>,
     offline: TufClient<Offline, FileStore>,
+    /// The last refusal of each part of the publishers' side (`publishers.json`, the
+    /// delegations, each role), so that each is logged once, not at every check.
+    refusals: Mutex<BTreeMap<String, String>>,
 }
+
+/// The time `publishers.json` and the publishers' roles get, on top of the index's: up to
+/// 33 downloads of at most 1 MiB and 128 KiB.
+pub const PUBLISHERS_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl Repository {
     /// The repository at `base` (`https://…/tuf/v1`) read through `transport` (the proxy of
@@ -191,7 +198,26 @@ impl Repository {
         Ok(Repository {
             client: Mutex::new(client),
             offline,
+            refusals: Mutex::default(),
         })
+    }
+
+    /// Logs `error` of the part `part` of the publishers' side at `warn` if it is not the one
+    /// logged last for it, else at `debug`; no error forgets the last one.
+    fn tell_refusal(&self, part: &str, error: Option<&String>, what: &str) {
+        let mut refusals = self.refusals.lock().unwrap_or_else(PoisonError::into_inner);
+        match error {
+            None => {
+                refusals.remove(part);
+            }
+            Some(error) if refusals.get(part) == Some(error) => {
+                tracing::debug!(part, %error, "{what} (as before)");
+            }
+            Some(error) => {
+                warn!(part, %error, "{what}");
+                refusals.insert(part.to_owned(), error.clone());
+            }
+        }
     }
 
     /// The index of `channel`, refreshed and downloaded within `timeout` (all the requests
@@ -221,9 +247,10 @@ impl Repository {
     /// The plugin catalog of `channel`, read within `timeout` as [`Repository::index`]
     /// reads the index, unless the snapshot refreshed is version `unless_snapshot`: then
     /// nothing more is read ([`CatalogRead::Unchanged`]). Else the index, then the
-    /// publishers' side: `publishers.json` (at most [`PublisherPolicy::MAX_LEN`] bytes) and
-    /// the delegated roles ([`TufClient::delegated`]). A failure of the publishers' side is
-    /// in the result, logged, and fails nothing else.
+    /// publishers' side, within [`PUBLISHERS_TIMEOUT`] more: `publishers.json` (at most
+    /// [`PublisherPolicy::MAX_LEN`] bytes) and the delegated roles
+    /// ([`TufClient::delegated`]). A failure of the publishers' side is in the result, logged
+    /// once until it changes, and fails nothing else.
     ///
     /// # Errors
     ///
@@ -241,6 +268,13 @@ impl Repository {
                 return Ok(CatalogRead::Unchanged);
             }
             let index = download_index(client, trusted, channel, last_seq, now)?;
+            // The publishers' side has a time of its own: on a slow link the roles would
+            // otherwise run out of the index's.
+            *client
+                .fetcher()
+                .deadline
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = Instant::now() + PUBLISHERS_TIMEOUT;
             let publishers = match trusted.target(PublisherPolicy::TARGET) {
                 None => Ok(None),
                 Some(_) => client
@@ -251,20 +285,27 @@ impl Repository {
                         now,
                     )
                     .map(Some)
-                    .map_err(|e| {
-                        warn!(error = %e, "cannot read the publishers' rules; every publisher is unavailable");
-                        e.to_string()
-                    }),
+                    .map_err(|e| e.to_string()),
             };
-            let roles = client.delegated(trusted, now).map_err(|e| {
-                warn!(error = %e, "cannot read the publishers' delegations; every publisher is unavailable");
-                e.to_string()
-            });
+            self.tell_refusal(
+                PublisherPolicy::TARGET,
+                publishers.as_ref().err(),
+                "cannot read the publishers' rules; every publisher is unavailable",
+            );
+            let roles = client.delegated(trusted, now).map_err(|e| e.to_string());
+            self.tell_refusal(
+                "delegations",
+                roles.as_ref().err(),
+                "cannot read the publishers' delegations; every publisher is unavailable",
+            );
             if let Ok(roles) = &roles {
                 for (role, verified) in roles.roles() {
-                    if let Err(e) = verified {
-                        warn!(%role, error = %e, "a publisher's role is refused; the publisher is unavailable");
-                    }
+                    let error = verified.err().map(ToString::to_string);
+                    self.tell_refusal(
+                        role.as_str(),
+                        error.as_ref(),
+                        "a publisher's role is refused; the publisher is unavailable",
+                    );
                 }
             }
             Ok(CatalogRead::Read(Box::new(VerifiedCatalog {

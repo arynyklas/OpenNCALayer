@@ -66,8 +66,16 @@ struct Sandbox {
     server: Arc<Server>,
     ui: Arc<FakeUi>,
     notices: Arc<Mutex<Vec<PluginNotice>>>,
+    /// Signalled after every notice: tests wait on it, not on a clock.
+    noticed: Arc<std::sync::Condvar>,
     modules: Arc<PluginModules>,
+    /// The services' [`PluginConfig::offer_timeout`]: the daemon's, or [`PATIENCE`].
+    offer_timeout: Duration,
 }
+
+/// A budget no download of these tests reaches even on a loaded machine: a test given it
+/// waits for the event, and the bound only turns a hang into a failure.
+const PATIENCE: Duration = Duration::from_secs(300);
 
 impl Sandbox {
     /// Updates on (or off), the stable channel; the user says yes.
@@ -94,12 +102,21 @@ impl Sandbox {
                 ..FakeUi::default()
             }),
             notices: Arc::default(),
+            noticed: Arc::default(),
             modules: Arc::new(PluginModules::new(
                 Arc::new(Engine::new()),
                 services,
                 builtin,
             )),
+            offer_timeout: OFFER_TIMEOUT,
         }
+    }
+
+    /// Offers wait for the catalog as long as its download takes (up to [`PATIENCE`]), not
+    /// the daemon's [`OFFER_TIMEOUT`]: for tests of what an offer does, not of its budget.
+    fn patient(mut self) -> Sandbox {
+        self.offer_timeout = PATIENCE;
+        self
     }
 
     /// The repository the services read through: this sandbox's, trusting its server's root.
@@ -117,6 +134,7 @@ impl Sandbox {
 
     fn service_with(&self, repository: Option<Arc<Repository>>) -> Arc<PluginService> {
         let notices = Arc::clone(&self.notices);
+        let noticed = Arc::clone(&self.noticed);
         PluginService::new(PluginConfig {
             data_dir: self.dir.path().to_owned(),
             settings: self.dir.path().join("settings.json"),
@@ -125,7 +143,11 @@ impl Sandbox {
             http: Arc::clone(&self.transport) as _,
             modules: Arc::clone(&self.modules),
             ui: Arc::clone(&self.ui) as _,
-            notify: Arc::new(move |notice| lock(&notices).push(notice)),
+            notify: Arc::new(move |notice| {
+                lock(&notices).push(notice);
+                noticed.notify_all();
+            }),
+            offer_timeout: self.offer_timeout,
         })
         .unwrap()
     }
@@ -851,23 +873,23 @@ fn missing_module_offers_install() {
     );
 }
 
-/// The notices, waited for until there are `n` (at most 30 s).
+/// The notices, once there are `n`: woken by each notice, so it waits exactly as long as the
+/// background work takes (up to [`PATIENCE`]).
 fn wait_for_notices(sandbox: &Sandbox, n: usize) -> Vec<PluginNotice> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while lock(&sandbox.notices).len() < n {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "{:?}",
-            lock(&sandbox.notices)
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
+    let (notices, timeout) = sandbox
+        .noticed
+        .wait_timeout_while(lock(&sandbox.notices), PATIENCE, |notices| {
+            notices.len() < n
+        })
+        .unwrap_or_else(PoisonError::into_inner);
+    assert!(!timeout.timed_out(), "{:?}", *notices);
+    drop(notices);
     sandbox.notices()
 }
 
 #[test]
 fn install_bundle_installs_the_port_in_the_background() {
-    let sandbox = Sandbox::new(false);
+    let sandbox = Sandbox::new(false).patient();
     let service = sandbox.service();
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
     let bundles: &dyn Bundles = &*service;
@@ -1534,19 +1556,23 @@ fn a_local_install_during_an_update_download_is_kept() {
 
 #[test]
 fn an_offer_waits_for_a_download_running_within_its_budget() {
-    let sandbox = Sandbox::new(true);
+    let sandbox = Sandbox::new(true).patient();
     let service = sandbox.service();
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
-    // Another download holds the catalog and brings it in a moment.
+    // Another download holds the catalog and brings it as soon as the offer has started:
+    // no clock decides the order. The offer finds the download running (and waits for it)
+    // or done; either way it uses that catalog and downloads none of its own.
     let (held_tx, held) = std::sync::mpsc::channel();
+    let (asking_tx, asking) = std::sync::mpsc::channel::<()>();
     let other = Arc::clone(&service);
     let downloading = thread::spawn(move || {
         let one = lock(&other.checking);
         held_tx.send(()).unwrap();
-        thread::sleep(Duration::from_millis(500));
+        asking.recv().unwrap();
         other.refresh_locked(&one, INDEX_TIMEOUT, None).unwrap();
     });
     held.recv().unwrap();
+    asking_tx.send(()).unwrap();
     assert!(Bundles::request_install(
         &*service,
         "kz.example.echo",
@@ -1657,7 +1683,7 @@ fn a_catalog_downloaded_on_demand_is_applied() {
     sandbox.publish(1, vec![old, new]);
     assert!(
         service
-            .catalog_offer_for_symname("kz.example.echo", OFFER_TIMEOUT)
+            .catalog_offer_for_symname("kz.example.echo", PATIENCE)
             .is_some()
     );
     assert_eq!(
@@ -1857,3 +1883,119 @@ mod consent {
 }
 
 mod publishers;
+
+fn updates_off(sandbox: &Sandbox) {
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": false, "channel": "stable"}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_revoked_version_is_off_until_its_replacement_installs_on_the_same_snapshot() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let mut revoked = sandbox.release("0.1.0", &example("0.1.0"));
+    revoked.revoked = true;
+    let new = sandbox.release("0.2.0", &example("0.2.0"));
+    sandbox.publish(2, vec![revoked, new]);
+    // The replacement cannot be downloaded: the revoked version does not run meanwhile.
+    sandbox.transport.reply(&package_url("0.2.0"), 503, b"");
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    assert!(sandbox.modules.names().is_empty());
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    // The next scheduled check, on the same snapshot, tries again.
+    sandbox
+        .transport
+        .serve(&package_url("0.2.0"), &example("0.2.0"));
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Updated {
+            name: name(),
+            version: v("0.2.0"),
+        }]
+    );
+    assert!(!sandbox.store().state().plugins[ID].withdrawn);
+    assert_eq!(sandbox.modules.names(), [MODULE]);
+}
+
+#[test]
+fn a_waiting_update_is_confirmed_only_while_the_catalog_still_chooses_it() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let old = sandbox.release("0.1.0", &example("0.1.0"));
+    let wider = sandbox.release("0.2.0", &example_wider("0.2.0"));
+    sandbox.publish(2, vec![old.clone(), wider.clone()]);
+    service.check_now();
+    let sha = pending_sha(&service);
+    assert!(!sha.is_empty());
+    sandbox.notices();
+
+    // Updates off: it keeps waiting, not installed.
+    updates_off(&sandbox);
+    assert!(matches!(
+        service.confirm_update(ID, &sha),
+        Err(PluginActionError::Failed(_))
+    ));
+    assert_eq!(pending_sha(&service), sha);
+
+    // Revoked since (the catalog read, not applied yet): dropped, not installed.
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": true, "channel": "stable"}}"#,
+    )
+    .unwrap();
+    let mut revoked = wider.clone();
+    revoked.revoked = true;
+    sandbox.publish(3, vec![old.clone(), revoked]);
+    service.refresh(INDEX_TIMEOUT, None).unwrap();
+    assert_eq!(
+        service.confirm_update(ID, &sha),
+        Err(PluginActionError::NothingToConfirm)
+    );
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert!(pending_sha(&service).is_empty());
+}
+
+#[test]
+fn a_revocations_only_pass_drops_an_update_no_longer_chosen() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let old = sandbox.release("0.1.0", &example("0.1.0"));
+    let wider = sandbox.release("0.2.0", &example_wider("0.2.0"));
+    sandbox.publish(2, vec![old.clone(), wider.clone()]);
+    service.check_now();
+    assert!(!pending_sha(&service).is_empty());
+    updates_off(&sandbox);
+    let mut revoked = wider;
+    revoked.revoked = true;
+    let newer = sandbox.release("0.3.0", &example("0.3.0"));
+    sandbox.publish(3, vec![old, revoked, newer]);
+    service.check_now();
+    assert!(pending_sha(&service).is_empty());
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert_eq!(package_downloads(&sandbox, "0.3.0"), 0);
+}
+
+#[test]
+fn a_leftover_full_application_is_capped_once_updates_are_off() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    update_offered(&sandbox, &service);
+    service.refresh(INDEX_TIMEOUT, None).unwrap();
+    updates_off(&sandbox);
+    *lock(&service.apply_pending) = Some(Apply::Full);
+    service.apply_catalog(Apply::RevocationsOnly);
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert_eq!(package_downloads(&sandbox, "0.2.0"), 0);
+    assert!(sandbox.notices().is_empty());
+}

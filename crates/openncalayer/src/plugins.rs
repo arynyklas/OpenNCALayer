@@ -148,6 +148,9 @@ pub struct PluginConfig {
     pub ui: Arc<dyn InstallUi>,
     /// Tells the user; called from any thread, must not block.
     pub notify: Arc<dyn Fn(PluginNotice) + Send + Sync>,
+    /// How long `installBundle` waits for the catalog when none is in use:
+    /// [`OFFER_TIMEOUT`].
+    pub offer_timeout: Duration,
 }
 
 /// The plugins as the plugin window shows them.
@@ -276,8 +279,8 @@ pub struct PluginService {
     checking: Mutex<()>,
     /// One application of the catalog at a time.
     applying: Mutex<()>,
-    /// An application asked for while one ran, and the widest it asked for: the running one
-    /// goes over the catalog again.
+    /// An application asked for while one ran, the last one asked for: the running one goes
+    /// over the catalog again, never wider than the settings allow then.
     apply_pending: Mutex<Option<Apply>>,
     /// Every change of an installed plugin (turned on or off, removed, installed, updated,
     /// withdrawn): each acts on the state as it is once it holds this.
@@ -357,6 +360,19 @@ enum Fresh {
     Read,
     /// The snapshot is the one of the catalog applied last: nothing else was read.
     Unchanged,
+}
+
+/// What came of an update to a release of the catalog ([`PluginService::update_to`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Updated {
+    /// Installed.
+    Installed,
+    /// It waited for the user before, and still does.
+    StillWaiting,
+    /// It may do more than the version installed: it waits for the user from now on.
+    NowWaiting,
+    /// Not downloaded, refused (marked bad), or the plugin changed meanwhile.
+    Failed,
 }
 
 /// Why a downloaded package is not installed.
@@ -828,7 +844,9 @@ impl PluginService {
         unless: Option<Apply>,
     ) -> Result<Fresh, Refresh> {
         let channel = self.update_settings().channel;
-        let unless_snapshot = unless.and_then(|apply| {
+        // Only with a catalog in use to go on with: else the read rebuilds one.
+        let in_use = unless.is_some() && self.valid_catalog().is_some();
+        let unless_snapshot = unless.filter(|_| in_use).and_then(|apply| {
             lock(&self.catalog)
                 .applied
                 .filter(|applied| applied.channel == channel && applied.apply >= apply)
@@ -996,9 +1014,10 @@ impl PluginService {
     /// Moves each plugin installed from the catalog to the version the catalog in use
     /// chooses for it, as far as `apply` allows. One application at a time: one asked for
     /// while another runs marks itself pending, and the running one goes over the newest
-    /// catalog once more, as the last one asked for. Each plugin is changed under
-    /// `changing`, and only if it is still the one installed from the catalog at the version
-    /// the choice was made for.
+    /// catalog once more, as the last one asked for. Each pass is capped by the settings as
+    /// they are then ([`Apply::with_updates`]): one asked for with updates on applies only
+    /// revocations once they are off. Each plugin is changed under `changing`, and only if it
+    /// is still the one installed from the catalog at the version the choice was made for.
     fn apply_catalog(&self, apply: Apply) {
         let _one = match self.applying.try_lock() {
             Ok(one) => one,
@@ -1014,9 +1033,11 @@ impl PluginService {
             if let Some(asked) = lock(&self.apply_pending).take() {
                 apply = asked;
             }
-            if let Some(in_use) = self.valid_catalog() {
-                self.apply_index(&in_use.catalog, apply);
-                self.record_applied(&in_use, apply);
+            let apply_now = apply.min(Apply::with_updates(self.update_settings().enabled));
+            if let Some(in_use) = self.valid_catalog()
+                && self.apply_index(&in_use.catalog, apply_now)
+            {
+                self.record_applied(&in_use, apply_now);
             }
             match lock(&self.apply_pending).take() {
                 Some(asked) => apply = asked,
@@ -1025,8 +1046,9 @@ impl PluginService {
         }
     }
 
-    /// `in_use` is applied as far as `apply` allows: if it was read whole, a scheduled check
-    /// that finds its snapshot again reads nothing more; else the next one reads it again.
+    /// `in_use` is applied as far as `apply` allows and every plugin settled: if it was read
+    /// whole, a scheduled check that finds its snapshot again reads nothing more; else the
+    /// next one reads it again.
     fn record_applied(&self, in_use: &InUse, apply: Apply) {
         let channel = in_use.catalog.index().channel;
         let mut catalog = lock(&self.catalog);
@@ -1043,12 +1065,20 @@ impl PluginService {
         });
     }
 
-    /// One pass of [`PluginService::apply_catalog`] over `catalog`. A plugin's publisher not
-    /// recorded is restored from the prefixes of `publishers.json` first. With
-    /// [`Apply::RevocationsOnly`] a revoked version is turned off even if the catalog has a
-    /// version to move to, and nothing is installed.
-    fn apply_index(&self, catalog: &oncl_update::Catalog, apply: Apply) {
+    /// One pass of [`PluginService::apply_catalog`] over `catalog`; whether every plugin
+    /// settled: each is where the catalog puts it, or waits for the user as it did before
+    /// the pass. A download that failed, a version marked bad, an update newly waiting for
+    /// the user or a plugin changed meanwhile leaves the pass unsettled, and the next check
+    /// goes over the catalog again.
+    ///
+    /// A plugin's publisher not recorded is restored from the prefixes of `publishers.json`
+    /// first. A revoked version never keeps running: with [`Apply::RevocationsOnly`] it is
+    /// turned off even if the catalog has a version to move to (nothing is installed), with
+    /// [`Apply::Full`] if the version to move to is not installed in this pass. An update
+    /// waiting for the user is dropped unless it is still the catalog's choice.
+    fn apply_index(&self, catalog: &oncl_update::Catalog, apply: Apply) -> bool {
         let state = self.store.state();
+        let mut settled = true;
         for (id, snapshot) in &state.plugins {
             if snapshot.source != Source::Catalog {
                 continue;
@@ -1059,7 +1089,8 @@ impl PluginService {
             };
             let mut bad = state.bad.get(id).cloned().unwrap_or_default();
             bad.extend(lock(&self.conflicts).get(id).into_iter().flatten().cloned());
-            match choose_installed(
+            let revoked = catalog.is_installed_revoked(id, &snapshot.version, recorded.as_ref());
+            let choice = choose_installed(
                 catalog,
                 id,
                 recorded.as_ref(),
@@ -1067,35 +1098,33 @@ impl PluginService {
                 &self.cfg.core,
                 &state.install_id,
                 &bad,
-            ) {
-                PluginChoice::Keep => {
-                    lock(&self.pending).remove(id);
-                    let listed = catalog
-                        .releases()
-                        .any(|r| r.id == *id && r.version == snapshot.version && !r.revoked);
-                    if !(snapshot.withdrawn && listed) {
-                        continue;
-                    }
-                    let _change = lock(&self.changing);
-                    let Some(fresh) = self.still(id, snapshot) else {
-                        continue;
-                    };
-                    info!(plugin = %id, "the plugin's version is no longer revoked");
-                    if let Err(e) = self.store.set_withdrawn(id, false) {
-                        warn!(plugin = %id, error = %e, "cannot record the plugin's state");
-                    } else if fresh.enabled {
-                        let _ = self.load_installed(id);
-                    }
-                }
+            );
+            let target = match &choice {
+                PluginChoice::Update(release) | PluginChoice::Downgrade(release) => Some(*release),
+                _ => None,
+            };
+            self.drop_pending_unless(id, target);
+            settled &= match choice {
+                PluginChoice::Keep => self.unwithdraw(catalog, id, snapshot),
                 PluginChoice::Update(release) | PluginChoice::Downgrade(release)
                     if apply == Apply::Full =>
                 {
-                    self.update_to(release, snapshot);
+                    match self.update_to(release, snapshot) {
+                        Updated::Installed => true,
+                        outcome => {
+                            // The version installed is revoked and stays until the one
+                            // to move to is installed: off meanwhile.
+                            let off = !revoked || self.withdraw(id, snapshot, None);
+                            off && outcome == Updated::StillWaiting
+                        }
+                    }
                 }
                 // Revocations only: off a revoked version, never onto another one.
                 PluginChoice::Update(_) | PluginChoice::Downgrade(_) => {
-                    if catalog.is_installed_revoked(id, &snapshot.version, recorded.as_ref()) {
-                        self.withdraw(id, snapshot, None);
+                    if revoked {
+                        self.withdraw(id, snapshot, None)
+                    } else {
+                        self.unwithdraw(catalog, id, snapshot)
                     }
                 }
                 PluginChoice::Withdrawn => self.withdraw(id, snapshot, None),
@@ -1111,15 +1140,58 @@ impl PluginService {
                                 en: p.display().en.clone(),
                             },
                         );
-                    self.withdraw(id, snapshot, Some(display));
+                    self.withdraw(id, snapshot, Some(display))
                 }
                 // A choice this core does not know leaves the plugin as it is, but is logged:
                 // a newer library may mean a withdrawal by it.
                 other => {
                     warn!(plugin = %id, choice = ?other, "unknown plugin choice; the plugin is left as it is");
+                    true
                 }
-            }
+            };
         }
+        settled
+    }
+
+    /// Drops the update of `id` waiting for the user unless it is of `release`, the
+    /// catalog's choice now.
+    fn drop_pending_unless(&self, id: &str, release: Option<&PluginRelease>) {
+        let mut pending = lock(&self.pending);
+        let current = pending.get(id).is_some_and(|p| {
+            release.is_some_and(|r| {
+                p.release.version == r.version && p.release.package.sha256 == r.package.sha256
+            })
+        });
+        if !current && pending.remove(id).is_some() {
+            info!(
+                plugin = id,
+                "the update waiting for the user is no longer the catalog's choice"
+            );
+        }
+    }
+
+    /// Turns the installed `id` (`snapshot`) back on if it is withdrawn and the catalog
+    /// lists its version not revoked. Whether it settled (not changed meanwhile, recorded).
+    fn unwithdraw(&self, catalog: &oncl_update::Catalog, id: &str, snapshot: &Installed) -> bool {
+        let listed = catalog
+            .releases()
+            .any(|r| r.id == *id && r.version == snapshot.version && !r.revoked);
+        if !(snapshot.withdrawn && listed) {
+            return true;
+        }
+        let _change = lock(&self.changing);
+        let Some(fresh) = self.still(id, snapshot) else {
+            return false;
+        };
+        info!(plugin = %id, "the plugin's version is no longer revoked");
+        if let Err(e) = self.store.set_withdrawn(id, false) {
+            warn!(plugin = %id, error = %e, "cannot record the plugin's state");
+            return false;
+        }
+        if fresh.enabled {
+            let _ = self.load_installed(id);
+        }
+        true
     }
 
     /// The publisher of the installed `id` (`snapshot`, none recorded) by the prefixes of
@@ -1141,17 +1213,16 @@ impl PluginService {
         Some(publisher)
     }
 
-    /// Turns the installed `id` (`snapshot`) off: its version is revoked with nothing to move
-    /// to, or its publisher (`publisher`, its display name) is revoked. Told once: a plugin
-    /// withdrawn already is left as it is, but for an update waiting for the user, dropped.
-    fn withdraw(&self, id: &str, snapshot: &Installed, publisher: Option<Localized>) {
-        lock(&self.pending).remove(id);
+    /// Turns the installed `id` (`snapshot`) off: its version is revoked, or its publisher
+    /// (`publisher`, its display name) is. Told once: a plugin withdrawn already is left as
+    /// it is. Whether it settled (not changed meanwhile, recorded).
+    fn withdraw(&self, id: &str, snapshot: &Installed, publisher: Option<Localized>) -> bool {
         if snapshot.withdrawn {
-            return;
+            return true;
         }
         let _change = lock(&self.changing);
         if self.still(id, snapshot).is_none() {
-            return;
+            return false;
         }
         match &publisher {
             Some(publisher) => {
@@ -1163,7 +1234,8 @@ impl PluginService {
         }
         self.cfg.modules.unload(id);
         lock(&self.conflicts).clear();
-        if let Err(e) = self.store.set_withdrawn(id, true) {
+        let recorded = self.store.set_withdrawn(id, true);
+        if let Err(e) = &recorded {
             warn!(plugin = %id, error = %e, "cannot record the plugin's state");
         }
         let name = self.name_of(id);
@@ -1171,6 +1243,7 @@ impl PluginService {
             Some(publisher) => PluginNotice::PublisherRevoked { name, publisher },
             None => PluginNotice::Withdrawn { name },
         });
+        recorded.is_ok()
     }
 
     /// The installed `id` as it is now, if it is still `snapshot`'s: from the catalog, at
@@ -1194,12 +1267,13 @@ impl PluginService {
     /// `snapshot`, loaded (if it is on; else checked only) and recorded. A release whose
     /// capabilities go beyond the installed version's is not installed: it waits for the
     /// user ([`PluginService::confirm_update`]), told once, and the installed version runs on.
-    fn update_to(&self, release: &PluginRelease, snapshot: &Installed) {
+    /// What came of it.
+    fn update_to(&self, release: &PluginRelease, snapshot: &Installed) -> Updated {
         let waiting = lock(&self.pending).get(&release.id).is_some_and(|p| {
             p.release.version == release.version && p.snapshot.version == snapshot.version
         });
         if waiting {
-            return;
+            return Updated::StillWaiting;
         }
         info!(plugin = %release.id, version = %release.version, "updating the plugin");
         let (package, bytes) = match self.download(release) {
@@ -1207,18 +1281,23 @@ impl PluginService {
             Err(Download::Unreachable(e)) => {
                 // Quietly: the next check tries again.
                 warn!(plugin = %release.id, error = %e, "cannot download the plugin's update");
-                return;
+                return Updated::Failed;
             }
-            Err(Download::Bad(e)) => return self.bad(release, e),
+            Err(Download::Bad(e)) => {
+                self.bad(release, e);
+                return Updated::Failed;
+            }
         };
         let added = self.added_over_installed(&package.manifest);
         if added.is_empty() {
-            let _ = self.install_update(release, package, &bytes, snapshot);
-            return;
+            return match self.install_update(release, package, &bytes, snapshot) {
+                Ok(()) => Updated::Installed,
+                Err(_) => Updated::Failed,
+            };
         }
         let _change = lock(&self.changing);
         if self.still(&release.id, snapshot).is_none() {
-            return;
+            return Updated::Failed;
         }
         info!(plugin = %release.id, version = %release.version, ?added, "the plugin's update asks for more; it waits for the user");
         let notice = PluginNotice::UpdateNeedsConfirmation {
@@ -1236,6 +1315,7 @@ impl PluginService {
             },
         );
         (self.cfg.notify)(notice);
+        Updated::NowWaiting
     }
 
     /// Installs the update of `id` waiting for the user ([`PluginNotice::UpdateNeedsConfirmation`]):
@@ -1246,9 +1326,18 @@ impl PluginService {
     /// # Errors
     ///
     /// No update of `id` waits ([`PluginActionError::NothingToConfirm`]); another package
-    /// waits than the one shown ([`PluginActionError::Superseded`], it stays waiting); or
-    /// it failed (also told in the tray); the plugin changed meanwhile: nothing is done.
+    /// waits than the one shown ([`PluginActionError::Superseded`], it stays waiting); updates
+    /// are off (it stays waiting); the catalog in use no longer chooses it (revoked, marked
+    /// bad, another version: dropped, [`PluginActionError::NothingToConfirm`]); or it failed
+    /// (also told in the tray); the plugin changed meanwhile: nothing is done.
     pub fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError> {
+        if !self.update_settings().enabled {
+            info!(
+                plugin = id,
+                "updates are off; the plugin's update keeps waiting"
+            );
+            return Err(PluginActionError::Failed("updates are off".to_owned()));
+        }
         let pending = {
             let mut waiting = lock(&self.pending);
             match waiting.get(id) {
@@ -1262,6 +1351,10 @@ impl PluginService {
                 .remove(id)
                 .ok_or(PluginActionError::NothingToConfirm)?
         };
+        if !self.still_chosen(&pending.release) {
+            info!(plugin = id, version = %pending.release.version, "the catalog no longer chooses the plugin's update; dropped");
+            return Err(PluginActionError::NothingToConfirm);
+        }
         info!(plugin = id, version = %pending.release.version, "the user agrees to the plugin's update");
         self.install_update(
             &pending.release,
@@ -1270,6 +1363,40 @@ impl PluginService {
             &pending.snapshot,
         )
         .map_err(PluginActionError::Failed)
+    }
+
+    /// Whether the catalog in use still chooses `release` for the plugin installed: the
+    /// version installed, its publisher and the versions bad here as they are now.
+    fn still_chosen(&self, release: &PluginRelease) -> bool {
+        let Some(in_use) = self.valid_catalog() else {
+            return false;
+        };
+        let state = self.store.state();
+        let Some(installed) = state.plugins.get(&release.id) else {
+            return false;
+        };
+        let mut bad = state.bad.get(&release.id).cloned().unwrap_or_default();
+        bad.extend(
+            lock(&self.conflicts)
+                .get(&release.id)
+                .into_iter()
+                .flatten()
+                .cloned(),
+        );
+        matches!(
+            choose_installed(
+                &in_use.catalog,
+                &release.id,
+                installed.publisher.as_ref(),
+                &installed.version,
+                &self.cfg.core,
+                &state.install_id,
+                &bad,
+            ),
+            PluginChoice::Update(chosen) | PluginChoice::Downgrade(chosen)
+                if chosen.version == release.version
+                    && chosen.package.sha256 == release.package.sha256
+        )
     }
 
     /// What the manual-tools window may offer of the plugins installed now: the registry
@@ -1700,7 +1827,8 @@ fn same_name(text: &str) -> Localized {
     }
 }
 
-/// How long `installBundle` waits for the catalog when none is in use.
+/// The daemon's [`PluginConfig::offer_timeout`]: how long `installBundle` waits for the
+/// catalog when none is in use.
 pub const OFFER_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Bundles for PluginService {
@@ -1717,11 +1845,11 @@ impl Bundles for PluginService {
             .collect()
     }
 
-    /// Looks in the catalog in use (downloaded within [`OFFER_TIMEOUT`] if there is none)
-    /// for a plugin porting `symname`; one not installed is installed in the background
-    /// (the user is asked) and `true` returned.
+    /// Looks in the catalog in use (downloaded within [`PluginConfig::offer_timeout`] if
+    /// there is none) for a plugin porting `symname`; one not installed is installed in the
+    /// background (the user is asked) and `true` returned.
     fn request_install(&self, symname: &str, origin: &str) -> bool {
-        let Some(release) = self.catalog_offer_for_symname(symname, OFFER_TIMEOUT) else {
+        let Some(release) = self.catalog_offer_for_symname(symname, self.cfg.offer_timeout) else {
             return false;
         };
         let installed = self.store.state().plugins.contains_key(&release.id)

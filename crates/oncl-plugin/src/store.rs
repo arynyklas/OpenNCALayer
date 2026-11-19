@@ -432,7 +432,7 @@ impl Store {
         &self,
         check: impl FnOnce(&[u8]) -> Result<OffsetDateTime, String>,
     ) -> Option<(Vec<u8>, OffsetDateTime)> {
-        let bytes = read_kept(&self.publishers_path())?;
+        let bytes = read_kept(&self.publishers_path(), PUBLISHERS_MAX)?;
         match check(&bytes) {
             Ok(valid_until) => Some((bytes, valid_until)),
             Err(e) => {
@@ -450,6 +450,13 @@ impl Store {
     pub fn save_role(&self, role: &RoleName, bytes: &[u8]) -> io::Result<()> {
         std::fs::create_dir_all(self.roles_dir())?;
         write_atomically(&self.role_path(role), bytes, Access::Default)
+    }
+
+    /// The kept file of the role `role`, if there is one, with what `check` says of its
+    /// bytes (for the TUF client, [`oncl_update::tuf::TufClient::verify_cached_role`]). A file
+    /// longer than a role may be, or that cannot be read, is none (logged).
+    pub fn load_role<T>(&self, role: &RoleName, check: impl FnOnce(&[u8]) -> T) -> Option<T> {
+        read_kept(&self.role_path(role), ROLE_MAX).map(|bytes| check(&bytes))
     }
 
     /// Every kept role file, by role, with what `check` says of its bytes (for the TUF
@@ -486,7 +493,7 @@ impl Store {
         roles
             .into_iter()
             .filter_map(|(role, path)| {
-                let bytes = read_kept(&path)?;
+                let bytes = read_kept(&path, ROLE_MAX)?;
                 let checked = check(&role, &bytes);
                 Some((role, checked))
             })
@@ -603,9 +610,26 @@ fn not_installed(id: &str) -> io::Error {
     )
 }
 
-/// The kept file at `path`; `None` if there is none or it cannot be read (logged).
-fn read_kept(path: &Path) -> Option<Vec<u8>> {
-    match std::fs::read(path) {
+/// The longest kept `publishers.json` read: what the client downloads at most.
+const PUBLISHERS_MAX: u64 = oncl_update::PublisherPolicy::MAX_LEN as u64;
+
+/// The longest kept role file read: what the client downloads at most
+/// ([`oncl_update::tuf::Limits::delegated`]).
+const ROLE_MAX: u64 = 128 << 10;
+
+/// The kept file at `path`, at most `max` bytes; `None` if there is none, it is longer or
+/// it cannot be read (logged).
+fn read_kept(path: &Path, max: u64) -> Option<Vec<u8>> {
+    let read = std::fs::File::open(path).and_then(|file| {
+        let mut bytes = Vec::new();
+        file.take(max + 1).read_to_end(&mut bytes)?;
+        Ok(bytes)
+    });
+    match read {
+        Ok(bytes) if bytes.len() as u64 > max => {
+            tracing::warn!(path = %path.display(), max, "a kept catalog file is longer than any the client keeps");
+            None
+        }
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => {

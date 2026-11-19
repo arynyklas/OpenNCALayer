@@ -607,3 +607,92 @@ fn the_kept_catalog_and_its_publishers_are_checked_again_offline() {
     assert!(matches!(view.catalog, CatalogView::Ready { .. }));
     assert_eq!(sandbox.transport.asked().len(), asked, "nothing downloaded");
 }
+
+#[test]
+fn a_failed_download_of_publishers_json_falls_back_to_the_same_kept_file() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    let first = acme_installed(&sandbox, &service);
+    let newer = plain(&sandbox, "1.1.0");
+    let same = policy(vec![entry("active")]);
+    publish(&sandbox, 2, Some(&same), Some((2, role(&[first, newer]))));
+    let sha256 = Sha256::of(&serde_json::to_vec(&same).unwrap()).to_string();
+    sandbox.transport.reply(
+        &crate::repository::tests::url(&format!("targets/{sha256}.publishers.json")),
+        404,
+        b"",
+    );
+    service.check_now();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Updated {
+            name: name(),
+            version: v("1.1.0"),
+        }]
+    );
+}
+
+#[test]
+fn unreadable_delegations_keep_a_publishers_plugin_unless_the_owner_revoked_it() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    let first = acme_installed(&sandbox, &service);
+    let newer = plain(&sandbox, "1.1.0");
+    let unreadable = |sandbox: &Sandbox, seq: u64, policy: &Value| {
+        {
+            let mut repo = sandbox.server.repo();
+            repo.set_target(
+                PublisherPolicy::TARGET,
+                &serde_json::to_vec(policy).unwrap(),
+            );
+            let file = repo.role_file(seq, role(&[first.clone(), newer.clone()]), &[&acme_key()]);
+            repo.set_role(&acme_role(), seq, file);
+            repo.delegations = Some(json!({"keys": {}, "roles": 7}));
+        }
+        sandbox.publish(seq, Vec::new());
+    };
+    unreadable(&sandbox, 2, &policy(vec![entry("active")]));
+    service.check_now();
+    kept(&sandbox);
+    assert_eq!(downloads(&sandbox, "1.1.0"), 0, "nothing offered");
+
+    unreadable(
+        &sandbox,
+        3,
+        &policy(vec![revoking(entry("active"), "1.0.0")]),
+    );
+    service.check_now();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+}
+
+#[test]
+fn an_expired_role_leaves_its_publisher_unavailable_in_the_catalog_rebuilt() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    let first = plain(&sandbox, "1.0.0");
+    {
+        let mut repo = sandbox.server.repo();
+        repo.set_target(
+            PublisherPolicy::TARGET,
+            &serde_json::to_vec(&policy(vec![entry("active")])).unwrap(),
+        );
+        let lifetimes = repo.lifetimes;
+        repo.signed_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+        repo.lifetimes.targets = time::Duration::seconds(8);
+        let file = repo.role_file(1, role(&[first]), &[&acme_key()]);
+        repo.lifetimes = lifetimes;
+        repo.set_role(&acme_role(), 1, file);
+        repo.delegations = Some(testing::delegations(&[(&acme_role(), &acme_key())]));
+    }
+    sandbox.publish(1, Vec::new());
+    service.check_now();
+    assert_eq!(service.view().available.len(), 1);
+    thread::sleep(Duration::from_secs(10));
+    // The catalog in use holds no longer: rebuilt from the kept files, without acme.
+    let view = service.view();
+    assert!(view.available.is_empty(), "{:?}", view.available);
+    assert!(matches!(view.catalog, CatalogView::Ready { .. }));
+}

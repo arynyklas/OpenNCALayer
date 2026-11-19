@@ -992,6 +992,15 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             .delegated
             .get(role)
             .ok_or_else(|| delegation_error(role, DelegationError::NotAccepted))?;
+        // The version the saved snapshot lists, no other: a newer one that was refused leaves
+        // the role unavailable offline too, not trusted at the version accepted before.
+        let listed = state
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.meta.get(&role.meta_name()).copied());
+        if listed != Some(accepted.version) {
+            return Err(delegation_error(role, DelegationError::NotAccepted));
+        }
         // Only the file accepted: another file of the same version, even one signed by the
         // delegation's keys, was never checked against the snapshot.
         if Digest::of(bytes) != accepted.sha256 {
