@@ -16,21 +16,27 @@ name: Pages
 # Pages must be enabled with "GitHub Actions" as the source in the repository settings;
 # until then the site is built and checked, and nothing is deployed.
 #
-# TUF (`docs/design/tuf.md`, `docs/dev/release.md`): if `tuf/v1` exists, it is published
-# under `/tuf/v1/` beside the indexes, with a `metadata/timestamp.json` made on every run.
-# The timestamp is the only thing CI signs, and its key is the one secret CI has:
-# `TUF_TIMESTAMP_KEY`, a secret of the environment `tuf-timestamp` (deployment branches:
-# `main` only), read by the one step of the `timestamp` job that signs. That job runs only in
-# this repository, only on `main`, only on events that the maintainers (or the schedule)
-# start, never on a pull request; it has no write permission, every action in it is pinned by
-# commit, it restores no build cache, and its last step is the one with the secret. It
-# hands the signed file, which is not secret, to `build` as a job output, so no action runs
-# after the secret is in the environment, and `build` (which assembles the site from this repository's files) never
-# sees the key. Once `tuf/v1` exists, a missing secret, a repository the client would refuse
-# or a snapshot that has expired fails the run and nothing is deployed: the site that is
-# served keeps its timestamp (valid for 7 days) rather than lose it. `oracle` checks the
-# assembled repository with python-tuf before `deploy`; `verify` runs the real client against
-# the deployed site. `xtask/tests/workflows_tuf.rs` pins these rules.
+# TUF (`docs/design/tuf.md`, `docs/design/publishers.md`, `docs/dev/release.md`): if `tuf/v1`
+# exists, it is published under `/tuf/v1/` beside the indexes, with a `metadata/timestamp.json`
+# made on every run and, once `tuf/v1.toml` says `snapshot = "online"`, a snapshot made on
+# every run too. CI holds two keys, each a secret of its own environment (deployment branches:
+# `main` only), each read by the one step of one job that signs: `TUF_SNAPSHOT_KEY` of
+# `tuf-snapshot` in the `snapshot` job, `TUF_TIMESTAMP_KEY` of `tuf-timestamp` in the
+# `timestamp` job. Those jobs run only in this repository, only on `main`, only on events that
+# the maintainers (or the schedule) start, never on a pull request; they have no write
+# permission, every action in them is pinned by commit, they restore no build cache, xtask is
+# built before any key is in the environment, and the step with the key is the last. Each
+# hands its signed files, which are not secret, on as job outputs (the snapshots through
+# `.github/scripts/snapshot-files.sh`), so no action runs after a key is in the environment,
+# and `build` (which assembles the site from this repository's files) never sees a key. Once
+# `tuf/v1` exists, a missing secret, a published snapshot that cannot be read or extended, a
+# repository the client would refuse or a snapshot that has expired fails the run and nothing
+# is deployed, the whole site included (Р25): the site that is served keeps its snapshot and
+# timestamp (valid for 7 days) rather than lose them. `oracle` checks the assembled repository
+# with python-tuf before `deploy`; `verify` runs the real client against the deployed site.
+# `oracle`, `deploy` and `verify` name their conditions in full (`!cancelled()` and the
+# results they need), never the implicit `success()`. `xtask/tests/workflows_tuf.rs` pins
+# these rules.
 on:
   push:
     branches: [main]
@@ -47,6 +53,7 @@ on:
       - "crates/oncl-builtin-accessory/**"
       - "fixtures/registry/**"
       - ".github/workflows/pages.yml"
+      - ".github/scripts/snapshot-files.sh"
   schedule:
     - cron: "41 4 * * *"
   repository_dispatch:
@@ -69,13 +76,106 @@ env:
   CARGO_TERM_COLOR: always
   # A test or check whose oracle program is missing fails instead of skipping.
   ONCL_REQUIRE_ORACLES: "1"
+  # The site as Pages serves it: the published `tuf/v1` the new snapshot extends. The jobs
+  # that sign run only in this repository.
+  PAGES_URL: https://arynyklas.github.io/OpenNCALayer/
 
 jobs:
+  # The snapshot of `tuf/v1`, signed with the online key (see the header) once `tuf/v1.toml`
+  # says `snapshot = "online"` (`docs/design/publishers.md`, "Онлайн-снимок"). Without
+  # `tuf/v1`, or while the snapshot is offline (no `tuf/v1.toml`, or `snapshot = "offline"`:
+  # the owner signs it with `cargo xtask tuf update`), it does nothing. Online, a missing
+  # secret, a published snapshot it cannot read, verify or extend, or a repository the client
+  # would refuse fails the job: `timestamp`, `build` and `deploy` do not run (Р25).
+  snapshot:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.repository == 'arynyklas/OpenNCALayer' && (
+      github.event_name == 'push' || github.event_name == 'schedule' ||
+      github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'repository_dispatch')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: tuf-snapshot
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.mode.outputs.mode }}
+      files: ${{ steps.sign.outputs.files }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # The mode as `cargo xtask tuf root` writes it, comments aside; anything else fails
+      # rather than be taken for offline.
+      - name: Is the snapshot online?
+        id: mode
+        run: |
+          if [ ! -d tuf/v1 ]; then
+            echo "::notice::no tuf/v1 yet: no snapshot to sign"
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mode=offline
+          if [ -f tuf/v1.toml ]; then
+            setting=$(sed -e 's/[[:space:]]*$//' -e '/^[[:space:]]*#/d' -e '/^$/d' tuf/v1.toml)
+            case "$setting" in
+              'snapshot = "offline"') mode=offline ;;
+              'snapshot = "online"') mode=online ;;
+              *)
+                echo "::error::tuf/v1.toml is not one line snapshot = \"offline\" or snapshot = \"online\" (as cargo xtask tuf root writes it): the snapshot mode is unknown"
+                exit 1
+                ;;
+            esac
+          fi
+          if [ "$mode" = offline ]; then
+            echo "::notice::the snapshot of tuf/v1 is offline (tuf/v1.toml): the owner signs it, nothing to sign here"
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+      - name: Install toolchain (rust-toolchain.toml)
+        if: steps.mode.outputs.mode == 'online'
+        run: rustup toolchain install
+      # No build cache in this job: whatever it restored would be compiled code that runs
+      # next to the key. Compiled here, from the reviewed Cargo.lock, before the secret is in
+      # any environment: the build scripts do not run in the step with the key. This narrows
+      # the exposure, it is no boundary: the dependencies are linked into the binary that
+      # holds the key, and what runs earlier as the same user could still watch later steps.
+      - name: Build xtask
+        if: steps.mode.outputs.mode == 'online'
+        run: cargo build --locked -p xtask
+      # The last step. `xtask tuf snapshot` verifies the copy with the client's code (roots,
+      # top-level targets, the indexes, every publisher's newest role) and the published
+      # snapshot the new one extends (`--previous`, no way around it), and signs only if they
+      # hold. The new snapshot, and the published one when the tree does not have it, go out
+      # as the output `files`: the timestamp hashes these bytes.
+      - name: Sign the snapshot
+        id: sign
+        if: steps.mode.outputs.mode == 'online'
+        env:
+          TUF_SNAPSHOT_KEY: ${{ secrets.TUF_SNAPSHOT_KEY }}
+        run: |
+          if [ -z "$TUF_SNAPSHOT_KEY" ]; then
+            echo "::error::tuf/v1.toml says snapshot = \"online\", but the secret TUF_SNAPSHOT_KEY is not set in the environment tuf-snapshot: no snapshot can be signed (docs/dev/release.md, section 10)"
+            exit 1
+          fi
+          echo "::add-mask::$TUF_SNAPSHOT_KEY"
+          copy="$RUNNER_TEMP/tuf"
+          cp -R tuf/v1 "$copy"
+          target/debug/xtask tuf snapshot --out "$copy" --previous "${PAGES_URL}tuf/v1/"
+          bash .github/scripts/snapshot-files.sh pack tuf/v1/metadata "$copy/metadata" > "$RUNNER_TEMP/snapshots"
+          {
+            echo "files<<TUF_SNAPSHOT_EOF"
+            cat "$RUNNER_TEMP/snapshots"
+            echo "TUF_SNAPSHOT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
   # The timestamp of the TUF repository, signed with the online key (see the header). It
-  # does nothing without `tuf/v1`. With it, a missing secret, a repository the client would
-  # refuse or a snapshot that has expired fails the job: the run is red, and `build` and
-  # `deploy` do not run.
+  # does nothing without `tuf/v1`. It runs only when `snapshot` succeeded (the implicit
+  # `success()`; both have the same gates). With `tuf/v1`, a missing secret, a repository
+  # the client would refuse or a snapshot that has expired fails the job: the run is red, and
+  # `build` and `deploy` do not run.
   timestamp:
+    needs: snapshot
     if: >-
       github.ref == 'refs/heads/main' &&
       github.repository == 'arynyklas/OpenNCALayer' && (
@@ -106,11 +206,27 @@ jobs:
         if: steps.tree.outputs.exists == 'true'
         run: rustup toolchain install
       # No build cache in this job: whatever it restored would be compiled code that runs
-      # next to the key. Compiled here, before the secret is in any environment: the build
-      # scripts and dependencies never run with the key.
+      # next to the key. Compiled here, from the reviewed Cargo.lock, before the secret is in
+      # any environment: the build scripts do not run in the step with the key. This narrows
+      # the exposure, it is no boundary: the dependencies are linked into the binary that
+      # holds the key, and what runs earlier as the same user could still watch later steps.
       - name: Build xtask
         if: steps.tree.outputs.exists == 'true'
-        run: cargo build -p xtask
+        run: cargo build --locked -p xtask
+      # The copy that is signed, before the key is in any environment: `tuf/v1` and, once
+      # the snapshot is online, the snapshots the `snapshot` job signed (only
+      # `<N>.snapshot.json`, one or two, none that is there already).
+      - name: Copy the repository
+        if: steps.tree.outputs.exists == 'true'
+        env:
+          MODE: ${{ needs.snapshot.outputs.mode }}
+          SNAPSHOTS: ${{ needs.snapshot.outputs.files }}
+        run: |
+          copy="$RUNNER_TEMP/tuf"
+          cp -R tuf/v1 "$copy"
+          if [ "$MODE" = online ]; then
+            bash .github/scripts/snapshot-files.sh unpack "$copy/metadata"
+          fi
       # The last step. `xtask tuf timestamp` verifies the repository from the committed
       # anchor first, with the client's code (the chain of roots, signatures, versions,
       # hashes of every file, the targets against `updates/v1`, a day of validity left),
@@ -127,7 +243,6 @@ jobs:
           fi
           echo "::add-mask::$TUF_TIMESTAMP_KEY"
           copy="$RUNNER_TEMP/tuf"
-          cp -R tuf/v1 "$copy"
           target/debug/xtask tuf timestamp --out "$copy"
           {
             echo "file<<TUF_TIMESTAMP_EOF"
@@ -149,11 +264,12 @@ jobs:
         run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref "$DEFAULT_BRANCH"
 
   build:
-    needs: timestamp
-    # Not when the timestamp job failed: a site without `metadata/timestamp.json` would make
-    # every client's check fail (a 404 is an error), while the site now served still has one.
-    # It runs when that job was skipped (a fork, an event or a ref it does not sign on).
-    if: ${{ !cancelled() && needs.timestamp.result != 'failure' && github.event_name != 'release' }}
+    needs: [snapshot, timestamp]
+    # Only when the snapshot and the timestamp jobs succeeded or were skipped (a fork, an
+    # event or a ref they do not sign on): a failed, cancelled or timed-out one leaves the
+    # site without its snapshot or `metadata/timestamp.json`, which would make every client's
+    # check fail (a 404 is an error), while the site now served still has them.
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.snapshot.result) && contains(fromJSON('["success","skipped"]'), needs.timestamp.result) && github.event_name != 'release' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -327,13 +443,17 @@ jobs:
           fi
           cargo xtask ext updates "${args[@]}"
           cat _site/firefox/updates.json
-      # The TUF repository, from a copy: the committed tree gets no timestamp. The copy with
-      # the signed timestamp of the `timestamp` job is verified as the client would read it,
-      # and the run is red when targets or snapshot are about to expire (the owner's monthly
-      # `cargo xtask tuf update --refresh`).
+      # The TUF repository, from a copy: the committed tree gets no timestamp and no online
+      # snapshot. The copy with the snapshots of the `snapshot` job (once the snapshot is
+      # online: the new one and the published one it extends, for a client whose cached
+      # timestamp still names that) and the signed timestamp of the `timestamp` job is verified
+      # as the client would read it, and the run is red when targets or an offline snapshot
+      # are about to expire (the owner's monthly `cargo xtask tuf update --refresh`).
       - name: Publish the TUF repository
         id: tuf
         env:
+          MODE: ${{ needs.snapshot.outputs.mode }}
+          SNAPSHOTS: ${{ needs.snapshot.outputs.files }}
           TIMESTAMP: ${{ needs.timestamp.outputs.file }}
         run: |
           if [ ! -d tuf/v1 ]; then
@@ -343,6 +463,9 @@ jobs:
           test ! -e _site/tuf
           mkdir -p _site/tuf
           cp -R tuf/v1 _site/tuf/v1
+          if [ "$MODE" = online ]; then
+            bash .github/scripts/snapshot-files.sh unpack _site/tuf/v1/metadata
+          fi
           if [ -z "$TIMESTAMP" ]; then
             if [ "$GITHUB_REPOSITORY" = arynyklas/OpenNCALayer ]; then
               echo "::error::tuf/v1 exists and no timestamp was signed (the timestamp job did not run on this event or ref): nothing is published without it"
@@ -368,7 +491,9 @@ jobs:
   # write permission, dependencies pinned by hash.
   oracle:
     needs: build
-    if: needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed'
+    # `!cancelled()` replaces the implicit `success()`, and the result of `build` is named:
+    # the condition says in full what this job runs after.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.publish == 'true' && needs.build.outputs.tuf == 'signed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -398,7 +523,8 @@ jobs:
 
   deploy:
     needs: [build, oracle]
-    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.oracle.result) && needs.build.outputs.publish == 'true' }}
+    # A skipped `oracle` is accepted only when there was no signed repository for it to check.
+    if: ${{ !cancelled() && needs.build.result == 'success' && needs.build.outputs.publish == 'true' && (needs.oracle.result == 'success' || (needs.oracle.result == 'skipped' && needs.build.outputs.tuf != 'signed')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -418,7 +544,7 @@ jobs:
   # failure of a scheduled run).
   verify:
     needs: [build, deploy]
-    if: needs.build.outputs.tuf == 'signed'
+    if: ${{ !cancelled() && needs.deploy.result == 'success' && needs.build.outputs.tuf == 'signed' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
