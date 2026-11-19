@@ -227,7 +227,7 @@ fn settings_survive_update_removed_with_plugin() {
     let package = Package::read(&bytes).unwrap();
     let id = package.manifest.id.clone();
     store
-        .install(&package, &bytes, oncl_plugin::Source::Catalog)
+        .install(&package, &bytes, oncl_plugin::Source::Catalog, None)
         .unwrap();
     let path = store.settings_path(&id);
     assert_eq!(
@@ -251,6 +251,7 @@ fn settings_survive_update_removed_with_plugin() {
             &Package::read(&newer).unwrap(),
             &newer,
             oncl_plugin::Source::Catalog,
+            None,
         )
         .unwrap();
     assert!(path.is_file(), "an update keeps the settings");

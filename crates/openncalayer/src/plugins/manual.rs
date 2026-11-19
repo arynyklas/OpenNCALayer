@@ -313,7 +313,7 @@ mod tests {
 
     fn install(store: &Store, bytes: &[u8]) -> Package {
         let package = Package::read(bytes).unwrap();
-        store.install(&package, bytes, Source::Local).unwrap();
+        store.install(&package, bytes, Source::Local, None).unwrap();
         package
     }
 

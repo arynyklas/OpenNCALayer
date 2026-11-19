@@ -25,7 +25,9 @@ fn install_then_load_package() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let (package, bytes) = example();
-    store.install(&package, &bytes, Source::Catalog).unwrap();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
 
     let state = store.state();
     let installed = &state.plugins[ID];
@@ -48,7 +50,7 @@ fn install_then_load_package() {
     ));
     // Bytes that are not the package's file are refused.
     let err = store
-        .install(&package, &bytes[..bytes.len() - 1], Source::Local)
+        .install(&package, &bytes[..bytes.len() - 1], Source::Local, None)
         .unwrap_err();
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
@@ -58,7 +60,9 @@ fn tampered_package_is_not_loaded() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let (package, bytes) = example();
-    store.install(&package, &bytes, Source::Local).unwrap();
+    store
+        .install(&package, &bytes, Source::Local, None)
+        .unwrap();
     let file = package_file(dir.path(), "0.1.0");
     let mut changed = std::fs::read(&file).unwrap();
     let last = changed.len() - 1;
@@ -94,13 +98,17 @@ fn remove_deletes_package() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let (package, bytes) = example();
-    store.install(&package, &bytes, Source::Catalog).unwrap();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
     store.set_enabled(ID, false).unwrap();
     store.set_withdrawn(ID, true).unwrap();
     let installed = store.state().plugins[ID].clone();
     assert!(!installed.enabled && installed.withdrawn);
     // Installed again: still off, no longer withdrawn.
-    store.install(&package, &bytes, Source::Catalog).unwrap();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
     let installed = store.state().plugins[ID].clone();
     assert!(!installed.enabled && !installed.withdrawn);
 
@@ -124,11 +132,18 @@ fn an_update_replaces_the_old_package_file() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
     let (package, bytes) = example();
-    store.install(&package, &bytes, Source::Catalog).unwrap();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
     let newer =
         example_package_with(|m| m.replacen("version = \"0.1.0\"", "version = \"0.2.0\"", 1));
     store
-        .install(&Package::read(&newer).unwrap(), &newer, Source::Catalog)
+        .install(
+            &Package::read(&newer).unwrap(),
+            &newer,
+            Source::Catalog,
+            None,
+        )
         .unwrap();
     assert_eq!(store.state().plugins[ID].version, Version::new(0, 2, 0));
     assert!(!package_file(dir.path(), "0.1.0").exists());
@@ -320,4 +335,211 @@ fn a_kept_index_is_still_held_to_its_channel_and_last_seq() {
             .kind(),
         std::io::ErrorKind::InvalidData
     );
+}
+
+fn ecc() -> oncl_update::tuf::PublisherName {
+    oncl_update::tuf::PublisherName::parse("ecc").unwrap()
+}
+
+fn role(name: &str) -> oncl_update::tuf::RoleName {
+    oncl_update::tuf::RoleName::parse(name).unwrap()
+}
+
+#[test]
+fn installed_without_publisher_reads_as_none() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    std::fs::write(
+        dir.path().join("plugins/state.json"),
+        format!(
+            r#"{{"install_id": "000102030405060708090a0b0c0d0e0f",
+                "plugins": {{"{ID}": {{"version": "0.1.0", "sha256": "{}",
+                "source": "catalog", "enabled": true}}}}}}"#,
+            "00".repeat(32)
+        ),
+    )
+    .unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    assert_eq!(store.state().plugins[ID].publisher, None);
+}
+
+#[test]
+fn publisher_round_trips() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, Some(&ecc()))
+        .unwrap();
+    assert_eq!(store.state().plugins[ID].publisher, Some(ecc()));
+    let text = std::fs::read_to_string(dir.path().join("plugins/state.json")).unwrap();
+    assert!(text.contains("\"publisher\": \"ecc\""), "{text}");
+    drop(store);
+    let store = Store::open(dir.path()).unwrap();
+    assert_eq!(store.state().plugins[ID].publisher, Some(ecc()));
+    store.set_publisher(ID, None).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("plugins/state.json")).unwrap();
+    assert!(!text.contains("publisher"), "{text}");
+    store.set_publisher(ID, Some(ecc())).unwrap();
+    assert_eq!(store.state().plugins[ID].publisher, Some(ecc()));
+    // Installed again without a publisher (a file the user chose): none recorded.
+    store
+        .install(&package, &bytes, Source::Local, None)
+        .unwrap();
+    assert_eq!(store.state().plugins[ID].publisher, None);
+    assert_eq!(
+        store
+            .set_publisher("kz.ecc.absent", Some(ecc()))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::NotFound
+    );
+}
+
+#[test]
+fn state_of_0_1_1_reads_with_empty_declined() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    std::fs::write(
+        dir.path().join("plugins/state.json"),
+        r#"{"install_id": "000102030405060708090a0b0c0d0e0f", "last_seq": {"beta": 3},
+            "plugins": {}, "bad": {}}"#,
+    )
+    .unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    assert!(store.state().declined_replacements.is_empty());
+    store
+        .set_declined_replacement("a.port", Some("kz.ecc.market"))
+        .unwrap();
+    assert_eq!(
+        store.state().declined_replacements["a.port"],
+        "kz.ecc.market"
+    );
+    store.set_declined_replacement("a.port", None).unwrap();
+    let text = std::fs::read_to_string(dir.path().join("plugins/state.json")).unwrap();
+    assert!(!text.contains("declined_replacements"), "{text}");
+}
+
+/// The state as 0.1.1 reads it: its structs, frozen, without the fields of later versions.
+mod v0_1_1 {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    #[derive(serde::Deserialize)]
+    pub struct StoreState {
+        pub install_id: String,
+        #[serde(default)]
+        pub last_seq: BTreeMap<String, u64>,
+        #[serde(default)]
+        pub plugins: BTreeMap<String, Installed>,
+        #[serde(default)]
+        pub bad: BTreeMap<String, BTreeSet<String>>,
+    }
+
+    #[derive(serde::Deserialize)]
+    pub struct Installed {
+        pub version: String,
+        pub sha256: String,
+        pub source: String,
+        pub enabled: bool,
+        #[serde(default)]
+        pub withdrawn: bool,
+    }
+}
+
+#[test]
+fn a_state_with_publishers_still_reads_as_0_1_1_reads_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, Some(&ecc()))
+        .unwrap();
+    store
+        .set_declined_replacement(ID, Some("kz.ecc.market"))
+        .unwrap();
+    let text = std::fs::read(dir.path().join("plugins/state.json")).unwrap();
+    let old: v0_1_1::StoreState = serde_json::from_slice(&text).unwrap();
+    assert_eq!(old.install_id.len(), 32);
+    assert!(old.last_seq.is_empty() && old.bad.is_empty());
+    let installed = &old.plugins[ID];
+    assert_eq!(installed.version, "0.1.0");
+    assert_eq!(installed.sha256.len(), 64);
+    assert_eq!(installed.source, "catalog");
+    assert!(installed.enabled && !installed.withdrawn);
+}
+
+#[test]
+fn kept_role_and_publishers_round_trip() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let until = OffsetDateTime::now_utc() + Duration::days(1);
+    assert!(store.load_publishers(|_| Ok(until)).is_none());
+    assert!(store.load_roles(|_, _| Ok::<_, String>(())).is_empty());
+    store.save_publishers(b"{\"publishers\":[]}").unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("plugins/catalog/publishers.json")).unwrap(),
+        b"{\"publishers\":[]}"
+    );
+    assert_eq!(
+        store.load_publishers(|bytes| {
+            assert_eq!(bytes, b"{\"publishers\":[]}");
+            Ok(until)
+        }),
+        Some((b"{\"publishers\":[]}".to_vec(), until))
+    );
+    // Bytes the TUF client no longer vouches for are not used.
+    assert!(store.load_publishers(|_| Err("no".to_owned())).is_none());
+    store.save_role(&role("pub-other"), b"other").unwrap();
+    store.save_role(&role("pub-ecc"), b"ecc").unwrap();
+    assert_eq!(
+        std::fs::read(dir.path().join("plugins/catalog/roles/pub-ecc.json")).unwrap(),
+        b"ecc"
+    );
+    // Not a role's file: skipped.
+    std::fs::write(dir.path().join("plugins/catalog/roles/targets.json"), b"x").unwrap();
+    std::fs::write(dir.path().join("plugins/catalog/roles/pub-ecc.tmp"), b"x").unwrap();
+    let roles = store.load_roles(|role, bytes| {
+        if bytes == b"ecc" {
+            Ok((role.to_string(), bytes.to_vec()))
+        } else {
+            Err("no longer holds".to_owned())
+        }
+    });
+    assert_eq!(
+        roles,
+        vec![
+            (role("pub-ecc"), Ok(("pub-ecc".to_owned(), b"ecc".to_vec()))),
+            (role("pub-other"), Err("no longer holds".to_owned())),
+        ]
+    );
+    // Saved again: replaced.
+    store.save_role(&role("pub-ecc"), b"ecc 2").unwrap();
+    assert_eq!(
+        store.load_roles(|_, bytes| Ok::<_, String>(bytes.to_vec()))[0],
+        (role("pub-ecc"), Ok(b"ecc 2".to_vec()))
+    );
+}
+
+#[test]
+fn prune_roles_removes_only_undelegated() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    // Nothing kept yet: nothing to do.
+    store
+        .prune_roles(&std::collections::BTreeSet::new())
+        .unwrap();
+    store.save_role(&role("pub-ecc"), b"ecc").unwrap();
+    store.save_role(&role("pub-gone"), b"gone").unwrap();
+    let roles = dir.path().join("plugins/catalog/roles");
+    std::fs::write(roles.join("targets.json"), b"x").unwrap();
+    store.save_publishers(b"{}").unwrap();
+    store
+        .prune_roles(&std::collections::BTreeSet::from([role("pub-ecc")]))
+        .unwrap();
+    let left = store.load_roles(|_, _| Ok::<_, String>(()));
+    assert_eq!(left, vec![(role("pub-ecc"), Ok(()))]);
+    assert!(!roles.join("pub-gone.json").exists());
+    assert!(!roles.join("targets.json").exists());
+    // `publishers.json` is not a role's file.
+    assert!(dir.path().join("plugins/catalog/publishers.json").is_file());
 }

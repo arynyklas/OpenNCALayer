@@ -87,7 +87,7 @@ fn install_example(data: &Path) {
     let bytes = oncl_testkit::plugin::example_package();
     let store = Store::open(data).unwrap();
     store
-        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local)
+        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local, None)
         .unwrap();
 }
 
@@ -276,7 +276,7 @@ fn e2e_extra_ca_reaches_plugin_http() {
         let dir = tempfile::tempdir().unwrap();
         Store::open(dir.path())
             .unwrap()
-            .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local)
+            .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local, None)
             .unwrap();
         let env: &[(&str, &Path)] = if extra {
             &[("ONCL_E2E_EXTRA_CA", &ca_file)]

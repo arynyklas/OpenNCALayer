@@ -577,7 +577,7 @@ pub fn e2e(command: E2eCommand) -> ExitCode {
         let store = oncl_plugin::Store::open(&paths.data).map_err(|e| e.to_string())?;
         let manifest = &package.manifest;
         store
-            .install(&package, &bytes, oncl_plugin::Source::Local)
+            .install(&package, &bytes, oncl_plugin::Source::Local, None)
             .and_then(|()| store.set_enabled(&manifest.id, true))
             .map_err(|e| e.to_string())?;
         Ok(format!("{} {}", manifest.id, manifest.version))

@@ -76,7 +76,7 @@ fn install_port(data: &Path, short: &str) {
     let bytes = oncl_plugin::archive(&manifest, &wasm).unwrap();
     Store::open(data)
         .unwrap()
-        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local)
+        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local, None)
         .unwrap();
 }
 

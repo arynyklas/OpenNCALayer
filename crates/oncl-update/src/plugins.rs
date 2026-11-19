@@ -142,7 +142,8 @@ pub(crate) fn offerable(
 /// While its publisher is retired or unavailable it is kept as it is, unless its version is
 /// revoked ([`Catalog::is_revoked`]: by the owner in `publishers.json`, or by a verified
 /// role of the publisher): then it is [`PluginChoice::Withdrawn`]. A revoked version is
-/// revoked even if its publisher no longer lists it.
+/// revoked even if its publisher no longer lists it. The publisher is found by the prefixes
+/// of `publishers.json` ([`choose_installed`] takes the one recorded).
 pub fn choose_plugin<'a>(
     catalog: &'a Catalog,
     id: &str,
@@ -151,19 +152,34 @@ pub fn choose_plugin<'a>(
     install_id: &[u8; 16],
     bad: &BTreeSet<Version>,
 ) -> PluginChoice<'a> {
-    if let Some(publisher) = catalog.publisher_of(id) {
-        match catalog.publisher_state(publisher) {
+    choose_installed(catalog, id, None, current, core, install_id, bad)
+}
+
+/// [`choose_plugin`] for an installed plugin whose publisher was recorded when it was
+/// installed (`recorded`): that publisher, if any, is the plugin's whatever the prefixes
+/// say, and one `publishers.json` does not name is unavailable (kept unless its release in
+/// the catalog is revoked).
+pub fn choose_installed<'a>(
+    catalog: &'a Catalog,
+    id: &str,
+    recorded: Option<&'a PublisherName>,
+    current: &Version,
+    core: &Version,
+    install_id: &[u8; 16],
+    bad: &BTreeSet<Version>,
+) -> PluginChoice<'a> {
+    let found = catalog.publisher_state_of(id, recorded);
+    let revoked = catalog.is_installed_revoked(id, current, found.map(|(publisher, _)| publisher));
+    if let Some((publisher, state)) = found {
+        match state {
             PublisherState::Active => {}
-            PublisherState::Retired | PublisherState::Unavailable
-                if catalog.is_revoked(id, current) =>
-            {
+            PublisherState::Retired | PublisherState::Unavailable if revoked => {
                 return PluginChoice::Withdrawn;
             }
             PublisherState::Retired | PublisherState::Unavailable => return PluginChoice::Keep,
             PublisherState::Revoked => return PluginChoice::PublisherRevoked(publisher),
         }
     }
-    let revoked = catalog.is_revoked(id, current);
     let candidate = catalog
         .releases()
         .filter(|r| {

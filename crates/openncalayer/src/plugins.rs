@@ -1176,7 +1176,10 @@ impl PluginService {
             self.failed(localized(&release.name), e.to_string());
             return Err(e.to_string());
         }
-        if let Err(e) = self.store.install(&package, bytes, Source::Catalog) {
+        if let Err(e) =
+            self.store
+                .install(&package, bytes, Source::Catalog, release.publisher.as_ref())
+        {
             warn!(plugin = %release.id, error = %e, "cannot record the plugin's update");
             if enabled {
                 // The version recorded runs again.
@@ -1282,7 +1285,7 @@ impl PluginService {
             }
             return self.failed(name, e.to_string());
         }
-        if let Err(e) = self.store.install(&package, bytes, source) {
+        if let Err(e) = self.store.install(&package, bytes, source, None) {
             warn!(plugin = %id, error = %e, "cannot record the plugin");
             self.cfg.modules.unload(&id);
             // The version installed before, if any, runs again.

@@ -82,9 +82,10 @@ pub struct Catalog {
     states: BTreeMap<PublisherName, PublisherState>,
     /// The releases of the active publishers offered on the index's channel.
     releases: Vec<PluginRelease>,
-    /// The versions (build metadata cleared) the publishers' verified roles revoke, on
-    /// every channel, whatever their publisher's state: read by the target path alone.
-    self_revoked: BTreeMap<String, BTreeSet<Version>>,
+    /// The versions (build metadata cleared) the publishers' verified roles revoke, by
+    /// publisher and id, on every channel, whatever their publisher's state: read by the
+    /// target path alone.
+    self_revoked: BTreeMap<PublisherName, BTreeMap<String, BTreeSet<Version>>>,
     rejected: Vec<EntryRejected>,
 }
 
@@ -99,6 +100,20 @@ pub struct CatalogBuilder<'r> {
     builtin_modules: BTreeSet<String>,
     /// The delegated roles, in order, each name once: its targets if it was verified.
     roles: Vec<(PublisherName, Option<&'r BTreeMap<TargetPath, Target>>)>,
+    capabilities: Option<CapabilitiesReader<'r>>,
+}
+
+/// How a publisher's declared capabilities are read ([`CatalogBuilder::capabilities`]).
+type ReadCapabilities<'r> = dyn Fn(&DeclaredCapabilities) -> Result<(), String> + 'r;
+
+/// What reads a publisher's declared capabilities by the rules of a plugin manifest
+/// ([`CatalogBuilder::capabilities`]).
+struct CapabilitiesReader<'r>(Box<ReadCapabilities<'r>>);
+
+impl std::fmt::Debug for CapabilitiesReader<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CapabilitiesReader")
+    }
 }
 
 impl Catalog {
@@ -132,6 +147,7 @@ impl Catalog {
                 .cloned(),
             builtin_modules: BTreeSet::new(),
             roles: Vec::new(),
+            capabilities: None,
         }
     }
 
@@ -175,28 +191,70 @@ impl Catalog {
         Some(self.policy.as_ref()?.covering(id)?.name())
     }
 
+    /// The publisher of the installed plugin `id` and its state: `recorded`, the publisher
+    /// recorded when it was installed, if there is one, whatever the prefixes say; else
+    /// [`Catalog::publisher_of`]. `None` for a port of the owner's index, or a plugin no
+    /// publisher's prefix covers. A recorded publisher `publishers.json` does not name is
+    /// unavailable, not revoked.
+    pub fn publisher_state_of<'a>(
+        &'a self,
+        id: &str,
+        recorded: Option<&'a PublisherName>,
+    ) -> Option<(&'a PublisherName, PublisherState)> {
+        let publisher = recorded.or_else(|| self.publisher_of(id))?;
+        Some((publisher, self.publisher_state(publisher)))
+    }
+
     /// Whether `version` of `id` is revoked: by its release in the catalog, by the owner in
     /// `publishers.json`, or by a verified role of its publisher on any channel (build
     /// metadata aside, listed in the catalog or not). The publisher's revocations hold while
-    /// it is active, retired or unavailable; they need `publishers.json`.
+    /// it is active, retired or unavailable; they need `publishers.json`. The publisher is
+    /// found by the prefixes of `publishers.json` ([`Catalog::is_installed_revoked`] takes
+    /// the one recorded).
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
+        self.is_revoked_for(id, version, self.publisher_of(id))
+    }
+
+    /// [`Catalog::is_revoked`] of the installed `id`, of the publisher `recorded` when it
+    /// was installed, if there is one ([`Catalog::publisher_state_of`]).
+    pub fn is_installed_revoked(
+        &self,
+        id: &str,
+        version: &Version,
+        recorded: Option<&PublisherName>,
+    ) -> bool {
+        self.is_revoked_for(id, version, recorded.or_else(|| self.publisher_of(id)))
+    }
+
+    /// [`Catalog::is_revoked`] for a plugin of `publisher`: its owner's revocations and its
+    /// own, unless it is revoked.
+    fn is_revoked_for(
+        &self,
+        id: &str,
+        version: &Version,
+        publisher: Option<&PublisherName>,
+    ) -> bool {
         self.releases()
             .any(|r| r.id == id && r.version == *version && r.revoked)
-            || self.publisher_of(id).is_some_and(|publisher| {
+            || publisher.is_some_and(|publisher| {
                 self.publisher_state(publisher) != PublisherState::Revoked
                     && (self
                         .policy
                         .as_ref()
                         .and_then(|policy| policy.publisher(publisher))
                         .and_then(Publisher::rules)
-                        .is_some_and(|active| active.revokes(id, version))
-                        || self.self_revoked.get(id).is_some_and(|versions| {
-                            if version.build.is_empty() {
-                                versions.contains(version)
-                            } else {
-                                versions.contains(&without_build(version))
-                            }
-                        }))
+                        .is_some_and(|rules| rules.revokes(id, version))
+                        || self
+                            .self_revoked
+                            .get(publisher)
+                            .and_then(|ids| ids.get(id))
+                            .is_some_and(|versions| {
+                                if version.build.is_empty() {
+                                    versions.contains(version)
+                                } else {
+                                    versions.contains(&without_build(version))
+                                }
+                            }))
             })
     }
 
@@ -242,6 +300,17 @@ impl<'r> CatalogBuilder<'r> {
         self
     }
 
+    /// How a publisher's declared capabilities are read (for the core, as a manifest's
+    /// `[capabilities]` table): a release whose capabilities `read` refuses is left out
+    /// ([`EntryRejection::CapabilitiesUnreadable`]). Without one they are taken as signed.
+    pub fn capabilities(
+        mut self,
+        read: impl Fn(&DeclaredCapabilities) -> Result<(), String> + 'r,
+    ) -> Self {
+        self.capabilities = Some(CapabilitiesReader(Box::new(read)));
+        self
+    }
+
     /// The verified role `role` and its targets.
     pub fn role(mut self, role: &RoleName, targets: &'r BTreeMap<TargetPath, Target>) -> Self {
         self.add(role, Some(targets));
@@ -284,6 +353,7 @@ impl<'r> CatalogBuilder<'r> {
             owner_plugin,
             builtin_modules,
             roles,
+            capabilities,
         } = self;
         let policy = policy.and_then(|policy| {
             if let Some(path) = owner_plugin {
@@ -302,7 +372,8 @@ impl<'r> CatalogBuilder<'r> {
         };
         let mut states = BTreeMap::new();
         let mut releases = Vec::new();
-        let mut self_revoked = BTreeMap::<String, BTreeSet<Version>>::new();
+        let mut self_revoked =
+            BTreeMap::<PublisherName, BTreeMap<String, BTreeSet<Version>>>::new();
         let mut rejected = Vec::new();
         let owner = Owner::of(&index);
         for publisher in policy.publishers() {
@@ -333,13 +404,26 @@ impl<'r> CatalogBuilder<'r> {
             };
             states.insert(name.clone(), state);
             for (id, version) in self_revocations(publisher, targets) {
-                self_revoked.entry(id).or_default().insert(version);
+                self_revoked
+                    .entry(name.clone())
+                    .or_default()
+                    .entry(id)
+                    .or_default()
+                    .insert(version);
             }
             if state != PublisherState::Active {
                 continue;
             }
             for (path, target) in targets {
-                match admit(publisher, rules, &owner, path, target) {
+                let admitted = admit(publisher, rules, &owner, path, target).and_then(|release| {
+                    match (&capabilities, &release.release().capabilities) {
+                        (Some(CapabilitiesReader(read)), Some(declared)) => read(declared)
+                            .map_err(EntryRejection::CapabilitiesUnreadable)
+                            .map(|()| release),
+                        _ => Ok(release),
+                    }
+                });
+                match admitted {
                     Ok(release) if release.offered_on(index.channel) => {
                         releases.push(release.into_release());
                     }

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::index::{Channel, Index, Sha256};
-use crate::plugins::{PluginChoice, choose_plugin, offer};
+use crate::plugins::{PluginChoice, choose_installed, choose_plugin, offer};
 use crate::tuf::{Digest, PublisherName, RoleName, Target, TargetPath};
 
 const INSTALL: [u8; 16] = [7; 16];
@@ -1528,4 +1528,164 @@ fn the_mirror_url_has_the_package_hash_in_lowercase_hex_only() {
         package(url.replace(&lower, &upper)),
         Err(EntryRejection::NotMirrored)
     ));
+}
+
+fn choose_recorded<'a>(
+    catalog: &'a Catalog,
+    id: &str,
+    recorded: Option<&'a PublisherName>,
+    current: &str,
+) -> PluginChoice<'a> {
+    choose_installed(
+        catalog,
+        id,
+        recorded,
+        &v(current),
+        &core(),
+        &INSTALL,
+        &BTreeSet::new(),
+    )
+}
+
+#[test]
+fn capabilities_the_reader_refuses_leave_the_entry_out() {
+    let mut odd = entry(MARKET, "1.2.0");
+    odd["capabilities"] = json!({"keys": true, "unknown": true});
+    let targets = role(&[entry(MARKET, "1.1.0"), odd]);
+    let read = |declared: &DeclaredCapabilities| {
+        if declared.as_object().contains_key("unknown") {
+            Err("unknown member".to_owned())
+        } else {
+            Ok(())
+        }
+    };
+    let catalog = Catalog::builder(
+        index(vec![]),
+        &BTreeMap::new(),
+        Ok(policy(vec![ecc_entry()])),
+    )
+    .role(&role_name("ecc"), &targets)
+    .capabilities(read)
+    .build();
+    let versions: Vec<_> = catalog.releases().map(|r| r.version.clone()).collect();
+    assert_eq!(versions, vec![v("1.1.0")]);
+    assert!(matches!(
+        catalog.rejected(),
+        [EntryRejected { path, reason: EntryRejection::CapabilitiesUnreadable(why) }]
+            if why == "unknown member" && path.as_str().ends_with("/1.2.0.onclp")
+    ));
+    // Without a reader the capabilities are taken as signed.
+    let catalog = build(index(vec![]), vec![ecc_entry()], &[("ecc", Some(&targets))]);
+    assert_eq!(catalog.releases().count(), 2);
+    assert!(catalog.rejected().is_empty());
+}
+
+#[test]
+fn a_recorded_publisher_publishers_json_does_not_name_is_unavailable() {
+    // `publishers.json` names `ecc` only; the plugin was installed from `gone`.
+    let targets = role(&[entry(MARKET, "1.2.0")]);
+    let catalog = build(index(vec![]), vec![ecc_entry()], &[("ecc", Some(&targets))]);
+    let gone = PublisherName::parse("gone").unwrap();
+    assert_eq!(
+        catalog.publisher_state_of("kz.gone.tool", Some(&gone)),
+        Some((&gone, PublisherState::Unavailable))
+    );
+    assert!(matches!(
+        choose_recorded(&catalog, "kz.gone.tool", Some(&gone), "1.0.0"),
+        PluginChoice::Keep
+    ));
+    // Not even under `ecc`'s prefix, where `ecc` offers a newer version.
+    assert!(matches!(
+        choose_recorded(&catalog, MARKET, Some(&gone), "1.0.0"),
+        PluginChoice::Keep
+    ));
+    // Without the name recorded nothing is known of it: no prefix covers it, it is kept.
+    assert_eq!(catalog.publisher_state_of("kz.gone.tool", None), None);
+    assert!(matches!(
+        choose_recorded(&catalog, "kz.gone.tool", None, "1.0.0"),
+        PluginChoice::Keep
+    ));
+    // Without `publishers.json` a recorded publisher is unavailable too.
+    let owner = Catalog::owner(index(vec![]));
+    assert_eq!(
+        owner.publisher_state_of(MARKET, Some(&ecc())),
+        Some((&ecc(), PublisherState::Unavailable))
+    );
+    assert!(matches!(
+        choose_recorded(&owner, MARKET, Some(&ecc()), "1.0.0"),
+        PluginChoice::Keep
+    ));
+}
+
+#[test]
+fn a_recorded_publisher_wins_over_the_prefix() {
+    let old = json!({
+        "name": "old", "state": "revoked", "display": display(),
+        "id_prefix": "kz.old.", "revoked": "2027-03-01"
+    });
+    let mut revoked = entry(MARKET, "1.1.0");
+    revoked["revoked"] = json!(true);
+    let targets = role(&[revoked, entry(MARKET, "1.2.0")]);
+    let catalog = build(
+        index(vec![]),
+        vec![ecc_entry(), old],
+        &[("ecc", Some(&targets))],
+    );
+    // By its prefix `kz.ecc.market` is `ecc`'s, active: updated.
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.0.0"),
+        PluginChoice::Update(r) if r.version == v("1.2.0")
+    ));
+    assert_eq!(
+        catalog.publisher_state_of(MARKET, None),
+        Some((&ecc(), PublisherState::Active))
+    );
+    // Recorded as `old`'s, revoked: turned off, whatever the prefix says.
+    let old = PublisherName::parse("old").unwrap();
+    assert_eq!(
+        catalog.publisher_state_of(MARKET, Some(&old)),
+        Some((&old, PublisherState::Revoked))
+    );
+    assert!(matches!(
+        choose_recorded(&catalog, MARKET, Some(&old), "1.0.0"),
+        PluginChoice::PublisherRevoked(name) if *name == old
+    ));
+    // A publisher's own revocations are its own: `ecc` revoked 1.1.0 (and so 1.1.0 with
+    // any build metadata), which does not revoke a plugin recorded as another's.
+    assert!(catalog.is_revoked(MARKET, &v("1.1.0+build")));
+    assert!(catalog.is_installed_revoked(MARKET, &v("1.1.0+build"), None));
+    assert!(catalog.is_installed_revoked(MARKET, &v("1.1.0+build"), Some(&ecc())));
+    let unnamed = PublisherName::parse("unnamed").unwrap();
+    assert!(!catalog.is_installed_revoked(MARKET, &v("1.1.0+build"), Some(&unnamed)));
+}
+
+#[test]
+fn a_recorded_retired_publisher_keeps_its_plugins_unless_revoked() {
+    let mut retired = ecc_entry();
+    retired["state"] = json!("retired");
+    retired["revoked_versions"] = json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    let mut own = entry(MARKET, "1.3.0");
+    own["revoked"] = json!(true);
+    let targets = role(&[entry(MARKET, "1.2.0"), own]);
+    let catalog = build(index(vec![]), vec![retired], &[("ecc", Some(&targets))]);
+    let ecc = ecc();
+    assert_eq!(
+        catalog.publisher_state_of(MARKET, Some(&ecc)),
+        Some((&ecc, PublisherState::Retired))
+    );
+    // Nothing new is offered, an installed version stays.
+    assert!(matches!(
+        choose_recorded(&catalog, MARKET, Some(&ecc), "1.0.0"),
+        PluginChoice::Keep
+    ));
+    // A version the owner revoked, or the publisher in its role, is withdrawn.
+    for revoked in ["1.1.0", "1.3.0", "1.3.0+other"] {
+        assert!(
+            matches!(
+                choose_recorded(&catalog, MARKET, Some(&ecc), revoked),
+                PluginChoice::Withdrawn
+            ),
+            "{revoked}"
+        );
+    }
 }
