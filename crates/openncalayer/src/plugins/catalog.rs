@@ -28,6 +28,10 @@ use crate::update::CHECK_EVERY;
 pub const PUBLISHER_CHECK_EVERY: (Duration, Duration) =
     (Duration::from_secs(3600), Duration::from_secs(3 * 3600));
 
+/// The most delegated roles read from the kept files: as many as the client follows
+/// ([`oncl_update::tuf::Limits::max_delegations`]).
+const MAX_ROLES: usize = 32;
+
 /// What an application of the catalog may do to the installed plugins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Apply {
@@ -188,17 +192,6 @@ pub fn kept(
         .map(|(bytes, _)| bytes);
     let roles = match top_level.targets.delegations() {
         Ok(delegations) => {
-            let mut kept: BTreeMap<RoleName, VerifiedRole> = store
-                .load_roles(|role, bytes| repository.verify_kept_role(role, bytes, now))
-                .into_iter()
-                .filter_map(|(role, verified)| match verified {
-                    Ok(verified) => Some((role, verified)),
-                    Err(e) => {
-                        info!(%role, error = %e, "a kept publisher's role does not hold; the publisher is unavailable");
-                        None
-                    }
-                })
-                .collect();
             let names = delegations
                 .iter()
                 .flat_map(|delegations| delegations.roles())
@@ -206,12 +199,23 @@ pub fn kept(
                     Ok(role) => role.name().clone(),
                     Err(refused) => refused.name.clone(),
                 });
+            // Only the roles delegated now, each once (and at most as many as the client
+            // follows): no other kept file is read.
             let mut listed: Vec<(RoleName, Option<VerifiedRole>)> = Vec::new();
-            for name in names {
-                if listed.iter().all(|(listed, _)| *listed != name) {
-                    let verified = kept.remove(&name);
-                    listed.push((name, verified));
+            for name in names.take(MAX_ROLES) {
+                if listed.iter().any(|(listed, _)| *listed == name) {
+                    continue;
                 }
+                let verified = store
+                    .load_role(&name, |bytes| repository.verify_kept_role(&name, bytes, now))
+                    .and_then(|verified| match verified {
+                        Ok(verified) => Some(verified),
+                        Err(e) => {
+                            info!(role = %name, error = %e, "a kept publisher's role does not hold; the publisher is unavailable");
+                            None
+                        }
+                    });
+                listed.push((name, verified));
             }
             Some(listed)
         }

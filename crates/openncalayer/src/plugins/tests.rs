@@ -1857,3 +1857,119 @@ mod consent {
 }
 
 mod publishers;
+
+fn updates_off(sandbox: &Sandbox) {
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": false, "channel": "stable"}}"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_revoked_version_is_off_until_its_replacement_installs_on_the_same_snapshot() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let mut revoked = sandbox.release("0.1.0", &example("0.1.0"));
+    revoked.revoked = true;
+    let new = sandbox.release("0.2.0", &example("0.2.0"));
+    sandbox.publish(2, vec![revoked, new]);
+    // The replacement cannot be downloaded: the revoked version does not run meanwhile.
+    sandbox.transport.reply(&package_url("0.2.0"), 503, b"");
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    assert!(sandbox.modules.names().is_empty());
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    // The next scheduled check, on the same snapshot, tries again.
+    sandbox
+        .transport
+        .serve(&package_url("0.2.0"), &example("0.2.0"));
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Updated {
+            name: name(),
+            version: v("0.2.0"),
+        }]
+    );
+    assert!(!sandbox.store().state().plugins[ID].withdrawn);
+    assert_eq!(sandbox.modules.names(), [MODULE]);
+}
+
+#[test]
+fn a_waiting_update_is_confirmed_only_while_the_catalog_still_chooses_it() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let old = sandbox.release("0.1.0", &example("0.1.0"));
+    let wider = sandbox.release("0.2.0", &example_wider("0.2.0"));
+    sandbox.publish(2, vec![old.clone(), wider.clone()]);
+    service.check_now();
+    let sha = pending_sha(&service);
+    assert!(!sha.is_empty());
+    sandbox.notices();
+
+    // Updates off: it keeps waiting, not installed.
+    updates_off(&sandbox);
+    assert!(matches!(
+        service.confirm_update(ID, &sha),
+        Err(PluginActionError::Failed(_))
+    ));
+    assert_eq!(pending_sha(&service), sha);
+
+    // Revoked since (the catalog read, not applied yet): dropped, not installed.
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": true, "channel": "stable"}}"#,
+    )
+    .unwrap();
+    let mut revoked = wider.clone();
+    revoked.revoked = true;
+    sandbox.publish(3, vec![old.clone(), revoked]);
+    service.refresh(INDEX_TIMEOUT, None).unwrap();
+    assert_eq!(
+        service.confirm_update(ID, &sha),
+        Err(PluginActionError::NothingToConfirm)
+    );
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert!(pending_sha(&service).is_empty());
+}
+
+#[test]
+fn a_revocations_only_pass_drops_an_update_no_longer_chosen() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let old = sandbox.release("0.1.0", &example("0.1.0"));
+    let wider = sandbox.release("0.2.0", &example_wider("0.2.0"));
+    sandbox.publish(2, vec![old.clone(), wider.clone()]);
+    service.check_now();
+    assert!(!pending_sha(&service).is_empty());
+    updates_off(&sandbox);
+    let mut revoked = wider;
+    revoked.revoked = true;
+    let newer = sandbox.release("0.3.0", &example("0.3.0"));
+    sandbox.publish(3, vec![old, revoked, newer]);
+    service.check_now();
+    assert!(pending_sha(&service).is_empty());
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert_eq!(package_downloads(&sandbox, "0.3.0"), 0);
+}
+
+#[test]
+fn a_leftover_full_application_is_capped_once_updates_are_off() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    update_offered(&sandbox, &service);
+    service.refresh(INDEX_TIMEOUT, None).unwrap();
+    updates_off(&sandbox);
+    *lock(&service.apply_pending) = Some(Apply::Full);
+    service.apply_catalog(Apply::RevocationsOnly);
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert_eq!(package_downloads(&sandbox, "0.2.0"), 0);
+    assert!(sandbox.notices().is_empty());
+}
