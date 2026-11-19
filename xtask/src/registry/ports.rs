@@ -10,7 +10,8 @@ use anyhow::{Context, bail};
 use oncl_plugin::{MAX_MANIFEST, Manifest, is_symbolic_name};
 use serde::{Deserialize, Serialize};
 
-use crate::plugin::{port_names, read_limited};
+use crate::plugin::port_names;
+use oncl_pack::read_limited;
 
 /// The prefix of a port's plugin id; the port's short name follows.
 const PORT_ID_PREFIX: &str = "io.github.arynyklas.openncalayer.port.";

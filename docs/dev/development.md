@@ -18,7 +18,7 @@
 
 Если какой-то шаг не сработал, напишите в [Issues](https://github.com/arynyklas/OpenNCALayer/issues): значит, ошибка в этой инструкции.
 
-Другие документы для разработчиков: выпуск версии описан в [`release.md`](release.md), встраивание SDK в [`sdk-overview.md`](sdk-overview.md) и [`sdk.md`](sdk.md).
+Другие документы для разработчиков: выпуск версии описан в [`release.md`](release.md), встраивание SDK в [`sdk-overview.md`](sdk-overview.md) и [`sdk.md`](sdk.md), сборка плагинов сторонних издателей в [`publishers.md`](publishers.md).
 
 ## Сборка и запуск
 

@@ -35,6 +35,9 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 oncl-flows = { path = "crates/oncl-flows", version = "=0.1.2-beta.1" }
 oncl-gost = { path = "crates/oncl-gost", version = "=0.1.2-beta.1" }
 oncl-ipc = { path = "crates/oncl-ipc" }
+# The plugin builder: the canonical source archive and the reference build of a plugin
+# (`oncl-pack`, run by the builder image); xtask packs the ports with the same code.
+oncl-pack = { path = "crates/oncl-pack" }
 oncl-pki = { path = "crates/oncl-pki", version = "=0.1.2-beta.1" }
 oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.2-beta.1" }
 oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.2-beta.1" }

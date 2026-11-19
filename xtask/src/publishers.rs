@@ -23,6 +23,11 @@
 //! `revoke_all = "<date>"` and the move to `retired` are settled by `tuf update` into
 //! explicit `[[revoked_versions]]` of the file ([`Registry::settle`]), so `publishers.json`
 //! stays a function of the files.
+//!
+//! The same directory holds [`builders::FILE_NAME`], the builder images a publisher's
+//! release may be built with.
+
+pub mod builders;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -512,9 +517,9 @@ impl Registry {
     ///
     /// # Errors
     ///
-    /// If a directory cannot be read, an entry is neither a publisher's directory nor
-    /// `README.md`, a publisher's file is missing or breaks a rule, or the publishers break a
-    /// rule between them ([`Registry::new`]).
+    /// If a directory cannot be read, an entry is neither a publisher's directory,
+    /// `README.md` nor [`builders::FILE_NAME`], a publisher's file is missing or breaks a rule,
+    /// or the publishers break a rule between them ([`Registry::new`]).
     pub fn read(dir: &Path) -> anyhow::Result<Registry> {
         let entries = match fs::read_dir(dir) {
             Ok(entries) => entries,
@@ -531,13 +536,18 @@ impl Registry {
         paths.sort();
         for path in paths {
             if !path.is_dir() {
-                if path.file_name().is_some_and(|n| n == "README.md") && path.is_file() {
+                if path
+                    .file_name()
+                    .is_some_and(|n| n == "README.md" || n == builders::FILE_NAME)
+                    && path.is_file()
+                {
                     continue;
                 }
                 bail!(
-                    "{} is not a publisher's directory: {} holds only those and README.md",
+                    "{} is not a publisher's directory: {} holds only those, README.md and {}",
                     path.display(),
-                    dir.display()
+                    dir.display(),
+                    builders::FILE_NAME
                 );
             }
             let dir_name = path
@@ -1525,7 +1535,7 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_directory_holds_publishers_and_a_readme_only() {
+    fn the_registry_directory_holds_publishers_a_readme_and_the_builders_only() {
         let dir = tempfile::tempdir().unwrap();
         let ecc = dir.path().join("ecc");
         fs::create_dir_all(&ecc).unwrap();
@@ -1535,6 +1545,7 @@ mod tests {
         )
         .unwrap();
         fs::write(dir.path().join("README.md"), "the publishers").unwrap();
+        fs::write(dir.path().join(builders::FILE_NAME), "").unwrap();
         let registry = Registry::read(dir.path()).unwrap();
         assert_eq!(registry.publishers().count(), 1);
         fs::write(dir.path().join("ecc.toml"), "name = \"ecc\"").unwrap();
