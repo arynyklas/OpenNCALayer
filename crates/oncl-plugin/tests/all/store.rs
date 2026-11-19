@@ -364,6 +364,47 @@ fn installed_without_publisher_reads_as_none() {
 }
 
 #[test]
+fn a_recorded_publisher_this_version_does_not_accept_is_dropped_not_the_state() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("plugins")).unwrap();
+    let sum = "00".repeat(32);
+    let installed = |publisher: &str| {
+        format!(
+            r#"{{"version": "0.1.0", "sha256": "{sum}", "source": "catalog", "enabled": true,
+                "publisher": {publisher}}}"#
+        )
+    };
+    std::fs::write(
+        dir.path().join("plugins/state.json"),
+        format!(
+            r#"{{"install_id": "000102030405060708090a0b0c0d0e0f", "last_seq": {{"beta": 3}},
+                "plugins": {{"kz.ecc.market": {}, "kz.reserved.tool": {}, "kz.odd.tool": {},
+                "kz.null.tool": {}}},
+                "bad": {{"kz.ecc.market": ["0.0.9"]}}}}"#,
+            installed("\"ecc\""),
+            installed("\"root\""),
+            installed("7"),
+            installed("null"),
+        ),
+    )
+    .unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let state = store.state();
+    assert_eq!(
+        state.install_id,
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    );
+    assert_eq!(state.last_seq[&Channel::Beta], 3);
+    assert_eq!(state.bad["kz.ecc.market"].len(), 1);
+    assert_eq!(state.plugins.len(), 4);
+    assert_eq!(state.plugins["kz.ecc.market"].publisher, Some(ecc()));
+    for id in ["kz.reserved.tool", "kz.odd.tool", "kz.null.tool"] {
+        assert_eq!(state.plugins[id].publisher, None, "{id}");
+        assert!(state.plugins[id].enabled, "{id}");
+    }
+}
+
+#[test]
 fn publisher_round_trips() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
@@ -532,6 +573,8 @@ fn prune_roles_removes_only_undelegated() {
     store.save_role(&role("pub-gone"), b"gone").unwrap();
     let roles = dir.path().join("plugins/catalog/roles");
     std::fs::write(roles.join("targets.json"), b"x").unwrap();
+    // A role being saved by another write right now.
+    std::fs::write(roles.join("pub-gone.json.123-4.tmp"), b"gone").unwrap();
     store.save_publishers(b"{}").unwrap();
     store
         .prune_roles(&std::collections::BTreeSet::from([role("pub-ecc")]))
@@ -542,4 +585,5 @@ fn prune_roles_removes_only_undelegated() {
     assert!(!roles.join("targets.json").exists());
     // `publishers.json` is not a role's file.
     assert!(dir.path().join("plugins/catalog/publishers.json").is_file());
+    assert!(roles.join("pub-gone.json.123-4.tmp").is_file());
 }

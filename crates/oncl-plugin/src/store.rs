@@ -64,9 +64,32 @@ pub struct Installed {
     pub withdrawn: bool,
     /// The publisher whose delegated role signed the release installed; `None` for a port of
     /// the owner's index and for a file the user chose. A state written before publishers has
-    /// none: it is restored from the publishers' prefixes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// none, nor has one whose name this version does not accept (logged, the rest of the
+    /// state is kept): it is restored from the publishers' prefixes.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_publisher"
+    )]
     pub publisher: Option<PublisherName>,
+}
+
+/// [`Installed::publisher`] as read: anything but a valid publisher name is `None` (logged),
+/// never an error that would lose the whole state.
+fn lenient_publisher<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<PublisherName>, D::Error> {
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Ok(None);
+    }
+    let publisher = value
+        .as_str()
+        .and_then(|name| PublisherName::parse(name).ok());
+    if publisher.is_none() {
+        tracing::warn!(publisher = %value, "the recorded publisher of a plugin is not a publisher's name; dropped");
+    }
+    Ok(publisher)
 }
 
 /// Where an installed plugin came from.
@@ -471,7 +494,8 @@ impl Store {
     }
 
     /// Removes the kept role files of every role not in `keep`: the roles the top-level
-    /// targets no longer delegate to.
+    /// targets no longer delegate to. A temporary file of a write ([`write_atomically`],
+    /// `*.tmp`) is left alone: it may be a role being saved now.
     ///
     /// # Errors
     ///
@@ -484,9 +508,11 @@ impl Store {
         };
         for entry in entries {
             let path = entry?.path();
-            let kept = path
-                .file_name()
-                .and_then(|name| name.to_str())
+            let name = path.file_name().and_then(|name| name.to_str());
+            if name.is_some_and(|name| name.ends_with(".tmp")) {
+                continue;
+            }
+            let kept = name
                 .and_then(|name| name.strip_suffix(".json"))
                 .and_then(|name| RoleName::parse(name).ok())
                 .is_some_and(|role| keep.contains(&role));

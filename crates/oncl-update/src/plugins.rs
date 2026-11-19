@@ -156,9 +156,11 @@ pub fn choose_plugin<'a>(
 }
 
 /// [`choose_plugin`] for an installed plugin whose publisher was recorded when it was
-/// installed (`recorded`): that publisher, if any, is the plugin's whatever the prefixes
-/// say, and one `publishers.json` does not name is unavailable (kept unless its release in
-/// the catalog is revoked).
+/// installed (`recorded`). Should it differ from the publisher whose prefix covers `id`, the
+/// choice fails closed: the stricter state of the two holds, a version either revokes is
+/// revoked ([`Catalog::publisher_state_of`], [`Catalog::is_installed_revoked`]), and only
+/// the recorded publisher's releases may replace the version installed. A recorded
+/// publisher `publishers.json` does not name is unavailable: kept unless revoked.
 pub fn choose_installed<'a>(
     catalog: &'a Catalog,
     id: &str,
@@ -168,9 +170,8 @@ pub fn choose_installed<'a>(
     install_id: &[u8; 16],
     bad: &BTreeSet<Version>,
 ) -> PluginChoice<'a> {
-    let found = catalog.publisher_state_of(id, recorded);
-    let revoked = catalog.is_installed_revoked(id, current, found.map(|(publisher, _)| publisher));
-    if let Some((publisher, state)) = found {
+    let revoked = catalog.is_installed_revoked(id, current, recorded);
+    if let Some((publisher, state)) = catalog.publisher_state_of(id, recorded) {
         match state {
             PublisherState::Active => {}
             PublisherState::Retired | PublisherState::Unavailable if revoked => {
@@ -180,10 +181,13 @@ pub fn choose_installed<'a>(
             PublisherState::Revoked => return PluginChoice::PublisherRevoked(publisher),
         }
     }
+    // The owner's index (`None`) for its ports, else the plugin's publisher.
+    let source = recorded.or_else(|| catalog.publisher_of(id));
     let candidate = catalog
         .releases()
         .filter(|r| {
             r.id == id
+                && r.publisher.as_ref() == source
                 && !r.revoked
                 && r.min_core <= *core
                 && !bad.contains(&r.version)

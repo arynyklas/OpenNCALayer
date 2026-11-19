@@ -191,39 +191,56 @@ impl Catalog {
         Some(self.policy.as_ref()?.covering(id)?.name())
     }
 
-    /// The publisher of the installed plugin `id` and its state: `recorded`, the publisher
-    /// recorded when it was installed, if there is one, whatever the prefixes say; else
-    /// [`Catalog::publisher_of`]. `None` for a port of the owner's index, or a plugin no
-    /// publisher's prefix covers. A recorded publisher `publishers.json` does not name is
-    /// unavailable, not revoked.
+    /// The publisher of the installed plugin `id` and its state. Its publishers are
+    /// `recorded`, the one recorded when it was installed, and [`Catalog::publisher_of`],
+    /// the one whose prefix covers `id`; they are the same one unless the record or
+    /// `publishers.json` is wrong, and then the stricter state of the two holds (revoked,
+    /// then unavailable, then retired, then active; the recorded one when as strict). A
+    /// recorded publisher `publishers.json` does not name is unavailable, not revoked.
+    /// `None` for a port of the owner's index, or a plugin no publisher's prefix covers,
+    /// without a recorded publisher.
     pub fn publisher_state_of<'a>(
         &'a self,
         id: &str,
         recorded: Option<&'a PublisherName>,
     ) -> Option<(&'a PublisherName, PublisherState)> {
-        let publisher = recorded.or_else(|| self.publisher_of(id))?;
-        Some((publisher, self.publisher_state(publisher)))
+        recorded
+            .into_iter()
+            .chain(self.publisher_of(id))
+            .map(|publisher| (publisher, self.publisher_state(publisher)))
+            .reduce(|first, other| {
+                if strictness(other.1) > strictness(first.1) {
+                    other
+                } else {
+                    first
+                }
+            })
     }
 
     /// Whether `version` of `id` is revoked: by its release in the catalog, by the owner in
     /// `publishers.json`, or by a verified role of its publisher on any channel (build
     /// metadata aside, listed in the catalog or not). The publisher's revocations hold while
     /// it is active, retired or unavailable; they need `publishers.json`. The publisher is
-    /// found by the prefixes of `publishers.json` ([`Catalog::is_installed_revoked`] takes
-    /// the one recorded).
+    /// found by the prefixes of `publishers.json` ([`Catalog::is_installed_revoked`] also
+    /// takes the one recorded).
     pub fn is_revoked(&self, id: &str, version: &Version) -> bool {
         self.is_revoked_for(id, version, self.publisher_of(id))
     }
 
-    /// [`Catalog::is_revoked`] of the installed `id`, of the publisher `recorded` when it
-    /// was installed, if there is one ([`Catalog::publisher_state_of`]).
+    /// [`Catalog::is_revoked`] of the installed `id`: revoked for the publisher whose prefix
+    /// covers it or for the publisher `recorded` when it was installed, if there is one
+    /// ([`Catalog::publisher_state_of`]).
     pub fn is_installed_revoked(
         &self,
         id: &str,
         version: &Version,
         recorded: Option<&PublisherName>,
     ) -> bool {
-        self.is_revoked_for(id, version, recorded.or_else(|| self.publisher_of(id)))
+        let covering = self.publisher_of(id);
+        self.is_revoked_for(id, version, covering)
+            || recorded.is_some_and(|recorded| {
+                covering != Some(recorded) && self.is_revoked_for(id, version, Some(recorded))
+            })
     }
 
     /// [`Catalog::is_revoked`] for a plugin of `publisher`: its owner's revocations and its
@@ -446,6 +463,18 @@ impl<'r> CatalogBuilder<'r> {
             self_revoked,
             rejected,
         }
+    }
+}
+
+/// How strict `state` is with an installed plugin: revoked turns it off, unavailable and
+/// retired keep it unless revoked (unavailable first: nothing about it held up), active
+/// updates it.
+fn strictness(state: PublisherState) -> u8 {
+    match state {
+        PublisherState::Active => 0,
+        PublisherState::Retired => 1,
+        PublisherState::Unavailable => 2,
+        PublisherState::Revoked => 3,
     }
 }
 

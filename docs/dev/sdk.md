@@ -270,7 +270,7 @@ Core выполняет три шага в указанном порядке (`d
 Что перестанет собираться в `oncl-plugin` (feature `distribution`) и как это исправить:
 
 - `Store::install(package, bytes, source)` стал `install(package, bytes, source, publisher)`: `publisher: Option<&tuf::PublisherName>` — издатель выпуска каталога (`PluginRelease::publisher`), для порта из индекса владельца и для файла пользователя `None`.
-- У `Installed` новое поле `publisher: Option<PublisherName>`, у `StoreState` — `declined_replacements: BTreeMap<String, String>`; в литерале задайте `None` и `BTreeMap::new()`. Файл состояния с ними версия 0.1.1 читает: оба поля без значения не пишутся, а незнакомые поля она пропускает.
+- У `Installed` новое поле `publisher: Option<PublisherName>`, у `StoreState` — `declined_replacements: BTreeMap<String, String>`; в литерале задайте `None` и `BTreeMap::new()`. Файл состояния с ними версии 0.1.1 и 0.1.2-beta.1 читают: оба поля без значения не пишутся, а незнакомые поля они пропускают. Но, сохранив состояние заново (после отката на них проверкой здоровья или вручную), они оба поля теряют: издатель затем восстанавливается по префиксу, а отказы от замены порта забываются, и замену предложат снова. Имя издателя, которое новая версия не принимает, читается как `None` (журнал `warn`), остальное состояние не теряется.
 
 Что меняется в поведении:
 
