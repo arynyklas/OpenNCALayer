@@ -147,6 +147,9 @@ pub struct PluginConfig {
     pub ui: Arc<dyn InstallUi>,
     /// Tells the user; called from any thread, must not block.
     pub notify: Arc<dyn Fn(PluginNotice) + Send + Sync>,
+    /// How long `installBundle` waits for the catalog when none is in use:
+    /// [`OFFER_TIMEOUT`].
+    pub offer_timeout: Duration,
 }
 
 /// The plugins as the plugin window shows them.
@@ -1820,7 +1823,8 @@ fn same_name(text: &str) -> Localized {
     }
 }
 
-/// How long `installBundle` waits for the catalog when none is in use.
+/// The daemon's [`PluginConfig::offer_timeout`]: how long `installBundle` waits for the
+/// catalog when none is in use.
 pub const OFFER_TIMEOUT: Duration = Duration::from_secs(10);
 
 impl Bundles for PluginService {
@@ -1837,11 +1841,11 @@ impl Bundles for PluginService {
             .collect()
     }
 
-    /// Looks in the catalog in use (downloaded within [`OFFER_TIMEOUT`] if there is none)
-    /// for a plugin porting `symname`; one not installed is installed in the background
-    /// (the user is asked) and `true` returned.
+    /// Looks in the catalog in use (downloaded within [`PluginConfig::offer_timeout`] if
+    /// there is none) for a plugin porting `symname`; one not installed is installed in the
+    /// background (the user is asked) and `true` returned.
     fn request_install(&self, symname: &str, origin: &str) -> bool {
-        let Some(release) = self.catalog_offer_for_symname(symname, OFFER_TIMEOUT) else {
+        let Some(release) = self.catalog_offer_for_symname(symname, self.cfg.offer_timeout) else {
             return false;
         };
         let installed = self.store.state().plugins.contains_key(&release.id)

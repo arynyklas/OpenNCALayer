@@ -702,6 +702,7 @@ fn start_plugins(
             post_to_tray(move |status| status.plugin_notification(&notice, Instant::now()));
             oncl_ui::refresh_plugins_window();
         }),
+        offer_timeout: openncalayer::plugins::OFFER_TIMEOUT,
     });
     match started {
         Ok(service) => {

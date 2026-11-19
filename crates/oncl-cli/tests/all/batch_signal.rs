@@ -217,6 +217,9 @@ fn ctrl_break(child: &std::process::Child) {
 // real cancellation or the real deadline (no sleep decides the semantics).
 #[test]
 fn real_ctrl_break_after_item_one_exits_130_with_a_terminal_report_and_kept_output() {
+    if !oncl_testkit::console::ctrl_break_possible() {
+        return;
+    }
     let s = run_stalled(&[], false, |child, _, _| ctrl_break(child));
     assert_eq!(s.output.status.code(), Some(130), "{:?}", s.output);
     assert_terminal_report(&s, "Cancelled", "Cancelled");
@@ -229,6 +232,9 @@ fn deadline_after_item_one_exits_4_with_a_terminal_report_and_kept_output() {
 }
 #[test]
 fn a_failed_terminal_report_never_changes_the_stop_exit_code() {
+    if !oncl_testkit::console::ctrl_break_possible() {
+        return;
+    }
     // stdout is unwritable: the report cannot be delivered, the stop still wins.
     let s = run_stalled(&[], true, |child, _, _| ctrl_break(child));
     assert_eq!(s.output.status.code(), Some(130), "{:?}", s.output);

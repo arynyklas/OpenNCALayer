@@ -488,7 +488,7 @@ fn cargo(root: &Path, args: &[&str]) -> anyhow::Result<String> {
 
 /// Whether offline cargo failed for want of a package (`attempting to make an HTTP request,
 /// but --offline was specified`, `no matching package … offline mode`).
-fn needs_download(stderr: &str) -> bool {
+pub(crate) fn needs_download(stderr: &str) -> bool {
     stderr.contains("--offline") || stderr.contains("offline mode")
 }
 

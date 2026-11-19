@@ -14,6 +14,9 @@ fn ctrl_break_ends_a_remote_call_to_a_silent_server_promptly() {
         },
         time::{Duration, Instant},
     };
+    if !oncl_testkit::console::ctrl_break_possible() {
+        return;
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
     listener.set_nonblocking(true).unwrap();
@@ -144,12 +147,16 @@ mod ctrl_break {
     }
 
     /// Runs `oncl <args>` against a stub server, delivers a real Ctrl-Break `after` the stub
-    /// accepted the connection, and waits (at most 10 s) for the exit.
+    /// accepted the connection, and waits (at most 10 s) for the exit. `None`: no console to
+    /// deliver it through, the test skips.
     pub fn run(
         serve: fn(TcpStream),
         after: Duration,
         args: impl FnOnce(&str, &std::path::Path) -> Vec<String>,
-    ) -> Run {
+    ) -> Option<Run> {
+        if !oncl_testkit::console::ctrl_break_possible() {
+            return None;
+        }
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -222,12 +229,12 @@ mod ctrl_break {
             .unwrap()
             .read_to_end(&mut stderr)
             .unwrap();
-        Run {
+        Some(Run {
             code: status.code(),
             stderr: String::from_utf8_lossy(&stderr).into_owned(),
             stdout,
             dir,
-        }
+        })
     }
 
     pub fn silent(mut stream: TcpStream) {
@@ -272,7 +279,7 @@ mod ctrl_break {
 #[cfg(windows)]
 #[test]
 fn ctrl_break_after_a_full_sign_upload_is_130_with_applied_unknown() {
-    let run = ctrl_break::run(
+    let Some(run) = ctrl_break::run(
         ctrl_break::silent,
         std::time::Duration::from_millis(2500),
         |_, dir| {
@@ -292,7 +299,9 @@ fn ctrl_break_after_a_full_sign_upload_is_130_with_applied_unknown() {
             .map(ToString::to_string)
             .collect()
         },
-    );
+    ) else {
+        return;
+    };
     assert_eq!(run.code, Some(130), "{}", run.stderr);
     assert!(run.stderr.contains("applied=Unknown"), "{}", run.stderr);
     assert!(!run.dir.path().join("out.p7s").exists());
@@ -303,7 +312,7 @@ fn ctrl_break_after_a_full_sign_upload_is_130_with_applied_unknown() {
 #[cfg(windows)]
 #[test]
 fn ctrl_break_during_an_artifact_download_is_130_and_publishes_nothing() {
-    let run = ctrl_break::run(
+    let Some(run) = ctrl_break::run(
         ctrl_break::streaming,
         std::time::Duration::from_millis(2000),
         |_, dir| {
@@ -318,7 +327,9 @@ fn ctrl_break_during_an_artifact_download_is_130_and_publishes_nothing() {
             .map(ToString::to_string)
             .collect()
         },
-    );
+    ) else {
+        return;
+    };
     assert_eq!(run.code, Some(130), "{}", run.stderr);
     assert!(run.stderr.contains("applied=NotApplied"), "{}", run.stderr);
     assert!(run.stdout.is_empty());
@@ -381,9 +392,11 @@ mod keyful {
     /// private operation, so the honest state is `NotApplied`.
     #[test]
     fn ctrl_break_during_a_sign_upload_is_130_with_applied_not_applied() {
-        let run = ctrl_break::run(stalls_mid_body, Duration::from_millis(2000), |_, dir| {
+        let Some(run) = ctrl_break::run(stalls_mid_body, Duration::from_millis(2000), |_, dir| {
             sign_args(dir, true)
-        });
+        }) else {
+            return;
+        };
         assert_eq!(run.code, Some(130), "{}", run.stderr);
         assert!(run.stderr.contains("applied=NotApplied"), "{}", run.stderr);
         assert!(!run.dir.path().join("out.p7s").exists());
@@ -392,11 +405,13 @@ mod keyful {
     /// Cancelled while the signature artifact downloads: the key may have been applied.
     #[test]
     fn ctrl_break_during_a_sign_artifact_download_is_130_with_applied_unknown() {
-        let run = ctrl_break::run(
+        let Some(run) = ctrl_break::run(
             ctrl_break::streaming,
             Duration::from_millis(2000),
             |_, dir| sign_args(dir, false),
-        );
+        ) else {
+            return;
+        };
         assert_eq!(run.code, Some(130), "{}", run.stderr);
         assert!(run.stderr.contains("applied=Unknown"), "{}", run.stderr);
         assert!(!run.dir.path().join("out.p7s").exists());

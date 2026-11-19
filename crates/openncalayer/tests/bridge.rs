@@ -814,10 +814,10 @@ async fn client_eof_ends_session_cleanly() {
 #[cfg(feature = "e2e-prompter")]
 mod binary {
     use super::*;
+    use oncl_testkit::ports::DaemonPort;
     use std::io::Read;
     use std::path::Path;
     use std::process::{Child, Command, ExitStatus, Stdio};
-    use std::sync::atomic::{AtomicU16, Ordering};
 
     /// A data directory for a daemon: no TLS, an empty dialog script.
     fn daemon_dir() -> TempDir {
@@ -856,27 +856,20 @@ mod binary {
         command
     }
 
-    /// Ports of the range `NCALAYERPORT` accepts, never 13579 (a real NCALayer may run).
-    const FIRST_PORT: u16 = 13580;
-    const PORTS: u16 = 100;
-
-    /// A free port of 13580..=13679 that no other test of this binary got, held. Ports are
-    /// handed out in turn, so tests running at the same time never share one.
-    fn hold_port() -> (u16, std::net::TcpListener) {
-        static NEXT: AtomicU16 = AtomicU16::new(0);
-        (0..PORTS)
-            .find_map(|_| {
-                let port = FIRST_PORT + NEXT.fetch_add(1, Ordering::Relaxed) % PORTS;
-                std::net::TcpListener::bind(("127.0.0.1", port))
-                    .ok()
-                    .map(|l| (port, l))
-            })
-            .expect("a free port in 13580..=13679")
+    /// A leased daemon port (see [`DaemonPort`]), never 13579 (a real NCALayer may run): the
+    /// lease is kept for as long as the first value lives, so tests running at the same time,
+    /// in this process or another, never share a port.
+    fn leased_port() -> (DaemonPort, u16) {
+        let lease = DaemonPort::lease();
+        let port = lease.port();
+        (lease, port)
     }
 
-    /// A port of [`hold_port`], released for a daemon to bind.
-    fn free_port() -> u16 {
-        hold_port().0
+    /// A leased port and a listener holding it.
+    fn hold_port() -> (u16, (DaemonPort, std::net::TcpListener)) {
+        let lease = DaemonPort::lease();
+        let held = lease.hold();
+        (lease.port(), (lease, held))
     }
 
     /// Runs `command` to its end (at most [`PATIENCE`]); its exit code and stderr.
@@ -957,7 +950,7 @@ mod binary {
     #[test]
     fn second_daemon_exits_4() {
         let dir = daemon_dir();
-        let port = free_port();
+        let (_lease, port) = leased_port();
         runtime().block_on(async {
             let (_first, _c) = start(
                 daemon(dir.path(), port, &["run", "--allow-no-wss", "--no-tray"]),
@@ -975,7 +968,7 @@ mod binary {
     #[test]
     fn no_tls_without_flag_exits_2_with_flag_serves_ipc() {
         let dir = daemon_dir();
-        let port = free_port();
+        let (_lease, port) = leased_port();
         let (status, stderr) = exit_of(daemon(dir.path(), port, &["run", "--no-tray"]));
         assert_eq!(status.code(), Some(2), "{stderr}");
         assert!(stderr.contains("TLS не настроен"), "{stderr}");
@@ -1025,7 +1018,7 @@ mod binary {
     #[test]
     fn a_script_step_of_the_wrong_kind_cancels_its_window() {
         let dir = daemon_dir();
-        let port = free_port();
+        let (_lease, port) = leased_port();
         let key = synthetic("user-gost2015-sign");
         write_steps(
             dir.path(),
@@ -1063,7 +1056,7 @@ mod binary {
     #[test]
     fn without_dbus_the_tray_is_off_and_the_daemon_signs() {
         let dir = daemon_dir();
-        let port = free_port();
+        let (_lease, port) = leased_port();
         let key = synthetic("user-gost2015-sign");
         write_steps(
             dir.path(),
@@ -1108,7 +1101,7 @@ mod binary {
             let dir = daemon_dir();
             configure_tls(dir.path());
             std::fs::write(dir.path().join("tls").join(broken), content).unwrap();
-            let port = free_port();
+            let (_lease, port) = leased_port();
             let (status, stderr) = exit_of(daemon(dir.path(), port, &["run", "--no-tray"]));
             assert_eq!(status.code(), Some(1), "{broken}: {stderr}");
             assert!(stderr.contains("Не удалось"), "{broken}: {stderr}");
@@ -1154,7 +1147,7 @@ mod binary {
     #[test]
     fn without_a_tray_tls_missing_and_a_busy_port_still_end_run() {
         let dir = daemon_dir();
-        let port = free_port();
+        let (_lease, port) = leased_port();
         let tray_run = |dir: &Path, port| {
             let mut command = daemon(dir, port, &["run"]);
             command.env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent");
@@ -1184,7 +1177,7 @@ mod binary {
     fn serves_wss_and_ipc_together() {
         let dir = daemon_dir();
         let ca_der = configure_tls(dir.path());
-        let port = free_port();
+        let (_lease, port) = leased_port();
         runtime().block_on(async {
             let (_daemon, mut c) =
                 start(daemon(dir.path(), port, &["run", "--no-tray"]), dir.path()).await;

@@ -7,6 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_pki::cms::verify;
 use oncl_pki::pkcs12::load;
+use oncl_testkit::ports::DaemonPort;
 use oncl_testkit::{read, synthetic};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -62,10 +63,11 @@ impl Client {
     }
 }
 
-/// A daemon on its own data directory, killed on drop.
+/// A daemon on its own data directory, killed on drop; it keeps its port leased until then.
 struct Daemon {
     child: Child,
     dir: TempDir,
+    _port: DaemonPort,
 }
 
 impl Drop for Daemon {
@@ -73,13 +75,6 @@ impl Drop for Daemon {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-/// A port of 13580..=13679 free now (never 13579: a real NCALayer may run).
-fn free_port() -> u16 {
-    (13620..13640)
-        .find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
-        .expect("a free port")
 }
 
 fn config() -> PathBuf {
@@ -91,11 +86,12 @@ fn config() -> PathBuf {
 async fn start(steps: Value) -> (Daemon, Client) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("steps.json"), steps.to_string()).unwrap();
+    let port = DaemonPort::lease();
     let mut daemon = Daemon {
         child: Command::new(env!("CARGO_BIN_EXE_openncalayer"))
             .args(["run", "--allow-no-wss", "--no-tray"])
             .env("ONCL_DATA_DIR", dir.path())
-            .env("NCALAYERPORT", free_port().to_string())
+            .env("NCALAYERPORT", port.port().to_string())
             .env("ONCL_E2E_PROMPTER", dir.path().join("steps.json"))
             .env("ONCL_TOKEN_EMULATOR", config())
             .stdin(Stdio::null())
@@ -104,6 +100,7 @@ async fn start(steps: Value) -> (Daemon, Client) {
             .spawn()
             .unwrap(),
         dir,
+        _port: port,
     };
     let ep = endpoint(daemon.dir.path()).unwrap();
     let deadline = Instant::now() + PATIENCE;
