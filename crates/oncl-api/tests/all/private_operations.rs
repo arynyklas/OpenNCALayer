@@ -1,6 +1,5 @@
-#![cfg(feature = "server")]
 //! Real-socket private operations (sign/extend) with independent OpenSSL oracles.
-mod private_support;
+use crate::private_support;
 use oncl_server::{audit::RecordKind, config::Permission};
 use private_support::*;
 use std::sync::Arc;
@@ -487,7 +486,7 @@ async fn pdf_incremental_signature_verifies_against_the_exact_byterange_in_opens
     let p12 = container(&pki.leaf("user-rsa-sign"), PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
     let dir = tempfile::tempdir().unwrap();
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     let (_, parts) = sign_inline(&service, &p12, "pdf", "", pdf).await;
     let done = final_event(&parts);
     assert_eq!(done["status"], "completed", "{done}");
@@ -1823,7 +1822,7 @@ async fn pades_levels_over_http_validate_in_pyhanko() {
     let p12 = container(&leaf, PASSWORD);
     let service = Running::start_with(inline_service_config(&pki)).await;
     let dir = tempfile::tempdir().unwrap();
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     let inter = {
         use der::Encode;
         pki.inter.cert.to_der().unwrap()
@@ -3603,7 +3602,7 @@ async fn lt_levels_need_status_material_and_the_pades_memory_profile_before_any_
         use der::Encode;
         pki.inter.cert.to_der().unwrap()
     };
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     let service = Running::start_with(|config, dir| {
         inline_service_config(&pki)(config, dir);
         config.memory_per_operation = 256 << 20; // below the PAdES LT/LTA profile
@@ -4462,7 +4461,7 @@ async fn pades_preflight_never_under_refuses_across_memory_profiles() {
         use der::Encode;
         pki.inter.cert.to_der().unwrap()
     };
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     let evidence = vec![inter, pki.crls[0].clone(), pki.crls[1].clone()];
     // Fine sweep (1 MiB) across the whole transition band.
     let outcomes = memory_sweep(&pki, &p12, pdf, &evidence, 320u64..=400, &|config, mib| {
@@ -4497,7 +4496,7 @@ async fn pades_preflight_accounts_for_prior_signatures_and_large_evidence() {
         use der::Encode;
         pki.inter.cert.to_der().unwrap()
     };
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     // Several MiB of valid evidence: the (large) CRLs repeated.
     let mut evidence = vec![inter];
     evidence.push(pki.crls[0].clone());
@@ -4620,7 +4619,8 @@ async fn unreadable_pdf_for_a_pades_high_level_is_refused_before_any_key_use() {
         ("not a pdf", b"this is not a pdf".to_vec()),
         (
             "truncated",
-            include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf")[..400].to_vec(),
+            include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf")[..400]
+                .to_vec(),
         ),
     ] {
         let metadata = r#"{"items":[{"id":"s1","operation":{"kind":"sign","profile":"pades_lt","input":"doc","evidence":[{"kind":"certificate","input":"ev0"},{"kind":"crl","input":"ev1"}],"keys":[{"source":"inline","container":"p12","password":"pw"}]}}],"parts":[{"name":"p12","item_id":"s1","role":"secret"},{"name":"pw","item_id":"s1","role":"secret"},{"name":"doc","item_id":"s1","role":"document"},{"name":"ev0","item_id":"s1","role":"document"},{"name":"ev1","item_id":"s1","role":"document"}]}"#;

@@ -1,7 +1,6 @@
-#![cfg(feature = "server")]
 //! A deadline that expires while the client is still uploading must produce a typed
 //! JSON error before any header is sent (never an empty reply / closed socket).
-mod private_support;
+use crate::private_support;
 use oncl_server::config::Permission;
 use private_support::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

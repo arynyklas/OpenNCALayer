@@ -1,4 +1,3 @@
-#![cfg(feature = "server")]
 use axum::body::Bytes;
 use futures_util::{StreamExt, stream};
 use oncl_api::multipart::BoundedMultipart;

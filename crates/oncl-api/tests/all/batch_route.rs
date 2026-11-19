@@ -1,7 +1,6 @@
-#![cfg(feature = "server")]
 //! Real-socket `POST /v1/batch`: real RSA keys, the production durable audit guard,
 //! the loopback PKI/TSA and independent OpenSSL oracles. Barriers are Condvar gates.
-mod private_support;
+use crate::private_support;
 use oncl_server::{
     audit::RecordKind,
     config::{Permission, ServerConfig},
@@ -1062,7 +1061,7 @@ async fn pdf_and_xml_items_in_one_batch_are_verified_by_independent_oracles() {
     }))
     .await;
     let dir = tempfile::tempdir().unwrap();
-    let pdf = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+    let pdf = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
     let xml = br#"<root xmlns:x="urn:x"><x:item Id="p">payload text</x:item><holder Id="s"></holder></root>"#;
     let extra = r#""target":"p","parent":"s","signature_id":"sig1","#;
     let items = [

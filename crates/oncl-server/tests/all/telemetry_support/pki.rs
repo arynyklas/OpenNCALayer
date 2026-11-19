@@ -1,5 +1,5 @@
 //! Loopback OCSP/CRL/TSA responder backed by signed synthetic mocks, copied verbatim
-//! from `crates/oncl-api/tests/private_support` (same harness, trimmed to the PKI part)
+//! from `crates/oncl-api/tests/all/private_support` (same harness, trimmed to the PKI part)
 //! so strict-online signing works in oncl-server tests.
 #![allow(dead_code, unused_imports)]
 use der::Encode;

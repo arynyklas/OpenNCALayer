@@ -1,4 +1,3 @@
-#![cfg(feature = "server")]
 use oncl_server::{
     auth::TokenSecret,
     config::{Permission, ServerConfig, TokenConfig},
