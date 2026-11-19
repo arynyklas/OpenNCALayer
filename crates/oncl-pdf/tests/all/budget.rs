@@ -36,9 +36,9 @@ fn prior(bytes: &[u8]) -> Result<PriorSignatures, PdfError> {
 /// A real PAdES-B output of the HTTP service (synthetic RSA key): one ETSI.CAdES.detached
 /// signature. (`external-*.pdf` use adbe.pkcs7.detached, which the PAdES candidate scan
 /// refuses, so they are covered by the unreadable-input test below.)
-const SIGNED: &[u8] = include_bytes!("fixtures/pades-b-synthetic.pdf");
-const ADOBE: &[u8] = include_bytes!("fixtures/external-two-signatures.pdf");
-const UNSIGNED: &[u8] = include_bytes!("fixtures/external-multipage.pdf");
+const SIGNED: &[u8] = include_bytes!("../fixtures/pades-b-synthetic.pdf");
+const ADOBE: &[u8] = include_bytes!("../fixtures/external-two-signatures.pdf");
+const UNSIGNED: &[u8] = include_bytes!("../fixtures/external-multipage.pdf");
 
 #[test]
 fn prior_signature_contents_reads_real_signed_fixtures() {

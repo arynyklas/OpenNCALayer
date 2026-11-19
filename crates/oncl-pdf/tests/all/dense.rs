@@ -12,7 +12,7 @@ use oncl_pki::{
     },
 };
 use std::{io::Cursor, sync::Arc, time::Instant};
-#[path = "support/dense_gen.rs"]
+#[path = "../support/dense_gen.rs"]
 mod dense_gen;
 use dense_gen::{Dense, classic, classic_with_table, streamed, xref_stream_with, zlib};
 

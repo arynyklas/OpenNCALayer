@@ -105,7 +105,7 @@ fn prior_revision_untouched() {
     .unwrap();
     let temp = tempfile::tempdir().unwrap();
     let store = TemporaryStore::new(temp.path()).unwrap();
-    let source = include_bytes!("fixtures/external-multipage.pdf");
+    let source = include_bytes!("../fixtures/external-multipage.pdf");
     for ending in [b"\n".as_slice(), b"".as_slice(), b"\r".as_slice()] {
         let mut previous = source.to_vec();
         for name in ["user-rsa-sign", "user-gost2015-sign"] {
@@ -323,7 +323,7 @@ impl oncl_pki::key::DigestSigner for Counted {
 }
 #[test]
 fn original_and_output_each_charge_once_and_short_temp_prevents_key_use() {
-    let source = include_bytes!("fixtures/external-multipage.pdf");
+    let source = include_bytes!("../fixtures/external-multipage.pdf");
     let expected = signed(source, 16384).unwrap().len() as u64;
     for short in [0, 1] {
         let limits = ResourceLimits {
