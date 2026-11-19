@@ -1725,7 +1725,7 @@ fn pdf_token_backends_verify_real_rsa_and_gost_signatures() {
         let store = TemporaryStore::new(parent.path()).unwrap();
         let guard = Arc::new(Guard::default());
         let engine = engine(guard.clone(), provider, Some(store), true);
-        let input = include_bytes!("../../oncl-pdf/tests/fixtures/external-multipage.pdf");
+        let input = include_bytes!("../../../oncl-pdf/tests/fixtures/external-multipage.pdf");
         let output = pdf_once(&engine, &key, input).unwrap();
         assert!(output.starts_with(input));
         let mut ctx = engine

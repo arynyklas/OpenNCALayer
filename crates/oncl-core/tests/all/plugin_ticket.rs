@@ -3,12 +3,7 @@
 //! guard decides before the key is touched. Actual synthetic WASM and real source-bound
 //! crypto, like `plugin_manual`.
 #![allow(dead_code)]
-#[path = "../examples/sdk_probe/plugin_fixture.rs"]
-mod fixture;
-#[path = "../examples/sdk_probe/batch_fixture.rs"]
-pub(crate) mod plugin_crypto;
-#[path = "../examples/sdk_probe/plugin_xml_fixture.rs"]
-mod xades_fixture;
+use crate::{plugin_fixture as fixture, plugin_xml_fixture as xades_fixture};
 use fixture::*;
 use oncl_core::{
     Engine, EngineServices, ErrorCode, OperationContext, OperationError, OperationId,

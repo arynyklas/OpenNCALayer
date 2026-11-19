@@ -1,4 +1,3 @@
-#![cfg(feature = "xml")]
 use oncl_core::{
     Action, Engine, EngineServices, ExecutionGrant, OperationPolicy, ValidationServices,
     VerifyRequest,
@@ -152,7 +151,7 @@ fn xml_timestamp_dispatch_uses_f03_without_final_output_credit_or_trust_promotio
 
 #[test]
 fn wsse_legacy_rsa_sha1_is_host_selected_verification_only() {
-    let source = include_bytes!("../../oncl-xml/tests/support/wsse-legacy-rsa-sha1.xml");
+    let source = include_bytes!("../../../oncl-xml/tests/support/wsse-legacy-rsa-sha1.xml");
     let temp = tempfile::tempdir().unwrap();
     let services = ValidationServices::new(
         CaSet::new(vec![]),

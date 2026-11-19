@@ -1,7 +1,7 @@
 //! CMS signer facts ([`oncl_pki::cms::report`]): each signer's certificate, signingTime,
 //! signature, signingCertificateV2 and time-stamp token, checked apart. Trust, validity,
 //! certification paths and revocation are decided by the one shared validator
-//! (`oncl_pki::validation`, tested by `oncl-core/tests/validation_policy.rs`), not here.
+//! (`oncl_pki::validation`, tested by `oncl-core/tests/all/validation_policy.rs`), not here.
 
 use der::asn1::{AnyRef, ObjectIdentifier};
 use der::{Decode, Encode, Reader, SliceReader};

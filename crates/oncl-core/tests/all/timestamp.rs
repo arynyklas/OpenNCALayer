@@ -1,4 +1,4 @@
-#[path = "support/i01.rs"]
+#[path = "../support/i01.rs"]
 mod fixture;
 use fixture::{NOW, SignedFixtures, Status};
 use oncl_core::{

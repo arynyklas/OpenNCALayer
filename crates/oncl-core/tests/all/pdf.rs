@@ -1,4 +1,3 @@
-#![cfg(feature = "pdf")]
 use oncl_core::{
     Action, Engine, EngineServices, ExecutionGrant, OperationPolicy, ValidationServices,
     VerifyRequest,
@@ -28,7 +27,7 @@ fn pdf_engine_keeps_revision_facts_and_scoped_signers() {
     let services = ValidationServices::new(
         CaSet::new(vec![
             oncl_pki::cert::parse(include_bytes!(
-                "../../oncl-pdf/tests/fixtures/external-cert.der"
+                "../../../oncl-pdf/tests/fixtures/external-cert.der"
             ))
             .unwrap(),
         ]),
@@ -52,8 +51,9 @@ fn pdf_engine_keeps_revision_facts_and_scoped_signers() {
             Arc::new(Control),
         )
         .unwrap();
-    let mut input =
-        Cursor::new(include_bytes!("../../oncl-pdf/tests/fixtures/external-later.pdf").as_slice());
+    let mut input = Cursor::new(
+        include_bytes!("../../../oncl-pdf/tests/fixtures/external-later.pdf").as_slice(),
+    );
     let report = engine
         .verify(
             &VerifyRequest::pdf(),
@@ -239,7 +239,7 @@ fn pades_engine_samples_final_host_time_after_actual_pdf_intake() {
         AdesLevel::B,
         Source::sequential(
             &mut Cursor::new(include_bytes!(
-                "../../oncl-pdf/tests/fixtures/external-multipage.pdf"
+                "../../../oncl-pdf/tests/fixtures/external-multipage.pdf"
             )),
             None,
         ),
