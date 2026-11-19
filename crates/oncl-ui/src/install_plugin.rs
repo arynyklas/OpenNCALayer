@@ -28,8 +28,11 @@ use slint::{
     CloseRequestResponse, ComponentHandle, ModelRc, PlatformError, SharedString, VecModel,
 };
 
+use crate::about_view::open_source_link;
 use crate::foreground;
-use crate::plugins_view::{LocalizedText, PluginOrigin, ReplacedBundle, open_source, origin_texts};
+use crate::plugins_view::{
+    LocalizedText, PluginOrigin, ReplacedBundle, origin_texts, publisher_name,
+};
 use crate::prompter::select_desktop_language;
 use crate::ui::{InstallPluginWindow, OperationBlock};
 use crate::view::{page_text, page_text_upto};
@@ -246,7 +249,14 @@ pub(crate) fn fill(ui: &InstallPluginWindow, request: &InstallPluginRequest, l: 
     ui.set_publisher_note(texts.origin.note.into());
     ui.set_source(texts.origin.source.into());
     let url = texts.origin.url;
-    ui.on_open_source(move || open_source(&url));
+    let weak = ui.as_weak();
+    ui.on_open_source(move || {
+        // The browser must not open behind a window that stays on top.
+        if let Some(ui) = weak.upgrade() {
+            ui.set_on_top(false);
+        }
+        open_source_link(&url);
+    });
 }
 
 /// «Установить» (`true`), «Отмена» or the close button: the window goes, the answer is
@@ -409,10 +419,12 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
                         "{source}",
                         &match &installed.origin {
                             PluginOrigin::LocalFile => t.installed_local.to_owned(),
-                            PluginOrigin::Project => t.installed_catalog.to_owned(),
+                            PluginOrigin::Project | PluginOrigin::Unknown => {
+                                t.installed_catalog.to_owned()
+                            }
                             PluginOrigin::Publisher(publisher) => t
                                 .installed_publisher
-                                .replace("{name}", &untrusted_label(publisher.display.get(l))),
+                                .replace("{name}", &publisher_name(&publisher.display, l)),
                         },
                     )
             })
@@ -1298,6 +1310,30 @@ mod tests {
                 env!("CARGO_PKG_REPOSITORY"),
                 "/releases/download/pub-acme-09/a 1.src.tar.gz"
             ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/a-1.src.tar.gz?x=1"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/a-1.src.tar.gz#x"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/a?.src.tar.gz"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/%2e%2e/a-1.src.tar.gz"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09\\a-1.src.tar.gz"
+            ),
+            "https://user@github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-09/a-1.src.tar.gz",
+            "https://github.com/arynyklas/OpenNCALayer2/releases/download/pub-acme-09/a-1.src.tar.gz",
+            "HTTPS://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-09/a-1.src.tar.gz",
+            "http://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-09/a-1.src.tar.gz",
         ] {
             assert!(!crate::plugins_view::is_source_link(url), "{url}");
             let (mut request, _rx) = request(false, None);
@@ -1350,5 +1386,74 @@ mod tests {
         assert_eq!(ui.get_warning(), "");
         ui.invoke_answer(false);
         assert!(!answered(&rx));
+    }
+
+    /// A publisher's name is shown without invisible characters (it cannot read as
+    /// «OpenNCALayer»), whole up to the 128 characters `publishers.json` allows.
+    #[test]
+    fn a_publishers_name_is_shown_visible_and_whole() {
+        let (mut request, _rx) = request(false, None);
+        let named = |ru: &str| {
+            PluginOrigin::Publisher(crate::plugins_view::PublisherOrigin {
+                display: LocalizedText {
+                    ru: ru.to_owned(),
+                    kk: ru.to_owned(),
+                    en: ru.to_owned(),
+                },
+                source: None,
+            })
+        };
+        request.origin_kind = named("Open\u{200B}NCA\u{2060}Layer\u{200F}");
+        // What it reads as is what is drawn; `publishers.json` refuses the name, the window
+        // does not rely on it.
+        assert_eq!(
+            texts(&request, Locale::Ru).origin.publisher,
+            "Издатель: OpenNCALayer"
+        );
+        let long = "А".repeat(128);
+        request.origin_kind = named(&long);
+        assert_eq!(
+            texts(&request, Locale::Ru).origin.publisher,
+            format!("Издатель: {long}")
+        );
+        request.origin_kind = named(&"А".repeat(129));
+        assert!(texts(&request, Locale::Ru).origin.publisher.ends_with('…'));
+    }
+
+    /// A licence is shown whole: a cut could hide a trailing term.
+    #[test]
+    fn the_licence_is_shown_whole() {
+        let licence = format!("Apache-2.0 AND {}", "LicenseRef-Acme-".repeat(14));
+        let (mut request, _rx) = request(false, None);
+        request.origin_kind = PluginOrigin::Publisher(crate::plugins_view::PublisherOrigin {
+            display: LocalizedText::default(),
+            source: Some(crate::plugins_view::SourceArchive {
+                file: "kz.acme.market-1.2.0.src.tar.gz".to_owned(),
+                url: ACME_SOURCE.to_owned(),
+                license: format!("{licence}\u{200B}"),
+            }),
+        });
+        assert!(
+            texts(&request, Locale::En)
+                .origin
+                .source
+                .ends_with(&format!("· {licence}"))
+        );
+    }
+
+    /// A plugin of the catalog whose publisher is not known names nobody, never the project.
+    #[test]
+    fn an_unknown_publisher_names_nobody() {
+        let (mut request, _rx) = request(false, None);
+        request.origin_kind = PluginOrigin::Unknown;
+        for l in ALL {
+            let t = texts(&request, l);
+            assert_eq!(
+                t.origin,
+                crate::plugins_view::OriginTexts::default(),
+                "{l:?}"
+            );
+            assert_eq!(t.warning, "", "{l:?}");
+        }
     }
 }

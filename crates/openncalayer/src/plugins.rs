@@ -46,6 +46,7 @@ use oncl_plugin::{
 };
 use oncl_protocol::{AddInfo, DynamicModules};
 use oncl_ui::PluginActionError;
+use oncl_update::catalog::SourceArchive;
 use oncl_update::tuf::PublisherName;
 use oncl_update::{
     Channel, PluginChoice, PluginName, PluginRelease, Sha256, UpdateError, Version,
@@ -114,29 +115,23 @@ pub enum ReleaseOrigin {
         /// Its display name in `publishers.json` (its name if the catalog does not have it).
         display: Localized,
         /// The source archive of the release, if the catalog in use lists the release.
-        source: Option<SourceLink>,
+        source: Option<SourceArchive>,
     },
+    /// Of the catalog, but its publisher is not known (its record lost it and no catalog
+    /// tells it): nobody is named.
+    Unknown,
     /// A file the user chose.
     LocalFile,
 }
 
-/// The source archive of a publisher's release in the project's Releases.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceLink {
-    /// `<id>-<version>.src.tar.gz`.
-    pub file: String,
-    /// Its copy in the project's Releases, beside the package
-    /// ([`oncl_update::catalog::source_mirror_url`]).
-    pub url: String,
-    /// The license the release declares (SPDX).
-    pub license: String,
-}
-
-/// Who released `release` of `catalog` (none: the release is not known), the plugin of
-/// `publisher` installed from `source`.
+/// Who released `release` of `catalog` (none: the release is not known), the plugin `id`
+/// of `publisher` installed from `source`. A plugin of the catalog whose publisher is not
+/// known is the project's only if it is one of its ports (its prefix, or the owner's index
+/// lists it); otherwise nobody is named.
 fn release_origin(
     catalog: Option<&oncl_update::Catalog>,
     release: Option<&PluginRelease>,
+    id: &str,
     publisher: Option<&PublisherName>,
     source: Source,
 ) -> ReleaseOrigin {
@@ -144,22 +139,23 @@ fn release_origin(
         return ReleaseOrigin::LocalFile;
     }
     let Some(publisher) = publisher else {
-        return ReleaseOrigin::Project;
+        let port = release.is_some_and(|r| r.publisher.is_none())
+            || id.starts_with(oncl_update::catalog::PROJECT_PREFIX)
+            || catalog.is_some_and(|c| c.index().plugins.iter().any(|r| r.id == id));
+        return if port {
+            ReleaseOrigin::Project
+        } else {
+            ReleaseOrigin::Unknown
+        };
     };
-    let source = catalog.zip(release).and_then(|(catalog, release)| {
-        let archive = catalog.source(release)?;
-        Some(SourceLink {
-            file: oncl_update::catalog::source_archive_name(&release.id, &release.version),
-            url: oncl_update::catalog::source_mirror_url(release)?,
-            license: archive.license.clone(),
-        })
-    });
     ReleaseOrigin::Publisher {
         display: catalog.map_or_else(
             || same_name(publisher.as_str()),
             |catalog| publisher_display(catalog, publisher),
         ),
-        source,
+        source: catalog
+            .zip(release)
+            .and_then(|(catalog, release)| catalog.source_archive(release).cloned()),
     }
 }
 
@@ -197,7 +193,7 @@ fn installed_origin(
                 && r.package.sha256 == installed.sha256
         })
     });
-    release_origin(catalog, release, publisher, installed.source)
+    release_origin(catalog, release, id, publisher, installed.source)
 }
 
 /// What the plugins tell the user (tray notifications).
@@ -631,6 +627,7 @@ impl PluginService {
                     origin: release_origin(
                         index.as_deref(),
                         Some(&p.release),
+                        &p.release.id,
                         p.release.publisher.as_ref(),
                         Source::Catalog,
                     ),
@@ -703,6 +700,7 @@ impl PluginService {
                             origin: release_origin(
                                 Some(index.as_ref()),
                                 Some(release),
+                                id,
                                 release.publisher.as_ref(),
                                 Source::Catalog,
                             ),
@@ -787,6 +785,7 @@ impl PluginService {
         let origin_kind = release_origin(
             Some(index.as_ref()),
             Some(&release),
+            id,
             publisher.as_ref(),
             Source::Catalog,
         );
@@ -1669,7 +1668,9 @@ impl PluginService {
 
     /// Asks the user about `package` (released as `origin_kind` says); installs it if they
     /// agree, from `source`, released by `publisher` (a publisher's plugin of the catalog).
-    #[allow(clippy::too_many_arguments)] // each is a fact of the request, none derivable
+    // `origin_kind` follows from `source` for a file only; for the catalog it needs the
+    // release and the catalog the caller holds, so it is passed rather than looked up again.
+    #[allow(clippy::too_many_arguments)]
     fn ask(
         self: &Arc<Self>,
         package: Package,

@@ -20,6 +20,8 @@ export struct InstalledRow {
     update: string,
     // «Издатель: …», or empty for a file.
     publisher: string,
+    // A publisher's plugin: its code was not reviewed; or empty.
+    note: string,
     // A publisher's plugin: «Исходный код: … · licence», a link; or empty.
     source: string,
 }
@@ -27,8 +29,10 @@ export struct InstalledRow {
 export struct AvailableRow {
     title: string,
     details: string,
-    // «Издатель: …».
+    // «Издатель: …», or empty when nobody is known.
     publisher: string,
+    // A publisher's plugin: its code was not reviewed; or empty.
+    note: string,
     // A publisher's plugin: «Исходный код: … · licence», a link; or empty.
     source: string,
     // «Нужен сайту …», or empty.
@@ -143,6 +147,10 @@ export component PluginsWindow inherits Window {
                         text: row.publisher;
                         wrap: word-wrap;
                     }
+                    if row.note != "": Text {
+                        text: row.note;
+                        wrap: word-wrap;
+                    }
                     if row.source != "": HorizontalLayout {
                         alignment: start;
                         LinkButton {
@@ -211,8 +219,12 @@ export component PluginsWindow inherits Window {
                         text: row.details;
                         wrap: word-wrap;
                     }
-                    Text {
+                    if row.publisher != "": Text {
                         text: row.publisher;
+                        wrap: word-wrap;
+                    }
+                    if row.note != "": Text {
+                        text: row.note;
                         wrap: word-wrap;
                     }
 

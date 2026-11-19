@@ -269,7 +269,6 @@ fn publisher_screenshots() {
     });
     let market = text("Маркет", "Маркет", "Market");
     for (locale, code) in [(Locale::Ru, "ru"), (Locale::Kk, "kk"), (Locale::En, "en")] {
-        select_language(locale);
         let request = InstallPluginRequest {
             origin: Some("https://market.acme.kz".to_owned()),
             name: market.clone(),
@@ -287,6 +286,7 @@ fn publisher_screenshots() {
             decide: Box::new(|_| {}),
         };
         let ui = InstallPluginWindow::new().unwrap();
+        select_language(locale);
         install_plugin::fill(&ui, &request, locale);
         ui.show().unwrap();
         save(&last, 560, 520, &format!("install-publisher-{code}"));
@@ -329,6 +329,7 @@ fn publisher_screenshots() {
             }],
         };
         let ui = PluginsWindow::new().unwrap();
+        select_language(locale);
         plugins_view::fill(&ui, &view, locale);
         ui.show().unwrap();
         save(&last, 640, 560, &format!("plugins-publisher-{code}"));

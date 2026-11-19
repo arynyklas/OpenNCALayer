@@ -169,11 +169,12 @@ fn origin(from: ReleaseOrigin) -> PluginOrigin {
         ReleaseOrigin::Publisher { display, source } => PluginOrigin::Publisher(PublisherOrigin {
             display: text(&display),
             source: source.map(|s| SourceArchive {
-                file: s.file,
+                file: s.name,
                 url: s.url,
                 license: s.license,
             }),
         }),
+        ReleaseOrigin::Unknown => PluginOrigin::Unknown,
         ReleaseOrigin::LocalFile => PluginOrigin::LocalFile,
     }
 }
@@ -215,8 +216,8 @@ mod tests {
     fn acme() -> ReleaseOrigin {
         ReleaseOrigin::Publisher {
             display: name(),
-            source: Some(crate::plugins::SourceLink {
-                file: "kz.acme.b-2.0.0.src.tar.gz".to_owned(),
+            source: Some(oncl_update::catalog::SourceArchive {
+                name: "kz.acme.b-2.0.0.src.tar.gz".to_owned(),
                 url: SOURCE_URL.to_owned(),
                 license: "MIT".to_owned(),
             }),

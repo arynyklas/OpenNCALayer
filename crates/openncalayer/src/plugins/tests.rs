@@ -2071,3 +2071,27 @@ fn a_revoked_version_is_off_while_its_replacement_waits_for_the_user() {
     assert!(!sandbox.store().state().plugins[ID].withdrawn);
     assert_eq!(sandbox.modules.names(), [MODULE]);
 }
+
+/// A plugin of the catalog whose publisher is not known is named the project's only if it is
+/// one of its ports; a file is a file whatever its id.
+#[test]
+fn an_unknown_publisher_is_never_named_the_project() {
+    let unknown = release_origin(None, None, "kz.vendor.market", None, Source::Catalog);
+    assert_eq!(unknown, ReleaseOrigin::Unknown);
+    let port = release_origin(
+        None,
+        None,
+        "io.github.arynyklas.openncalayer.port.market",
+        None,
+        Source::Catalog,
+    );
+    assert_eq!(port, ReleaseOrigin::Project);
+    let file = release_origin(
+        None,
+        None,
+        "io.github.arynyklas.openncalayer.port.market",
+        None,
+        Source::Local,
+    );
+    assert_eq!(file, ReleaseOrigin::LocalFile);
+}

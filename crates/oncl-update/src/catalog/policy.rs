@@ -450,7 +450,14 @@ impl RawPublisher {
             (1..=MAX_DISPLAY).contains(&text.chars().count())
                 && !text.trim().is_empty()
                 && !text.chars().any(char::is_control)
-                && !text.to_lowercase().contains("openncalayer")
+                // Compared on letters and digits alone: an invisible or a separating
+                // character (`Open\u{200B}NCALayer`, `Open NCALayer`) does not pass it off.
+                && !text
+                    .chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>()
+                    .to_lowercase()
+                    .contains("openncalayer")
         };
         if ![&display.ru, &display.kk, &display.en]
             .into_iter()

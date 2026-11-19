@@ -21,7 +21,8 @@ export struct OperationBlock {
 
 export component InstallPluginWindow inherits Window {
     title: root.window-title;
-    always-on-top: true;
+    // On top, until the user opens the source link: the browser must come up in front.
+    always-on-top: root.on-top;
     min-width: Metrics.dialog-min-width;
     min-height: Metrics.min-height;
     max-width: 640px;
@@ -53,6 +54,8 @@ export component InstallPluginWindow inherits Window {
     in property <string> publisher-note;
     // A publisher's plugin: «Исходный код: {file} · {licence}», a link; or empty.
     in property <string> source;
+    // Cleared when the source link is opened.
+    in-out property <bool> on-top: true;
     // «Установить» works: set a moment after the window appears.
     in-out property <bool> can-install: false;
     // The buttons are inside the window, whatever the text and the scale.
@@ -96,17 +99,6 @@ export component InstallPluginWindow inherits Window {
                 if root.publisher-note != "": Text {
                     text: root.publisher-note;
                     wrap: word-wrap;
-                    color: Tone.quiet();
-                }
-
-                if root.source != "": HorizontalLayout {
-                    alignment: start;
-                    LinkButton {
-                        text: root.source;
-                        clicked => {
-                            root.open-source();
-                        }
-                    }
                 }
 
                 // What the plugin may do comes first, with the warning above it: the host's
@@ -158,6 +150,18 @@ export component InstallPluginWindow inherits Window {
                 // end, so these break anywhere.
                 for line in root.capabilities: NameText {
                     text: "• " + line;
+                }
+
+                // The source link after the consent: a long id and licence must not push what
+                // the plugin may do out of the first screenful.
+                if root.source != "": HorizontalLayout {
+                    alignment: start;
+                    LinkButton {
+                        text: root.source;
+                        clicked => {
+                            root.open-source();
+                        }
+                    }
                 }
 
                 if root.replacing != "": Text {

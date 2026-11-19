@@ -13,6 +13,7 @@ use slint::{
 };
 
 use crate::foreground;
+use crate::plugins_view::is_source_link;
 use crate::prompter::select_desktop_language;
 use crate::ui::AboutWindow;
 use crate::windows::Desktop;
@@ -215,8 +216,8 @@ fn create(desktop: &Desktop, tab: i32) -> Result<(), PlatformError> {
         ui.set_selected_crate(0);
         show_crate(&ui, 0);
     }
-    ui.on_open_repository(|| open_in_browser(REPOSITORY.to_owned(), "the repository"));
-    ui.on_open_chat(|| open_in_browser(CHAT.to_owned(), "the project chat"));
+    ui.on_open_repository(|| open_in_browser(REPOSITORY, "the repository"));
+    ui.on_open_chat(|| open_in_browser(CHAT, "the project chat"));
     ui.on_dismiss(close);
     ui.window().on_close_requested(|| {
         close();
@@ -246,9 +247,29 @@ fn show_crate(ui: &AboutWindow, i: i32) {
     ui.set_crate_texts(licences.texts_of(i).into());
 }
 
-/// Opens `url` (named `what` in the log) in the default browser, off the event loop (a
-/// browser may take its time to start).
-pub(crate) fn open_in_browser(url: String, what: &'static str) {
+/// Opens `url` (named `what` in the log) in the default browser: one of this window's own
+/// links.
+fn open_in_browser(url: &'static str, what: &'static str) {
+    launch(url.to_owned(), what);
+}
+
+/// Opens the source archive `url` of a plugin in the browser, if it is one of the project's
+/// Releases ([`is_source_link`]); anything else is not opened. The only way a plugin's link
+/// reaches the browser.
+pub(crate) fn open_source_link(url: &str) {
+    if is_source_link(url) {
+        launch(url.to_owned(), "the plugin's source archive");
+    } else {
+        tracing::warn!(
+            url,
+            "not a source archive of the project's Releases: not opened"
+        );
+    }
+}
+
+/// Opens `url` in the default browser, off the event loop (a browser may take its time to
+/// start).
+fn launch(url: String, what: &'static str) {
     let opened = std::thread::Builder::new()
         .name("browser".into())
         .spawn(move || {

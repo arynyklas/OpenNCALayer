@@ -426,12 +426,14 @@ fn plugins_window_escape_closes_a_question_before_the_window() {
         enabled: true,
         update: long_error().into(),
         publisher: long_name().into(),
+        note: long_error().into(),
         source: long_name().into(),
     }])));
     ui.set_available(ModelRc::new(VecModel::from(vec![AvailableRow {
         title: long_name().into(),
         details: long_error().into(),
         publisher: long_name().into(),
+        note: long_error().into(),
         source: long_name().into(),
         needed: long_error().into(),
     }])));
@@ -687,6 +689,73 @@ fn the_consent_of_a_publishers_plugin_is_in_the_first_screenful() {
     for step in UiScale::ALL {
         scale::apply_to(ui.window(), 1.0, step);
         assert!(ui.get_consent_in_view(), "at {}%", step.percent());
+    }
+}
+
+/// The longest a publisher's lines get in practice: the Kazakh note, a name of 61
+/// characters and a source line of about 215 (a long id and version, a long licence). The
+/// consent still comes first: the capabilities without operations, the first operation with
+/// them.
+#[test]
+fn the_consent_stays_in_view_under_the_longest_publisher_lines() {
+    offscreen::install();
+    let name = format!("«{}»ЖШС", "Акме".repeat(14));
+    assert_eq!(name.chars().count(), 61);
+    let source = format!(
+        "Бастапқы код: kz.acme.{}-1.2.0-beta.7.src.tar.gz · {}",
+        "market".repeat(18),
+        "Apache-2.0 OR MIT AND LicenseRef-Acme-Commercial-Terms-2026"
+    );
+    assert!(
+        (200..=230).contains(&source.chars().count()),
+        "{}",
+        source.chars().count()
+    );
+    for operations in [false, true] {
+        let ui = InstallPluginWindow::new().unwrap();
+        ui.set_asker("https://site.test".into());
+        ui.set_plugin("\"Маркет\" (плагиннің өз атауы), 1.2.0 нұсқасы".into());
+        ui.set_publisher(format!("Жариялаушы: {name}").into());
+        ui.set_publisher_note(
+            "Плагинге жариялаушы қол қойған, оны OpenNCALayer жарияланған бастапқы кодтан \
+             құрастырған. OpenNCALayer кодтың өзін тексерген жоқ."
+                .into(),
+        );
+        ui.set_source(source.clone().into());
+        ui.set_may("Плагин мыналарды істей алады:".into());
+        ui.set_capabilities(ModelRc::new(VecModel::from(vec![SharedString::from(
+            "кілтіңізді таңдау және онымен қол қою",
+        )])));
+        if operations {
+            ui.set_operations_heading(
+                "Плагин қолмен жұмыс терезесінде мына әрекеттерді ұсынады:".into(),
+            );
+            let block = OperationBlock {
+                heading: "Әрекет sign-file".into(),
+                lines: ModelRc::new(VecModel::from(vec![SharedString::from(
+                    "CMS қолтаңбасы, бөлек",
+                )])),
+                calls: "Плагин оны былай атайды:".into(),
+                label: "Файлға қол қою".into(),
+                plugin_lines: ModelRc::new(VecModel::from(Vec::<SharedString>::new())),
+            };
+            ui.set_operations(ModelRc::new(VecModel::from(vec![block])));
+        }
+        open(&ui, narrowest(Class::Dialog));
+        for step in UiScale::ALL {
+            scale::apply_to(ui.window(), 1.0, step);
+            if operations {
+                assert!(
+                    ui.get_operations_in_view(),
+                    "operations at {}%",
+                    step.percent()
+                );
+            } else {
+                assert!(ui.get_consent_in_view(), "at {}%", step.percent());
+            }
+            assert!(ui.get_actions_reachable(), "at {}%", step.percent());
+        }
+        ui.hide().unwrap();
     }
 }
 

@@ -18,7 +18,7 @@ use time::OffsetDateTime;
 use crate::foreground;
 use crate::prompter::select_desktop_language;
 use crate::ui::{AvailableRow, InstalledRow, PluginsWindow};
-use crate::view::page_text;
+use crate::view::{display_text, is_invisible};
 use crate::windows::Desktop;
 use crate::worker::{self, JobWindow, Slot, run, with};
 
@@ -183,6 +183,9 @@ pub enum PluginOrigin {
     Project,
     /// A plugin of a publisher of the catalog.
     Publisher(PublisherOrigin),
+    /// Of the catalog, but who released it is not known: nobody is named (never the
+    /// project).
+    Unknown,
     /// A file the user chose: in no catalog, nobody reviewed it.
     LocalFile,
 }
@@ -224,18 +227,6 @@ pub(crate) fn is_source_link(url: &str) -> bool {
     })
 }
 
-/// Opens the source archive `url` in the browser, if it is one ([`is_source_link`]).
-pub(crate) fn open_source(url: &str) {
-    if is_source_link(url) {
-        crate::about_view::open_in_browser(url.to_owned(), "the plugin's source archive");
-    } else {
-        tracing::warn!(
-            url,
-            "not a source archive of the project's Releases: not opened"
-        );
-    }
-}
-
 /// What a window says of a plugin's origin, in one language; empty strings for nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OriginTexts {
@@ -266,30 +257,37 @@ pub(crate) fn origin_texts(origin: &PluginOrigin, l: Locale) -> OriginTexts {
                 .map(|s| {
                     (
                         t.source
-                            .replace(
-                                "{file}",
-                                &crate::install_plugin::cut(&page_text(&s.file), 120),
-                            )
-                            .replace(
-                                "{license}",
-                                &crate::install_plugin::cut(&page_text(&s.license), 80),
-                            ),
+                            .replace("{file}", &display_text(&s.file))
+                            // Whole (it is at most 256 bytes and wraps): a cut could hide a
+                            // trailing `AND LicenseRef-…`.
+                            .replace("{license}", &visible(&s.license)),
                         s.url.clone(),
                     )
                 })
                 .unwrap_or_default();
             OriginTexts {
-                publisher: t.publisher.replace(
-                    "{name}",
-                    &crate::install_plugin::untrusted_label(publisher.display.get(l)),
-                ),
+                publisher: t
+                    .publisher
+                    .replace("{name}", &publisher_name(&publisher.display, l)),
                 note: t.note.to_owned(),
                 source,
                 url,
             }
         }
-        PluginOrigin::LocalFile => OriginTexts::default(),
+        PluginOrigin::Unknown | PluginOrigin::LocalFile => OriginTexts::default(),
     }
+}
+
+/// A publisher's display name in `l` as the windows show it: without invisible or
+/// direction-changing characters (`Open\u{200B}NCALayer` reads as what it is), at most
+/// [`crate::view::MAX_PAGE_TEXT`] characters, the limit of `publishers.json`.
+pub(crate) fn publisher_name(display: &LocalizedText, l: Locale) -> String {
+    display_text(display.get(l))
+}
+
+/// `text` without invisible or direction-changing characters, whole.
+fn visible(text: &str) -> String {
+    text.chars().filter(|c| !is_invisible(*c)).collect()
 }
 
 /// The words of [`origin_texts`] in one language. The Kazakh `note` and `source` are drafts
@@ -547,7 +545,7 @@ fn installed_at(open: &Open, row: i32) -> Option<InstalledPlugin> {
 /// available ones.
 fn open_row_source(open: &Open, row: i32, installed: bool) {
     if let Some(url) = row_source_url(&open.shown.borrow(), row, installed) {
-        open_source(&url);
+        crate::about_view::open_source_link(&url);
     }
 }
 
@@ -906,6 +904,7 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
         enabled: plugin.state != PluginStatus::Disabled,
         update: update.into(),
         publisher: origin.publisher.into(),
+        note: origin.note.into(),
         source: origin.source.into(),
     }
 }
@@ -921,6 +920,7 @@ fn available_row(plugin: &AvailablePlugin, l: Locale) -> AvailableRow {
     AvailableRow {
         title: title(&plugin.name, &plugin.version, l).into(),
         publisher: origin.publisher.into(),
+        note: origin.note.into(),
         source: origin.source.into(),
         details: plugin
             .replaces
@@ -1512,12 +1512,15 @@ mod tests {
         assert_eq!(rows[1].source, "");
         assert_eq!(rows[2].publisher, "Издатель: ТОО «Акме»");
         assert_eq!(rows[2].details, "из каталога");
+        assert!(rows[2].note.ends_with("Сам код OpenNCALayer не проверял."));
+        assert_eq!((rows[0].note.as_str(), rows[1].note.as_str()), ("", ""));
         assert_eq!(
             rows[2].source,
             "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
         );
         let available: Vec<AvailableRow> = ui.get_available().iter().collect();
         assert_eq!(available[0].publisher, "Издатель: ТОО «Акме»");
+        assert_eq!(available[0].note, rows[2].note);
         assert_eq!(
             available[0].source,
             "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"

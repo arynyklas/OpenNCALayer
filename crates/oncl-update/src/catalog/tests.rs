@@ -243,15 +243,12 @@ fn custom_oncl_maps_onto_a_plugin_release() {
 fn a_publisher_release_links_its_source_archive_beside_its_package() {
     let catalog = ecc_catalog(&[entry(MARKET, "1.2.0")]);
     let release = catalog.releases().next().unwrap();
-    let source = catalog.source(release).expect("its source archive");
-    assert_eq!(source.license, "Apache-2.0");
-    assert_eq!(
-        source_archive_name(MARKET, &v("1.2.0")),
-        "kz.ecc.market-1.2.0.src.tar.gz"
-    );
+    let archive = catalog.source_archive(release).expect("its source archive");
+    assert_eq!(archive.license, "Apache-2.0");
+    assert_eq!(archive.name, "kz.ecc.market-1.2.0.src.tar.gz");
     // The release of the package, not `source.fetch`.
     assert_eq!(
-        source_mirror_url(release).unwrap(),
+        archive.url,
         format!(
             "https://github.com/arynyklas/OpenNCALayer/releases/download/pub-ecc-{}/kz.ecc.market-1.2.0.src.tar.gz",
             package_hex()
@@ -259,8 +256,7 @@ fn a_publisher_release_links_its_source_archive_beside_its_package() {
     );
     let owner = Catalog::owner(index(vec![port(PORT, "1.0.0", SIGNER, MARKET)]));
     let port = owner.releases().next().unwrap();
-    assert_eq!(owner.source(port), None);
-    assert_eq!(source_mirror_url(port), None);
+    assert_eq!(owner.source_archive(port), None);
 }
 
 #[test]
@@ -1087,7 +1083,16 @@ fn publishers_json_refuses_what_lies_outside_a_prefix() {
 
 #[test]
 fn publishers_json_refuses_unacceptable_display_names_and_homepages() {
-    for name in ["", " ", "ECC\u{7}", "OpenNCALayer", "ECC openncalayer"] {
+    for name in [
+        "",
+        " ",
+        "ECC\u{7}",
+        "OpenNCALayer",
+        "ECC openncalayer",
+        "Open\u{200B}NCALayer",
+        "Open NCALayer",
+        "Open-NCA\u{2060}Layer",
+    ] {
         let publisher = with(|p| p["display"]["kk"] = json!(name));
         assert!(
             matches!(refused(vec![publisher]), CatalogError::Display(_)),

@@ -46,7 +46,7 @@ pub use policy::{
 };
 pub use release::{
     CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, MAX_URL, MIRROR_BASE,
-    PublisherRelease, PublisherTarget, mirror_url, source_archive_name, source_mirror_url,
+    PublisherRelease, PublisherTarget, SourceArchive, mirror_url,
 };
 pub use source::{ReleaseSource, SourceError, SourceVcs};
 
@@ -84,7 +84,7 @@ pub struct Catalog {
     releases: Vec<PluginRelease>,
     /// The source archives of `releases`, by package URL (unique: it names the package's
     /// sha256).
-    sources: BTreeMap<String, ReleaseSource>,
+    sources: BTreeMap<String, SourceArchive>,
     /// The versions (build metadata cleared) the publishers' verified roles revoke, by
     /// publisher and id, on every channel, whatever their publisher's state: read by the
     /// target path alone.
@@ -174,9 +174,9 @@ impl Catalog {
         self.index.plugins.iter().chain(&self.releases)
     }
 
-    /// The source archive `release` of this catalog was built from: `None` for a release of
-    /// the owner's index or one this catalog does not offer.
-    pub fn source(&self, release: &PluginRelease) -> Option<&ReleaseSource> {
+    /// The source archive `release` of this catalog was built from, as the windows link it:
+    /// `None` for a release of the owner's index or one this catalog does not offer.
+    pub fn source_archive(&self, release: &PluginRelease) -> Option<&SourceArchive> {
         release.publisher.as_ref()?;
         self.sources.get(&release.package.url)
     }
@@ -471,10 +471,11 @@ impl<'r> CatalogBuilder<'r> {
                 });
                 match admitted {
                     Ok(release) if release.offered_on(index.channel) => {
-                        sources.insert(
-                            release.release().package.url.clone(),
-                            release.source().clone(),
-                        );
+                        if let Some(archive) =
+                            SourceArchive::of(release.release(), release.source())
+                        {
+                            sources.insert(release.release().package.url.clone(), archive);
+                        }
                         releases.push(release.into_release());
                     }
                     Ok(_) => {}

@@ -226,8 +226,8 @@ fn a_publishers_plugin_is_offered_installed_with_its_publisher_and_updated() {
     // Releases (not the publisher's `fetch`), its license from the signed release.
     let acme_origin = |version: &str| ReleaseOrigin::Publisher {
         display: acme_display(),
-        source: Some(SourceLink {
-            file: format!("{ACME_ID}-{version}.src.tar.gz"),
+        source: Some(SourceArchive {
+            name: format!("{ACME_ID}-{version}.src.tar.gz"),
             url: package_url_of(version).replace(".onclp", ".src.tar.gz"),
             license: "Apache-2.0".to_owned(),
         }),
