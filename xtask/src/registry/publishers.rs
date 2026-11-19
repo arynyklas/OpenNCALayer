@@ -336,13 +336,16 @@ pub fn publishers_data(publishers: &[SitePublisher], taken: &BTreeSet<String>) -
                 let mut plugin = plugin_data(p, releases);
                 // The bundle's row is the client's hint target: only a publisher that may
                 // still offer the plugin takes it.
-                plugin.anchor = plugin
-                    .replaces
-                    .as_ref()
-                    .map(|r| r.symname.clone())
-                    .filter(|symname| {
-                        p.is_active() && is_symbolic_name(symname) && anchors.insert(symname.clone())
-                    });
+                plugin.anchor =
+                    plugin
+                        .replaces
+                        .as_ref()
+                        .map(|r| r.symname.clone())
+                        .filter(|symname| {
+                            p.is_active()
+                                && is_symbolic_name(symname)
+                                && anchors.insert(symname.clone())
+                        });
                 ids.push(plugin.id.clone());
                 plugins.insert(plugin.id.clone(), plugin);
             }
@@ -481,14 +484,36 @@ fn version_data(publisher: &Publisher, site: &SiteRelease) -> VersionData {
             url: vcs.url.clone(),
             rev: vcs.rev.clone(),
         }),
-        verify: format!(
-            "docker run --rm -v \"$PWD:/in:ro\" {BUILDER_IMAGE}@sha256:{} verify --source \
-             /in/{source_name} --path {} --sha256 {sha256}",
-            source.builder,
-            shell_quoted(&source.path)
+        verify: verify_commands(
+            &source.builder.to_string(),
+            &source_name,
+            &source.path,
+            &sha256,
         ),
         source_name,
     }
+}
+
+/// The commands that rebuild a package from its source archive (`source_name`, downloaded
+/// into the current directory) in the reference builder of digest `builder` and compare it
+/// with `sha256`: the dependencies fetched in one container, the build without a network in
+/// another (the builder's `fetch` and `verify`). Exit 0 means the same bytes.
+fn verify_commands(builder: &str, source_name: &str, path: &str, sha256: &str) -> String {
+    const VOLUME: &str = "oncl-verify-cargo";
+    let image = format!("{BUILDER_IMAGE}@sha256:{builder}");
+    let common = "--read-only --cap-drop=ALL --security-opt no-new-privileges";
+    let mounts = "--mount type=volume,dst=/build -v \"$PWD:/in:ro\"";
+    let args = format!("--source /in/{source_name} --path={}", shell_quoted(path));
+    [
+        format!("docker volume create {VOLUME}"),
+        format!("docker run --rm {common} -v {VOLUME}:/cargo {mounts} {image} fetch {args}"),
+        format!(
+            "docker run --rm --network=none {common} -v {VOLUME}:/cargo:ro {mounts} {image} \
+             verify {args} --sha256 {sha256}"
+        ),
+        format!("docker volume rm {VOLUME}"),
+    ]
+    .join("\n")
 }
 
 /// `text` in single quotes for a POSIX shell, a `'` in it closed, escaped and reopened.
@@ -574,7 +599,11 @@ mod tests {
             warnings.iter().any(|w| w.contains("1.pub-olden.json")),
             "{warnings:?}"
         );
-        assert!(publishers.iter().all(|p| p.publisher.name.as_str() != "olden" || p.releases.is_empty()));
+        assert!(
+            publishers
+                .iter()
+                .all(|p| p.publisher.name.as_str() != "olden" || p.releases.is_empty())
+        );
         // An active publisher's role that cannot be read stops the build.
         fs::write(meta.join("2.pub-acme.json"), "not json").unwrap();
         let err = load(&dir.path().join("publishers"), Some(&repo)).unwrap_err();

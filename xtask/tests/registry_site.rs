@@ -210,23 +210,36 @@ fn fixture_publishers_data_matches_expectations() {
     assert_eq!(v.get("diff_url"), None);
     // A name with a bidi override is left out.
     assert!(plugins.get("kz.acme.bidi").is_none());
-    // The crate's directory is quoted for the shell, whatever it holds.
+    // The crate's directory is quoted for the shell, whatever it holds; the build runs
+    // without a network after a separate fetch.
     let verify = market["versions"][1]["verify"].as_str().unwrap();
+    let lines: Vec<&str> = verify.lines().collect();
+    assert_eq!(lines.len(), 4, "{verify}");
+    assert_eq!(lines[0], "docker volume create oncl-verify-cargo");
+    assert_eq!(lines[3], "docker volume rm oncl-verify-cargo");
+    let image = "ghcr.io/arynyklas/oncl-plugin-builder@sha256:";
     assert!(
-        verify.contains(r#"--path 'it'\''s;$(id)' --sha256"#),
+        lines[1].contains(image)
+            && lines[1].contains(
+                r#" fetch --source /in/kz.acme.market-1.1.0.src.tar.gz --path='it'\''s;$(id)'"#
+            )
+            && !lines[1].contains("--network=none"),
         "{verify}"
     );
     assert!(
-        verify.starts_with(
-            "docker run --rm -v \"$PWD:/in:ro\" ghcr.io/arynyklas/oncl-plugin-builder@sha256:"
-        ),
+        lines[2].starts_with("docker run --rm --network=none ")
+            && lines[2].contains("-v oncl-verify-cargo:/cargo:ro ")
+            && lines[2].ends_with(&format!(
+                r#" verify --source /in/kz.acme.market-1.1.0.src.tar.gz --path='it'\''s;$(id)' --sha256 {}"#,
+                market["versions"][1]["sha256"].as_str().unwrap()
+            )),
         "{verify}"
     );
     assert!(
         sign["versions"][1]["verify"]
             .as_str()
             .unwrap()
-            .contains("--path '' "),
+            .contains("--path='' "),
     );
 
     // The port the active publisher supersedes names its replacement.
