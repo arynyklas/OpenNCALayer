@@ -121,26 +121,29 @@ impl Drop for Volume {
 }
 
 /// `<engine> run` as the reference build runs: without the network, the root file system
-/// read-only, no capabilities, the Cargo home `cargo`, the inputs read-only at `/in` and
-/// `out` at `/out`; the caller adds the work volume, the image and `oncl-pack`'s arguments.
-fn sandboxed(cargo: &Volume, input: &Path, out: Option<&Path>) -> Command {
+/// read-only, no capabilities, the Cargo home `cargo` read-only, the inputs read-only at
+/// `/in`; the caller adds the name or `--rm`, the work volume, the image and `oncl-pack`'s
+/// arguments. Nothing of the host is writable: the package stays in the work volume.
+fn sandboxed(cargo: &Volume, input: &Path) -> Command {
     let mut command = Command::new(engine());
     command
-        .args([
-            "run",
-            "--rm",
-            "--network=none",
-            "--read-only",
-            "--cap-drop=ALL",
-        ])
+        .args(["run", "--network=none", "--read-only", "--cap-drop=ALL"])
         .args(["--security-opt", "no-new-privileges"])
         .args(limits())
-        .args(["--mount", &cargo.at("/cargo")])
+        .args(["--mount", &format!("{},readonly", cargo.at("/cargo"))])
         .args(["--mount", &mount(input, "/in", true)]);
-    if let Some(out) = out {
-        command.args(["--mount", &mount(out, "/out", false)]);
-    }
     command
+}
+
+/// Removes a stopped container with its anonymous volumes when dropped.
+struct Container(String);
+
+impl Drop for Container {
+    fn drop(&mut self) {
+        let _ = Command::new(engine())
+            .args(["rm", "-f", "-v", &self.0])
+            .output();
+    }
 }
 
 #[test]
@@ -190,27 +193,55 @@ fn two_builds_in_the_image_give_the_same_package_and_verify_checks_it() {
             .args(source));
     });
 
+    // The network check: a build where an interface other than `lo` exists does not start.
+    let work = Volume::new("networked");
+    let output = Command::new(engine())
+        .args(["run", "--rm", "--read-only", "--cap-drop=ALL"])
+        .args(["--mount", &format!("{},readonly", cargo.at("/cargo"))])
+        .args(["--mount", &work.at("/build")])
+        .args(["--mount", &mount(&input, "/in", true)])
+        .arg(&image)
+        .arg("build")
+        .args(source)
+        .args(["--out", "/build/out"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success() && stderr.contains("the network is on"),
+        "{stderr}"
+    );
+    drop(work);
+
     let mut packages = Vec::new();
     for run_name in ["first", "second"] {
-        let out = dir.path().join(run_name);
-        fs::create_dir(&out).unwrap();
         let work = Volume::new(run_name);
+        let container = Container(format!("oncl-pack-test-{}-{run_name}", std::process::id()));
         timed(
             &format!("build, {run_name} container (two builds inside)"),
             || {
-                run(sandboxed(&cargo, &input, Some(&out))
+                run(sandboxed(&cargo, &input)
+                    .args(["--name", &container.0])
                     .args(["--mount", &work.at("/build")])
                     .arg(&image)
                     .arg("build")
                     .args(source)
-                    .args(["--out", "/out", "--jobs", "8"]));
+                    .args(["--out", "/build/out", "--jobs", "8"]));
             },
         );
+        // Collected after the container exited, and hashed here: nothing it printed is used.
+        let out = dir.path().join(run_name);
+        run(Command::new(engine()).args([
+            "cp",
+            &format!("{}:/build/out", container.0),
+            &out.display().to_string(),
+        ]));
         let files: Vec<_> = fs::read_dir(&out)
             .unwrap()
             .map(|e| e.unwrap().path())
             .collect();
         assert_eq!(files.len(), 1, "one package: {files:?}");
+        assert!(fs::symlink_metadata(&files[0]).unwrap().is_file());
         packages.push((files[0].clone(), fs::read(&files[0]).unwrap()));
     }
     let (first, second) = (&packages[0], &packages[1]);
@@ -237,12 +268,13 @@ fn two_builds_in_the_image_give_the_same_package_and_verify_checks_it() {
     for (package, same) in [("published", true), ("tampered", false)] {
         let work = Volume::new(&format!("verify-{package}"));
         let output = timed(&format!("verify {package}"), || {
-            sandboxed(&cargo, &input, None)
+            sandboxed(&cargo, &input)
+                .arg("--rm")
                 .args(["--mount", &work.at("/build")])
                 .arg(&image)
                 .arg("verify")
                 .args(source)
-                .args(["--package", &format!("/in/{package}.onclp"), "--offline"])
+                .args(["--package", &format!("/in/{package}.onclp")])
                 .output()
                 .unwrap()
         });

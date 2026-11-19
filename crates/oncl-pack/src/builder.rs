@@ -6,11 +6,14 @@
 //!    it) and the archive unpacked into `<work>/src`;
 //! 2. [`fetch`], with the network: `cargo fetch --locked` into the Cargo home, which runs no
 //!    code of the sources;
-//! 3. [`build`], without the network: `--frozen`, the environment cleared but for
-//!    [`KEPT_VARS`] (`env -i`), `SOURCE_DATE_EPOCH` fixed, the profile forced
-//!    ([`pack::FORCED_PROFILE`]), the paths of the build remapped; twice, in two clean target
-//!    directories, and the two packages compared;
-//! 4. [`verify`]: one build compared with a published package's SHA-256.
+//! 3. [`build`], only without the network (on Linux it refuses to start while any interface
+//!    but `lo` exists): `--frozen`, the environment cleared but for [`KEPT_VARS`] (`env -i`),
+//!    `SOURCE_DATE_EPOCH` fixed, the profile forced ([`pack::FORCED_PROFILE`]), the paths of
+//!    the build remapped; twice, each in a target directory and a `TMPDIR` it creates (and
+//!    refuses to find already there), and the two packages compared. Both builds run in the
+//!    one container and share the Cargo home, which the caller mounts read-only;
+//! 4. [`verify`], likewise without the network, after [`fetch`] in a container of its own:
+//!    one build compared with a published package's SHA-256.
 //!
 //! In the image the paths are fixed (`/build/src`, `/build/target`, `/cargo`), and the image
 //! has no rustup, so a `rust-toolchain.toml` of the sources is never read.
@@ -71,9 +74,9 @@ impl Prepared {
     }
 
     /// The whole environment Cargo and rustc get: [`KEPT_VARS`] that are set,
-    /// `SOURCE_DATE_EPOCH` and, on Unix, `TMPDIR` in the work directory (the image's root file
-    /// system is read-only).
-    fn env(&self) -> anyhow::Result<Vec<(OsString, OsString)>> {
+    /// `SOURCE_DATE_EPOCH` and, on Unix, `TMPDIR` in `<work>/<tmp>`, created here and so empty
+    /// (the image's root file system is read-only).
+    fn env(&self, tmp: &str) -> anyhow::Result<Vec<(OsString, OsString)>> {
         let mut env: Vec<(OsString, OsString)> = KEPT_VARS
             .iter()
             .filter_map(|&key| std::env::var_os(key).map(|value| (key.into(), value)))
@@ -82,8 +85,13 @@ impl Prepared {
             bail!("CARGO_HOME is not set: the build reads the crates `oncl-pack fetch` put there");
         }
         env.push(("SOURCE_DATE_EPOCH".into(), SOURCE_DATE_EPOCH.into()));
+        // No incremental state whatever the sources' profiles say.
+        env.push(("CARGO_INCREMENTAL".into(), "0".into()));
         if cfg!(unix) {
-            env.push(("TMPDIR".into(), self.work.join("tmp").into_os_string()));
+            let tmp = self.work.join(tmp);
+            fs::create_dir(&tmp)
+                .with_context(|| format!("creating {} (it must not exist yet)", tmp.display()))?;
+            env.push(("TMPDIR".into(), tmp.into_os_string()));
         }
         Ok(env)
     }
@@ -108,8 +116,6 @@ pub fn prepare(archive: &Path, crate_path: &str, work: &Path) -> anyhow::Result<
     let src = work.join("src");
     tree.unpack(&src)
         .context("unpacking the archive (the work directory must be fresh)")?;
-    let tmp = work.join("tmp");
-    fs::create_dir_all(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
     let crate_dir = if crate_path.is_empty() {
         src.clone()
     } else {
@@ -171,7 +177,7 @@ fn check_crate(tree: &Tree, crate_path: &str) -> anyhow::Result<()> {
 pub fn fetch(prepared: &Prepared) -> anyhow::Result<()> {
     let status = std::process::Command::new("cargo")
         .env_clear()
-        .envs(prepared.env()?)
+        .envs(prepared.env("tmp-fetch")?)
         .args(["fetch", "--locked", "--manifest-path"])
         .arg(prepared.crate_dir.join("Cargo.toml"))
         .status()
@@ -182,10 +188,22 @@ pub fn fetch(prepared: &Prepared) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// One reference build in `<work>/<target>`: the target directory and every path of the
-/// sources are remapped to fixed names, so two target directories give the same bytes.
-fn build_once(prepared: &Prepared, mode: &Mode, target: &str) -> anyhow::Result<Packed> {
+/// One reference build in `<work>/<target>` with its temporary files in `<work>/tmp-<target>`,
+/// both created here and so empty: nothing an earlier build left reaches this one. The target
+/// directory and every path of the sources are remapped to fixed names, so two target
+/// directories give the same bytes.
+fn build_once(
+    prepared: &Prepared,
+    jobs: Option<NonZeroU32>,
+    target: &str,
+) -> anyhow::Result<Packed> {
     let target_dir = prepared.work.join(target);
+    fs::create_dir(&target_dir)
+        .with_context(|| format!("creating {} (it must not exist yet)", target_dir.display()))?;
+    let mode = Mode::Reference {
+        env: prepared.env(&format!("tmp-{target}"))?,
+        jobs,
+    };
     pack::pack(&Build {
         crate_dir: &prepared.crate_dir,
         target_dir: &target_dir,
@@ -194,7 +212,7 @@ fn build_once(prepared: &Prepared, mode: &Mode, target: &str) -> anyhow::Result<
             (prepared.src.clone(), "/workspace"),
             (prepared.crate_dir.clone(), "/plugin"),
         ],
-        mode,
+        mode: &mode,
     })
     .map_err(|e| {
         e.context(
@@ -203,11 +221,29 @@ fn build_once(prepared: &Prepared, mode: &Mode, target: &str) -> anyhow::Result<
     })
 }
 
-fn reference(prepared: &Prepared, jobs: Option<NonZeroU32>) -> anyhow::Result<Mode> {
-    Ok(Mode::Reference {
-        env: prepared.env()?,
-        jobs,
-    })
+/// Refuses to build where the network is reachable: the build runs the sources' build
+/// scripts and procedural macros, so it belongs in a container started with
+/// `--network=none`, whose only interface is `lo`. Checked on Linux, through
+/// `/sys/class/net`; elsewhere (not the reference build) it is the caller's to ensure.
+fn require_offline() -> anyhow::Result<()> {
+    if !cfg!(target_os = "linux") {
+        return Ok(());
+    }
+    let interfaces = match fs::read_dir("/sys/class/net") {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|e| e.file_name().to_string_lossy().into_owned()))
+            .collect::<Result<Vec<_>, _>>()
+            .context("reading /sys/class/net")?,
+        Err(e) => return Err(e).context("reading /sys/class/net"),
+    };
+    let other: Vec<&String> = interfaces.iter().filter(|name| *name != "lo").collect();
+    if !other.is_empty() {
+        bail!(
+            "the network is on (interfaces {other:?}): the build runs code of the sources, so \
+             it runs only in a container without the network (`docker run --network=none`)"
+        );
+    }
+    Ok(())
 }
 
 /// Builds the package twice, in two clean target directories, and returns it if both
@@ -218,9 +254,9 @@ fn reference(prepared: &Prepared, jobs: Option<NonZeroU32>) -> anyhow::Result<Mo
 /// A build fails, or the two builds differ: something in the sources or their crates does
 /// not build reproducibly.
 pub fn build(prepared: &Prepared, jobs: Option<NonZeroU32>) -> anyhow::Result<Packed> {
-    let mode = reference(prepared, jobs)?;
-    let first = build_once(prepared, &mode, "target")?;
-    let second = build_once(prepared, &mode, "target-again")?;
+    require_offline()?;
+    let first = build_once(prepared, jobs, "target")?;
+    let second = build_once(prepared, jobs, "target-again")?;
     if first.bytes != second.bytes {
         bail!(
             "two builds of the same sources differ ({} and {}): the plugin does not build \
@@ -247,7 +283,8 @@ pub fn verify(
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         bail!("{expected:?} is not a SHA-256 (64 hexadecimal digits)");
     }
-    let packed = build_once(prepared, &reference(prepared, jobs)?, "target")?;
+    require_offline()?;
+    let packed = build_once(prepared, jobs, "target")?;
     let built = sha256_hex(&packed.bytes);
     if built != expected {
         bail!(

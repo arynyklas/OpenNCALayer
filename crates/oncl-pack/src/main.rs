@@ -56,7 +56,9 @@ enum Command {
         #[arg(long)]
         jobs: Option<NonZeroU32>,
     },
-    /// Rebuilds the package from the archive and compares it with a published one.
+    /// Rebuilds the package from the archive, without the network, and compares it with a
+    /// published one. The crates must be in `CARGO_HOME` already: run `fetch` first, in a
+    /// container of its own.
     Verify {
         #[command(flatten)]
         input: Input,
@@ -66,9 +68,6 @@ enum Command {
         /// The published package.
         #[arg(long)]
         package: Option<PathBuf>,
-        /// The crates are in `CARGO_HOME` already (`oncl-pack fetch`): no download.
-        #[arg(long)]
-        offline: bool,
         /// Cargo's `--jobs` (the bytes do not depend on it).
         #[arg(long)]
         jobs: Option<NonZeroU32>,
@@ -131,7 +130,6 @@ fn main() -> anyhow::Result<()> {
             input,
             sha256,
             package,
-            offline,
             jobs,
         } => {
             let expected = match (sha256, package) {
@@ -142,9 +140,6 @@ fn main() -> anyhow::Result<()> {
                 _ => unreachable!("clap requires one of --sha256 and --package"),
             };
             let prepared = builder::prepare(&input.source, &input.path, &input.work)?;
-            if !offline {
-                builder::fetch(&prepared)?;
-            }
             let packed = builder::verify(&prepared, &expected, jobs)?;
             println!(
                 "{}: the rebuild from the archive (sha256 {}) gives the same bytes, sha256 {}",

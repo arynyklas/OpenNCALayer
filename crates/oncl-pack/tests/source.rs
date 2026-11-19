@@ -261,7 +261,7 @@ fn a_directory_keeps_execute_bits_and_refuses_links() {
     assert_eq!(mode & 0o777, 0o755);
     std::os::unix::fs::symlink("Cargo.toml", dir.path().join("link")).unwrap();
     let error = Tree::from_dir(dir.path()).unwrap_err().to_string();
-    assert!(error.contains("link: a symbolic link"), "{error}");
+    assert!(error.contains("\"link\": a symbolic link"), "{error}");
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -343,7 +343,7 @@ fn a_git_revision_with_a_link_or_a_submodule_is_refused() {
     );
     git(dir.path(), &["commit", "-q", "-m", "link"]);
     let error = Tree::from_git(dir.path(), "HEAD").unwrap_err().to_string();
-    assert!(error.contains("link: a symbolic link"), "{error}");
+    assert!(error.contains("\"link\": a symbolic link"), "{error}");
     git(dir.path(), &["rm", "-q", "--cached", "link"]);
     let commit = git(dir.path(), &["rev-parse", "HEAD"]);
     git(
@@ -357,7 +357,7 @@ fn a_git_revision_with_a_link_or_a_submodule_is_refused() {
     );
     git(dir.path(), &["commit", "-q", "-m", "submodule"]);
     let error = Tree::from_git(dir.path(), "HEAD").unwrap_err().to_string();
-    assert!(error.contains("vendored: a submodule"), "{error}");
+    assert!(error.contains("\"vendored\": a submodule"), "{error}");
 }
 
 #[test]
@@ -376,9 +376,25 @@ fn paths_outside_the_rules_are_refused() {
         "..",
         "a\\b",
         "a\0b",
+        "C:.gitconfig",
+        "x/C:y",
+        "a:b",
+        "a\x1bb",
+        "a\nb",
+        "a\x7fb",
+        "CON",
+        "nul.txt",
+        "dir/Com1.rs",
+        "lpt9",
+        "a.",
+        "dir./x",
+        "a ",
         &"x".repeat(MAX_PATH - 3),
     ] {
         assert!(Tree::new().insert(bad, file()).is_err(), "{bad:?}");
+    }
+    for good in [".gitignore", "a.b/c", "console.rs", "com10", "lpt", "nul_x"] {
+        Tree::new().insert(good, file()).unwrap();
     }
     Tree::new()
         .insert(&"x".repeat(MAX_PATH - 4), file())
@@ -518,6 +534,27 @@ fn a_broken_or_foreign_archive_is_refused() {
             edited(|tar| {
                 let at = header_of(tar, "src/LICENSE");
                 set_field(tar, at, 100..108, b"0000600\0");
+            }),
+        ),
+        (
+            "a drive-relative name",
+            edited(|tar| {
+                let at = header_of(tar, "src/LICENSE");
+                set_field(tar, at, 0..16, b"src/C:.gitconfig");
+            }),
+        ),
+        (
+            "an escape character",
+            edited(|tar| {
+                let at = header_of(tar, "src/LICENSE");
+                set_field(tar, at, 0..11, b"src/LI\x1b[31m");
+            }),
+        ),
+        (
+            "a device name",
+            edited(|tar| {
+                let at = header_of(tar, "src/LICENSE");
+                set_field(tar, at, 0..11, b"src/nul.txt");
             }),
         ),
     ];

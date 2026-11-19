@@ -28,6 +28,11 @@ pub const FORCED_PROFILE: [&str; 4] = [
     "profile.release.strip=true",
 ];
 
+/// The rustc flags the reference build appends after the remaps: a crate's per-package
+/// profile overrides (`[profile.release.package.*]`) win over [`FORCED_PROFILE`], but these
+/// come after the profile's flags on rustc's command line, and for `-C` the last one wins.
+pub const FORCED_RUSTC: [&str; 3] = ["-Ccodegen-units=1", "-Cdebuginfo=0", "-Cstrip=symbols"];
+
 /// How Cargo runs.
 #[derive(Debug, Clone)]
 pub enum Mode {
@@ -207,7 +212,7 @@ pub fn pack(build: &Build) -> anyhow::Result<Packed> {
         .arg(build.target_dir)
         // The package is published, so the paths of the machine that built it (source files
         // named in panic locations) are replaced by fixed names.
-        .env("CARGO_ENCODED_RUSTFLAGS", remap_flags(build)?);
+        .env("CARGO_ENCODED_RUSTFLAGS", rustflags(build)?);
     match mode {
         Mode::Workspace => {
             cargo.arg("--locked");
@@ -245,15 +250,34 @@ pub fn pack(build: &Build) -> anyhow::Result<Packed> {
     Ok(Packed { manifest, bytes })
 }
 
+/// `CARGO_ENCODED_RUSTFLAGS`: the remaps, then in the reference build [`FORCED_RUSTC`].
+fn rustflags(build: &Build) -> anyhow::Result<String> {
+    let mut flags = remap_flags(build)?;
+    if let Mode::Reference { .. } = build.mode {
+        for flag in FORCED_RUSTC {
+            flags.push('\u{1f}');
+            flags.push_str(flag);
+        }
+    }
+    Ok(flags)
+}
+
 /// `--remap-path-prefix` flags (separated by 0x1f, as `CARGO_ENCODED_RUSTFLAGS` takes them)
 /// for the directories whose paths end up in a module: the Cargo home (registry sources),
 /// the toolchain, then [`Build::remaps`].
 fn remap_flags(build: &Build) -> anyhow::Result<String> {
+    // The toolchain rustup would pick for the crate (`cargo xtask plugin pack`); the
+    // reference build asks outside the sources, so no toolchain file of theirs is seen even
+    // where rustup is installed.
+    let dir = match build.mode {
+        Mode::Workspace => build.crate_dir,
+        Mode::Reference { .. } => build.target_dir,
+    };
     let sysroot = build
         .mode
         .command("rustc")
         .args(["--print", "sysroot"])
-        .current_dir(build.crate_dir)
+        .current_dir(dir)
         .output()
         .context("asking rustc for its sysroot")?;
     if !sysroot.status.success() {

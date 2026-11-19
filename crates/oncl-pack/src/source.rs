@@ -224,17 +224,17 @@ impl Tree {
                 "100755" => true,
                 "120000" => {
                     return Err(invalid(format!(
-                        "{path}: a symbolic link; the archive holds files and directories only"
+                        "{path:?}: a symbolic link; the archive holds files and directories only"
                     )));
                 }
                 "160000" => {
                     return Err(invalid(format!(
-                        "{path}: a submodule; the archive holds the files themselves"
+                        "{path:?}: a submodule; the archive holds the files themselves"
                     )));
                 }
                 other => {
                     return Err(ArchiveError::Git(format!(
-                        "{path}: unexpected mode {other}"
+                        "{path:?}: unexpected mode {other}"
                     )));
                 }
             };
@@ -346,6 +346,14 @@ impl Tree {
         fs::create_dir(dest).map_err(io_error(dest))?;
         for (path, file) in self.entries().into_iter().skip(1) {
             let relative = &path[ROOT.len() + 1..];
+            if !Path::new(relative)
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(invalid(format!(
+                    "{relative:?}: not a plain relative path here"
+                )));
+            }
             let target = dest.join(relative);
             match file {
                 None => {
@@ -353,7 +361,14 @@ impl Tree {
                     set_mode(&target, true)?;
                 }
                 Some(file) => {
-                    fs::write(&target, &file.data).map_err(io_error(&target))?;
+                    // A new file only: a name that the file system folds onto another
+                    // (case, normalisation) is refused instead of overwriting it.
+                    fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&target)
+                        .and_then(|mut out| out.write_all(&file.data))
+                        .map_err(io_error(&target))?;
                     set_mode(&target, file.executable)?;
                 }
             }
@@ -394,20 +409,53 @@ fn check_path(path: &str) -> Result<(), ArchiveError> {
     }
     if ROOT.len() + 1 + path.len() > MAX_PATH {
         return Err(invalid(format!(
-            "{path}: the path is longer than {MAX_PATH} bytes with {ROOT}/"
+            "{path:?}: the path is longer than {MAX_PATH} bytes with {ROOT}/"
         )));
     }
     for component in path.split('/') {
         if component.is_empty() || component == "." || component == ".." {
             return Err(invalid(format!(
-                "{path}: empty, `.` and `..` components are not allowed"
+                "{path:?}: empty, `.` and `..` components are not allowed"
             )));
         }
-        if component.contains(['\\', '\0']) {
-            return Err(invalid(format!("{path}: `\\` and NUL are not allowed")));
+        if component
+            .chars()
+            .any(|c| matches!(c, '\\' | ':') || c.is_ascii_control())
+        {
+            return Err(invalid(format!(
+                "{path:?}: `\\`, `:` and control characters are not allowed"
+            )));
+        }
+        if component.ends_with(['.', ' ']) {
+            return Err(invalid(format!(
+                "{path:?}: a name may not end with `.` or a space"
+            )));
+        }
+        if is_reserved(component) {
+            return Err(invalid(format!(
+                "{path:?}: {component:?} is a device name on Windows"
+            )));
         }
     }
     Ok(())
+}
+
+/// The device names Windows reserves in every directory, with any extension and in any
+/// case (`CON`, `nul.txt`, `Com1.rs`).
+fn is_reserved(component: &str) -> bool {
+    let stem = component.split('.').next().unwrap_or(component).trim_end();
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+    ) || ["COM", "LPT"].iter().any(|prefix| {
+        upper.strip_prefix(prefix).is_some_and(|n| {
+            matches!(
+                n,
+                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"
+            )
+        })
+    })
 }
 
 /// Checks the path of a crate directory under `src/`: `""` for `src/` itself, otherwise
@@ -446,7 +494,7 @@ fn walk(dir: &Path, prefix: &str, tree: &mut Tree) -> Result<(), ArchiveError> {
         let kind = meta.file_type();
         if kind.is_symlink() {
             return Err(invalid(format!(
-                "{relative}: a symbolic link; the archive holds files and directories only"
+                "{relative:?}: a symbolic link; the archive holds files and directories only"
             )));
         } else if kind.is_dir() {
             walk(&path, &relative, tree)?;
@@ -464,7 +512,7 @@ fn walk(dir: &Path, prefix: &str, tree: &mut Tree) -> Result<(), ArchiveError> {
             )?;
         } else {
             return Err(invalid(format!(
-                "{relative}: neither a file nor a directory"
+                "{relative:?}: neither a file nor a directory"
             )));
         }
     }
@@ -752,27 +800,27 @@ fn read_tar(tar: &[u8]) -> Result<Tree, ArchiveError> {
             b'5' => {
                 let path = name
                     .strip_suffix('/')
-                    .ok_or_else(|| invalid(format!("{name}: a directory without its `/`")))?;
+                    .ok_or_else(|| invalid(format!("{name:?}: a directory without its `/`")))?;
                 if path != ROOT {
                     check_path(path.strip_prefix("src/").ok_or_else(|| {
-                        invalid(format!("{path}: outside the root directory {ROOT}/"))
+                        invalid(format!("{path:?}: outside the root directory {ROOT}/"))
                     })?)?;
                 }
                 if size != 0 || mode != MODE_EXEC {
                     return Err(invalid(format!(
-                        "{path}: a directory must be empty and 0755"
+                        "{path:?}: a directory must be empty and 0755"
                     )));
                 }
             }
             b'0' => {
                 let path = name.strip_prefix("src/").ok_or_else(|| {
-                    invalid(format!("{name}: outside the root directory {ROOT}/"))
+                    invalid(format!("{name:?}: outside the root directory {ROOT}/"))
                 })?;
                 let executable = match mode {
                     MODE_FILE => false,
                     MODE_EXEC => true,
                     other => {
-                        return Err(invalid(format!("{name}: mode {other:o}, not 644 or 755")));
+                        return Err(invalid(format!("{name:?}: mode {other:o}, not 644 or 755")));
                     }
                 };
                 tree.insert(
@@ -785,7 +833,7 @@ fn read_tar(tar: &[u8]) -> Result<Tree, ArchiveError> {
             }
             other => {
                 return Err(invalid(format!(
-                    "{name}: an entry of type {:?}; the archive holds files and directories only",
+                    "{name:?}: an entry of type {:?}; the archive holds files and directories only",
                     char::from(other)
                 )));
             }

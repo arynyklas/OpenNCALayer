@@ -4,17 +4,25 @@ name: Plugin builder
 # image of xtask/assets/plugin-builder/Dockerfile at the commit the workflow runs on, pushed as
 # ghcr.io/arynyklas/oncl-plugin-builder:<commit> with a build provenance attestation.
 #
-# Run by hand on main only. Before anything is pushed, a port of this repository is built in
-# the image twice, in fresh containers without the network, and the two packages must be the
-# same (`oncl-pack`'s ignored test `image`), and `oncl-pack verify` must accept the package and
-# refuse it with one byte changed. The registry login comes after that step, so the code those
-# builds run never sees a credential.
+# Run by hand. Two jobs:
 #
-# Publishing the image makes it usable by nobody yet: the digest this job prints becomes a
-# builder only once the owner's pull request adds it to publishers/builders.toml. Pushing again
-# from another commit gives another digest; listed digests are never replaced or removed.
+# - `test` (contents: read, no token able to write or attest): builds the image, builds a port
+#   of this repository in it twice in fresh containers without the network and checks the two
+#   packages are the same and `oncl-pack verify` accepts the package and refuses it with one
+#   byte changed (`oncl-pack`'s ignored test `image`). This job compiles and runs code (build
+#   scripts of the test's crates, the port's in the containers), so it holds nothing worth
+#   stealing; the image leaves it as an artifact (`docker save`).
+# - `publish` (environment `plugin-builder`, which admits main only; packages: write,
+#   id-token: write, attestations: write): loads that image, pushes it and attests it. No
+#   cargo, no checkout, no code of the repository runs there.
 #
-# Third-party actions are pinned to a commit, with the release tag in a comment.
+# The environment is created once by the owner (docs/dev/publishers.md, «Образ сборщика»); a
+# dispatch from any other branch stops at it. Publishing the image makes it usable by nobody
+# yet: the digest the job prints becomes a builder only once the owner's pull request adds it
+# to publishers/builders.toml. Listed digests are never replaced or removed.
+#
+# Third-party actions, and every action of the job that attests, are pinned to a commit, with
+# the release tag in a comment.
 on:
   workflow_dispatch:
 
@@ -30,20 +38,12 @@ env:
   IMAGE: ghcr.io/arynyklas/oncl-plugin-builder
 
 jobs:
-  image:
+  test:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     permissions:
       contents: read
-      packages: write
-      id-token: write
-      attestations: write
     steps:
-      - name: The workflow runs on main
-        if: github.ref != 'refs/heads/main'
-        run: |
-          echo "::error::the plugin builder is published from main only, not $GITHUB_REF"
-          exit 1
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
@@ -55,6 +55,16 @@ jobs:
             -f xtask/assets/plugin-builder/Dockerfile \
             -t "$IMAGE:$GITHUB_SHA" .
           echo "image size: $(docker image inspect --format '{{.Size}}' "$IMAGE:$GITHUB_SHA") bytes"
+          docker save --output "$RUNNER_TEMP/image.tar" "$IMAGE:$GITHUB_SHA"
+          sha256sum "$RUNNER_TEMP/image.tar" | tee "$RUNNER_TEMP/image.tar.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: image
+          path: |
+            ${{ runner.temp }}/image.tar
+            ${{ runner.temp }}/image.tar.sha256
+          if-no-files-found: error
+          retention-days: 1
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Two builds of a port in the image are the same
@@ -62,6 +72,27 @@ jobs:
         env:
           ONCL_BUILDER_IMAGE: ${{ env.IMAGE }}:${{ github.sha }}
         run: cargo test --locked -p oncl-pack --test image -- --ignored --nocapture
+
+  publish:
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: plugin-builder
+    permissions:
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: image
+          path: ${{ runner.temp }}/image
+      - name: Load the tested image
+        run: |
+          cd "$RUNNER_TEMP/image"
+          sed "s#  .*/image.tar\$#  image.tar#" image.tar.sha256 | sha256sum -c -
+          docker load --input image.tar
+          docker image inspect "$IMAGE:$GITHUB_SHA" > /dev/null
       - name: Log in to ghcr.io
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,7 +110,7 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Build provenance
-        uses: actions/attest-build-provenance@v4
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.IMAGE }}
           subject-digest: ${{ steps.push.outputs.digest }}
@@ -88,7 +119,7 @@ jobs:
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          rust="$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
+          rust="$(docker run --rm --network=none --entrypoint rustc "$IMAGE:$GITHUB_SHA" --version | cut -d' ' -f2)"
           {
             echo "Pushed \`$IMAGE@$DIGEST\` (tag \`$GITHUB_SHA\`). To make it a builder, the owner appends to \`publishers/builders.toml\` by a pull request:"
             echo
