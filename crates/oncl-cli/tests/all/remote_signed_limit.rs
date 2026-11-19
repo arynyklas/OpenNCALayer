@@ -4,7 +4,7 @@
 //! bounded by `container_bytes`. Hostile input past the document allowance is still
 //! `InputLimit`. The real `oncl` process against a real loopback server, limits scaled to a
 //! megabyte.
-mod remote_support;
+use crate::remote_support;
 use remote_support::*;
 use std::{
     path::{Path, PathBuf},

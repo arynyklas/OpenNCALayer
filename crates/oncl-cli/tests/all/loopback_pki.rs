@@ -2,8 +2,8 @@
 //! desktop's signing (a root, a signing key, an OCSP responder). Everything is generated here
 //! and trusts nothing real. It runs until its stdin closes.
 //!
-//! `LOOPBACK_PKI_DIR=<directory> cargo test -p oncl-cli --test loopback_pki -- --ignored --nocapture`
-mod support;
+//! `LOOPBACK_PKI_DIR=<directory> cargo test -p oncl-cli --test all -- --ignored loopback_pki:: --nocapture`
+use crate::support;
 
 use std::io::Read;
 

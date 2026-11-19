@@ -3,7 +3,7 @@
 //! issued by the loopback CA, and by Java's own `keytool` (an independent JKS
 //! writer AND reader): the Python-written JKS must be listed and converted by
 //! keytool, and a keytool-written JKS must sign strictly through the CLI.
-mod support;
+use crate::support;
 use der::Encode;
 use std::{path::PathBuf, process::Command};
 use support::*;

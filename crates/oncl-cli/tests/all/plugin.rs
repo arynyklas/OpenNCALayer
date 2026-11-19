@@ -1,5 +1,5 @@
 //! Real WASM plugin processes: operator grants, key bindings, typed refusals.
-mod support;
+use crate::support;
 use oncl_pdk::abi::{self, Import};
 use support::*;
 

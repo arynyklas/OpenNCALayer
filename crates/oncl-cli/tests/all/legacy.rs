@@ -1,6 +1,6 @@
 //! Legacy `XmlSignSpec` / `XadesSpec` host options through the real `oncl`
 //! binary, strict loopback PKI and an independent lxml/cryptography oracle.
-mod support;
+use crate::support;
 use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;

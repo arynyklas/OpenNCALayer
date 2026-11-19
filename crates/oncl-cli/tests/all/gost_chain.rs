@@ -2,7 +2,7 @@
 //! through the real binary. There is no independent GOST oracle on this
 //! machine (OpenSSL has no GOST engine installed): SDK sign + SDK verify with
 //! negative contrasts, as for every GOST case.
-mod support;
+use crate::support;
 use support::*;
 
 fn trust(w: &World) -> Vec<&str> {

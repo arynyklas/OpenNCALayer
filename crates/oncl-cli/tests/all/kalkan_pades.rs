@@ -4,7 +4,7 @@
 //! does and report the signing-time attribute as a PAdES profile finding.
 //!
 //! The documents are the checksum-pinned NCANode fixtures (`cargo xtask fetch-fixtures`).
-mod support;
+use crate::support;
 use serde_json::Value;
 use support::*;
 

@@ -1,6 +1,6 @@
 //! Regressions for the XML/XAdES interop defects D2, D3 and D4 found by the independent
 //! interop matrix (NCANode, lxml, OpenSSL). Each runs the real `oncl` binary.
-mod support;
+use crate::support;
 use der::Encode;
 use std::{path::Path, process::Command};
 use support::*;

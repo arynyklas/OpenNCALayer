@@ -1,5 +1,5 @@
 //! Operator-configured named key sources through the real `oncl` binary.
-mod support;
+use crate::support;
 use der::Encode;
 use serde_json::json;
 use std::path::{Path, PathBuf};

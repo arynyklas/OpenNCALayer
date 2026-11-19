@@ -1,7 +1,7 @@
 //! Real `oncl batch` processes: mixed ordered items, exits 0/2/3/4, observable
 //! hash digests, owned-output publication and honest per-item private-use
 //! state. Real Ctrl-Break (130) and deadline (4) are in `batch_signal.rs`.
-mod support;
+use crate::support;
 use serde_json::json;
 use support::*;
 

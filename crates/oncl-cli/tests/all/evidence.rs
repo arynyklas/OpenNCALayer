@@ -1,7 +1,7 @@
 //! CAdES LT/LTA signing and keyless evidence extension through the real binary,
 //! with operator-supplied public validation material (certificates, OCSP
 //! responses) and loopback TSA. Independent oracle: `openssl cms -verify`.
-mod support;
+use crate::support;
 use der::Encode;
 use oncl_pki::{
     http::{GetOptions, HttpRequest, HttpTransport},

@@ -4,7 +4,7 @@
 //! the loopback OCSP responder holds the signer's status). A genuinely full
 //! volume cannot be created without elevation on the test machine; these inject
 //! the same `io::Error` on the same write/publish paths.
-mod support;
+use crate::support;
 use std::{
     io::Read,
     process::{Command, Stdio},

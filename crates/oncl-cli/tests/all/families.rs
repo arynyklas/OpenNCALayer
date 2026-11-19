@@ -1,7 +1,7 @@
 //! Keyless/standalone families and PDF through the real binary: RFC 3161
 //! timestamp acquire/verify, CAdES evidence extension, PDF and PAdES sign +
 //! verify with an independent ByteRange/OpenSSL oracle.
-mod support;
+use crate::support;
 use std::{path::Path, process::Command};
 use support::*;
 
