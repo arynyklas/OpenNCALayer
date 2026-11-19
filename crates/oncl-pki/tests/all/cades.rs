@@ -1,5 +1,4 @@
 //! C03 real signature contract; no token-presence level assertions.
-#![cfg(feature = "testing")]
 use der::asn1::{AnyRef, UtcTime};
 use der::{Decode, Encode, Reader as _, SliceReader};
 use oncl_pki::{
@@ -99,7 +98,7 @@ impl Fixture {
     fn new() -> Self {
         let mut root = entry("user-rsa-sign");
         root.key = PrivateKey::from_pkcs8_der(
-            include_bytes!("../../../fixtures/openssl/rsa.pk8.der"),
+            include_bytes!("../../../../fixtures/openssl/rsa.pk8.der"),
             None,
         )
         .unwrap();

@@ -1,7 +1,5 @@
 //! F04 initial TESTS/API gate. No implementation stubs. Controller owns RED/GREEN.
 //! Raw coverage streams here are mechanism fixtures, NOT standardized AdES containers.
-#![cfg(feature = "testing")]
-
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use der::asn1::{AnyRef, OctetString, UtcTime};
 use der::{Decode, Encode, Reader, SliceReader};

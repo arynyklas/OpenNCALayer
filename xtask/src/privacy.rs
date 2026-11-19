@@ -115,8 +115,12 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
         'C',
         &[r"\Data\OpenNCALayer", r"\\Data\\OpenNCALayer"],
     ),
-    ("crates/oncl-pki/tests/csr.rs", 'C', &[r"\\Users\\Тест\\"]),
-    ("crates/oncl-pki/tests/keystore.rs", 'C', &[r"\\keys"]),
+    (
+        "crates/oncl-pki/tests/all/csr.rs",
+        'C',
+        &[r"\\Users\\Тест\\"],
+    ),
+    ("crates/oncl-pki/tests/all/keystore.rs", 'C', &[r"\\keys"]),
     (
         "crates/oncl-plugin/tests/package.rs",
         'C',
