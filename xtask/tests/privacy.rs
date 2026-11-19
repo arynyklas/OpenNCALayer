@@ -247,7 +247,7 @@ fn privacy_rejects_machine_path() {
     );
     // An excepted file: its listed literal passes, another path does not.
     repo.write(
-        "crates/oncl-pki/tests/keystore.rs",
+        "crates/oncl-pki/tests/all/keystore.rs",
         format!(
             "let a = \"{}\";\nlet b = \"{}\";\n",
             drive('C', r"\\keys"),
@@ -261,7 +261,7 @@ fn privacy_rejects_machine_path() {
         summary(&repo.check(&Options::default())),
         [
             file(
-                "crates/oncl-pki/tests/keystore.rs",
+                "crates/oncl-pki/tests/all/keystore.rs",
                 Some(2),
                 Rule::MachinePath
             ),
