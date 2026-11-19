@@ -80,6 +80,9 @@ const MAX_DISPLAY: usize = 128;
 /// The longest URL or contact line.
 const MAX_URL: usize = 2048;
 
+/// The most `binary_files` a publisher lists.
+const MAX_BINARY_FILES: usize = 256;
+
 /// Whether a publisher's plugins are offered (`docs/design/publishers.md`, "Состояния
 /// издателя"). Any other value of `state` is refused: a typo never reaches a signature.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
@@ -164,6 +167,9 @@ pub struct Publisher {
     pub supersedes: BTreeMap<String, String>,
     /// The versions the owner revoked.
     pub revoked_versions: Vec<RevokedVersion>,
+    /// The files of its source archives (`src/…`) that may be binary and larger than 64 KiB
+    /// (check 18 of a release pull request).
+    pub binary_files: Vec<String>,
 }
 
 impl Publisher {
@@ -224,6 +230,8 @@ struct RawPublisher {
     supersedes: BTreeMap<String, String>,
     #[serde(default)]
     revoked_versions: Vec<RawRevokedVersion>,
+    #[serde(default)]
+    binary_files: Vec<String>,
 }
 
 fn one() -> u32 {
@@ -485,6 +493,16 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
             date: entry.date.clone(),
         });
     }
+    if raw.binary_files.len() > MAX_BINARY_FILES {
+        bail!("binary_files: more than {MAX_BINARY_FILES} files");
+    }
+    for path in &raw.binary_files {
+        let under = path.strip_prefix("src/").filter(|rest| !rest.is_empty());
+        if !under.is_some_and(|rest| oncl_pack::source::check_dir_path(rest).is_ok()) {
+            bail!("binary_files: {path:?} is not the path of a file of a source archive (src/…)");
+        }
+    }
+    distinct(&raw.binary_files, "binary file")?;
     Ok(Publisher {
         name,
         state: raw.state,
@@ -501,6 +519,7 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
         keys,
         supersedes: raw.supersedes,
         revoked_versions,
+        binary_files: raw.binary_files,
     })
 }
 

@@ -2,6 +2,74 @@
 
 Как собрать плагин стороннего издателя так, чтобы OpenNCALayer принял выпуск. Устройство всей схемы описано в [`docs/design/publishers.md`](../design/publishers.md): почему пересборка обязательна, что подписывает издатель, какие проверки проходит PR.
 
+## Выпуск шаг за шагом
+
+Все команды — `cargo xtask vendor …` в клоне репозитория OpenNCALayer. Ниже издатель `ecc` с префиксом `kz.ecc.` и плагином `kz.ecc.market`; команды для bash. Что проверяет каждый шаг, описано в [`docs/design/publishers.md`](../design/publishers.md), разделы «Команды издателя» и «Автослияние PR издателя».
+
+### 1. Ключ
+
+```sh
+cargo xtask vendor keygen --name ecc --out ~/oncl-keys
+```
+
+Команда спрашивает пароль (не короче 12 символов; `--passphrase-file` читает его из файла) и пишет зашифрованный ключ Ed25519 `~/oncl-keys/pub-ecc-<начало keyid>.key`. Каталог ключей должен лежать вне рабочего дерева git: файл, который git мог бы закоммитить, команда не пишет. Она печатает `keyid` и строку `[[keys]] public = "…"` для `publisher.toml`. Для порога больше 1 каждый держатель ключа делает свой ключ.
+
+### 2. Подключение (один раз, PR сливает владелец)
+
+```sh
+cargo xtask vendor onboard --name ecc --prefix kz.ecc. \
+  --module kz.ecc.market.Signer --bundle kz.ecc.market \
+  --display-ru 'ТОО «…»' --display-kk '…' --display-en '…' \
+  --github ecc-release --key <64 hex из keygen> --homepage https://ecc.kz/
+```
+
+Команда пишет `publishers/ecc/publisher.toml` и проверяет реестр с ним (`vendor check-onboarding`; в CI та же команда с `--base origin/main` ещё запрещает удалять и переименовывать записи `publishers/` и менять `publishers/builders.toml`). Двоичные файлы исходников больше 64 КиБ (шрифты, картинки) перечисляются в `binary_files = ["src/…"]` того же файла. PR открывается по шаблону подключения; владелец проверяет домен, сливает и подписывает верхний `targets` (`tuf update`). Дальше выпуски идут без владельца.
+
+### 3. Архив исходников
+
+```sh
+cargo xtask vendor source --git ../market --rev v1.2.0 --out dist/kz.ecc.market-1.2.0.src.tar.gz
+```
+
+Тот же код, что `oncl-pack source` в образе (раздел «Сборка в эталонном сборщике» ниже): архив ревизии git или (`--dir`) каталога. Команда печатает `archive_sha256` и `archive_length`. Выложите архив на анонимный HTTPS-адрес: его CI скачает один раз (проверка 13). Адрес — имя хоста, не IP-адрес и не имя локальной сети, перенаправления только на HTTPS, не дольше 120 секунд.
+
+### 4. Сборка в эталонном образе
+
+```sh
+cargo xtask vendor build --source dist/kz.ecc.market-1.2.0.src.tar.gz --path crates/market --out dist/build
+```
+
+Команда делает шаги 2 и 3 раздела «Сборка в эталонном сборщике» сама (Docker, или Podman при `ONCL_CONTAINER=podman`): образ по последнему digest из `publishers/builders.toml` (или `--builder sha256:…`), скачивание зависимостей с сетью, `cargo metadata` и сборка без сети, пакет забирается `docker cp` и хешируется снаружи. В `dist/build` появляются пакет `<id>-<версия>.onclp`, `THIRD-PARTY.txt` (крейты модуля и их лицензии) и `BUILDINFO.json` (образ, хеши архива, `Cargo.lock` и пакета). Лицензия каждого крейта модуля должна быть из списка OSI (проверка 20), иначе сборка завершается ошибкой. `--image` собирает в образе, собранном локально; такой результат выпустить нельзя, у него нет digest.
+
+### 5. Черновик роли
+
+```sh
+cargo xtask vendor add --name ecc --build dist/build \
+  --fetch https://downloads.ecc.kz/oncl/kz.ecc.market-1.2.0.src.tar.gz \
+  --vcs-url https://git.ecc.kz/oncl/market.git --vcs-rev <40 hex> \
+  --channel beta --rollout 100
+```
+
+Черновик `target/vendor/ecc/role.json` начинается с последней версии роли в `tuf/v1`. `add` берёт длину и sha256 пакета, вычисляет `url` копии в наших Releases, заполняет `source` из `BUILDINFO.json`, а `id`, версию, `min_core`, модули, `replaces`, название и `capabilities` — из манифеста пакета; `id` и модули сверяются с `publisher.toml`. `--vcs-url`/`--vcs-rev` необязательны (проверка 25). Изменить уже выпущенную запись можно только командой `set` (`--channel stable`, `--rollout N`, `--revoke`, `--unrevoke`), убрать старую версию — `prune` (только если версия не отозвана и есть более новая неотозванная в том же или более широком канале).
+
+### 6. Подпись
+
+```sh
+cargo xtask vendor sign --name ecc --keys ~/oncl-keys --expires-days 90
+```
+
+Пишет `tuf/v1/metadata/<N+1>.pub-ecc.json`, подписанный ключами издателя из каталога, и удаляет черновик. Срок — от 14 до 180 дней (проверка 5 требует не меньше 14 дней в запасе в момент проверки CI). При пороге больше 1 остальные держатели ключей добавляют подписи: `cargo xtask vendor cosign tuf/v1/metadata/<N+1>.pub-ecc.json --keys <их каталог>`.
+
+### 7. Проверка и PR
+
+```sh
+git switch -c release/kz.ecc.market-1.2.0 origin/main
+git add tuf/v1/metadata/<N+1>.pub-ecc.json && git commit -m "ecc: kz.ecc.market 1.2.0"
+cargo xtask vendor check --name ecc            # с --offline без скачивания архивов
+```
+
+`check` делает те же проверки, что CI (`vendor check-pr`), кроме проверки автора (2), против `origin/main`. Затем PR с одним этим файлом от аккаунта из `github`. Бот пересобирает пакет, копирует его и архив в выпуск `pub-ecc-<sha256>` и сливает PR сам; не чаще раза в час.
+
 ## Сборка в эталонном сборщике
 
 Пакет `.onclp`, который вы подписываете в своей роли, CI OpenNCALayer собирает заново из вашего архива исходников в эталонном сборщике и сравнивает побайтно (проверки 19 и 21 в [`publishers.md`](../design/publishers.md#проверки-pr-издателя-дополняют-111)). Совпадение обещано только внутри сборщика: это образ `ghcr.io/arynyklas/oncl-plugin-builder` с конкретным digest из [`publishers/builders.toml`](../../publishers/builders.toml). Этот digest вы пишете в `source.builder`. Сборка тем же `cargo` на своей машине годится для разработки, но её байты могут не совпасть.
@@ -156,3 +224,58 @@ docker volume rm oncl-verify-cargo
   ```
 
   Без `ONCL_BUILDER_IMAGE` тест сам собирает образ из `HEAD`. На машине с 8 ядрами сборка образа занимает около 2 минут, тест — около минуты.
+
+## Проверки CI
+
+Это раздел для владельца проекта и для workflow `publisher-pr.yml`. Каждая проверка — функция над данными в `xtask/src/vendor/checks.rs`; код из PR не собирается и не запускается.
+
+| Команда | Job | Проверки | Выход |
+|---|---|---|---|
+| `vendor check-pr --base <main> --head <голова PR> --author <логин> --out <каталог>` | `publisher-check` | 1–9, 11–18, 23, 24 (сначала 1 и 2; при их провале остальные `skip`) | JSON на stdout и `verdict.json`; архивы `<id>-<версия>.src.tar.gz` в `--out` |
+| `vendor provenance --base … --head … --archives <каталог> --out <файл>` | `provenance` | 25 | отчёт JSON по каждой новой цели с `vcs`: `confirmed`, `unverified`, `mismatch` |
+| `vendor rebuild --archive <файл> --path <крейт> --builder sha256:… --out <каталог>` | `rebuild` (matrix) | 19, 20 | пакет, `THIRD-PARTY.txt`, `rebuild.json` |
+| `vendor verdict --base … --head … --archives … --rebuilt … --provenance … --out <каталог>` | `verdict` | 21, 22, итог 25 | `verdict.json`, `<id>-<версия>/BUILDINFO.json` |
+| `vendor src-diff [--old <архив> --old-sha256 <hex>] --new <архив> --out <файл>` | `mirror` | — | `<id>-<версия>.src.diff` |
+
+`provenance` и `verdict` заново читают файл роли из git и сверяют архивы и пакеты с подписанными хешами сами: выходам предыдущих jobs они не верят. Код выхода не 0, если проверка не прошла.
+
+Вердикт `check-pr` (`schema` 1):
+
+```json
+{
+  "schema": 1, "ok": true, "base": "<sha>", "head": "<sha>",
+  "publisher": "ecc", "role_version": 3,
+  "checks": [{"id": 1, "status": "pass", "messages": []}, {"id": 2, "status": "fail", "messages": ["mallory is not in github of publishers/ecc/publisher.toml"]}],
+  "new_targets": [{"path": "plugins/ecc/kz.ecc.market/1.2.0.onclp", "id": "kz.ecc.market", "version": "1.2.0",
+                   "length": 123456, "sha256": "<hex>", "tag": "pub-ecc-<hex>",
+                   "package": "kz.ecc.market-1.2.0.onclp", "archive": "kz.ecc.market-1.2.0.src.tar.gz",
+                   "source": {"…": "как в роли"},
+                   "previous": {"version": "1.1.0", "archive_url": "https://github.com/…/kz.ecc.market-1.1.0.src.tar.gz", "archive_sha256": "<hex>"}}]
+}
+```
+
+`status` — `pass`, `fail` или `skip`. `ok` истинно, только если ни одна проверка не провалилась и каждая проверка этого запуска прошла. `previous` — прошлая версия того же плагина в роли на `main`, от архива которой считается `.src.diff`.
+
+Политика адресов скачивания (проверки 13 и 25): только `https://`, без учётных данных и фрагмента, имя хоста с точкой (не IP-адрес ни в какой записи, не `localhost`, `*.local`, `*.internal`, `*.home.arpa`, `*.lan`), каждое перенаправление проверяется так же, соединение только с публичными адресами, в которые имя разрешилось один раз.
+
+| Проверка не прошла | Что делать издателю |
+|---|---|
+| 1 | PR меняет ровно один путь — новый файл своей роли |
+| 2 | PR открывает аккаунт из `github` в `publisher.toml` |
+| 3 | версия файла — следующая после последней на `main`: начните черновик заново (`rm target/vendor/<имя>/role.json`) |
+| 4 | подпишите ключом из `publisher.toml`, порог — `cosign` |
+| 5 | подпишите заново со сроком от 14 до 180 дней |
+| 6 | запись не проходит правила каталога: модули, префикс, `capabilities`, `min_core` не ниже 0.1.3, не больше 8 новых пакетов |
+| 7 | модуль или бандл уже обслуживает порт владельца или другой издатель |
+| 8, 24 | выпущенную запись менять нельзя, кроме `rollout`, `name`, `revoked` и канала `beta` → `stable` |
+| 9 | подождите час после прошлого выпуска |
+| 11 | `cargo xtask tuf check` дерева `main` с вашим файлом; обычно это ошибка на стороне `main` |
+| 12 | `source` по таблице, `builder` из `publishers/builders.toml`, лицензия из списка OSI |
+| 13 | архив по `fetch` доступен анонимно и равен подписанному |
+| 14 | архив сделан `vendor source` и не менялся |
+| 15–18 | состав архива: крейт, `Cargo.lock`, лицензия, нет `.cargo/config*`, источники зависимостей, нет готовых бинарников |
+| 19–22 | пересборка в образе не совпала с подписанным пакетом или манифест не совпал с записью |
+| 23 | `url` — адрес копии, который вычисляет `vendor add` |
+| 25 | ревизия `vcs` даёт другой архив; уберите `vcs` или укажите правильную ревизию |
+
+Список лицензий OSI — `xtask/assets/spdx/osi-licenses.txt` (SPDX 3.29.0, `isOsiApproved`, без устаревших идентификаторов); для зависимостей `/` читается как `OR`, как его когда-то понимал Cargo.

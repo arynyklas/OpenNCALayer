@@ -29,5 +29,6 @@ pub mod sdk_delivery;
 pub mod token_emu;
 pub mod tuf;
 pub mod upstream;
+pub mod vendor;
 pub mod win7;
 pub mod winget;

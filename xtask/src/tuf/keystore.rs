@@ -86,6 +86,19 @@ pub fn generate_encrypted(
     role: Role,
     passphrase: &str,
 ) -> anyhow::Result<(SigningKey, Zeroizing<String>)> {
+    generate_encrypted_as(role.name(), passphrase)
+}
+
+/// [`generate_encrypted`] for the key labelled `label` in its file's comment: a top-level
+/// role's name, or a publisher's role `pub-<name>`.
+///
+/// # Errors
+///
+/// As [`generate_encrypted`].
+pub fn generate_encrypted_as(
+    label: &str,
+    passphrase: &str,
+) -> anyhow::Result<(SigningKey, Zeroizing<String>)> {
     if passphrase.chars().count() < MIN_PASSPHRASE_CHARS {
         bail!("the passphrase of new keys must have at least {MIN_PASSPHRASE_CHARS} characters");
     }
@@ -97,7 +110,7 @@ pub fn generate_encrypted(
     let decrypted = SecretKey::from_box(plain, Some(passphrase.to_owned()))
         .context("decrypting the new key")?;
     let key = signing_key_of(&decrypted)?;
-    let comment = format!("oncl-tuf-key role={} keyid={}", role.name(), key.key_id());
+    let comment = format!("oncl-tuf-key role={label} keyid={}", key.key_id());
     let text = pair
         .sk
         .to_box(Some(&comment))
@@ -262,6 +275,46 @@ pub fn find_keys(
     wanted: &[KeyId],
     unlock: &mut Unlock,
 ) -> anyhow::Result<Vec<SigningKey>> {
+    let online = matches!(role, Role::Timestamp | Role::Snapshot);
+    let found = find_labelled(dir, role.name(), online, wanted, unlock)?;
+    if found.is_empty() {
+        let ids: Vec<String> = wanted.iter().map(ToString::to_string).collect();
+        bail!(
+            "no key file in {} holds the {} key of the root in force (key id {}): the keys \
+             may have been rotated, or are kept elsewhere",
+            dir.display(),
+            role,
+            ids.join(" or ")
+        );
+    }
+    Ok(found)
+}
+
+/// The encrypted keys labelled `label` (a publisher's role, `pub-<name>`) among the key files
+/// of `dir` whose ids are in `wanted`, opened with `unlock`; none found is an empty list.
+///
+/// # Errors
+///
+/// If the directory or a wanted file cannot be read, or a file holds another key than its
+/// comment names.
+pub fn find_encrypted_keys(
+    dir: &Path,
+    label: &str,
+    wanted: &[KeyId],
+    unlock: &mut Unlock,
+) -> anyhow::Result<Vec<SigningKey>> {
+    find_labelled(dir, label, false, wanted, unlock)
+}
+
+/// The keys labelled `label` in `dir` whose ids are in `wanted`: encrypted files, and with
+/// `online` the unencrypted seed lines too.
+fn find_labelled(
+    dir: &Path,
+    label: &str,
+    online: bool,
+    wanted: &[KeyId],
+    unlock: &mut Unlock,
+) -> anyhow::Result<Vec<SigningKey>> {
     let mut found: Vec<SigningKey> = Vec::new();
     let mut seen = BTreeSet::new();
     let entries = fs::read_dir(dir)
@@ -276,15 +329,14 @@ pub fn find_keys(
         let Ok(text) = fs::read_to_string(&path).map(Zeroizing::new) else {
             continue;
         };
-        let online_role = matches!(role, Role::Timestamp | Role::Snapshot);
-        let key = if online_role && text.trim_start().starts_with(SEED_PREFIX) {
+        let key = if online && text.trim_start().starts_with(SEED_PREFIX) {
             let key = parse_seed(&text).with_context(|| format!("reading {}", path.display()))?;
             if !wanted.contains(&key.key_id()) {
                 continue;
             }
             key
         } else if let Some((name, id)) = comment_of(&text) {
-            if name != role.name() || !wanted.contains(&id) {
+            if name != label || !wanted.contains(&id) {
                 continue;
             }
             let key = load_encrypted(&path, unlock.passphrase()?)?;
@@ -301,16 +353,6 @@ pub fn find_keys(
         if seen.insert(key.key_id()) {
             found.push(key);
         }
-    }
-    if found.is_empty() {
-        let ids: Vec<String> = wanted.iter().map(ToString::to_string).collect();
-        bail!(
-            "no key file in {} holds the {} key of the root in force (key id {}): the keys \
-             may have been rotated, or are kept elsewhere",
-            dir.display(),
-            role,
-            ids.join(" or ")
-        );
     }
     Ok(found)
 }
