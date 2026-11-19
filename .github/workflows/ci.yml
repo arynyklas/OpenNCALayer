@@ -517,7 +517,7 @@ jobs:
           mkdir -p target/tmp
           cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/nextest/nextest.tar.zst" \
             --workspace-remap . --extract-to . --extract-overwrite --run-ignored all \
-            -E 'package(oncl-port-tests) | binary_id(openncalayer::ports_e2e) | binary_id(openncalayer::ports_heavy_e2e) | binary_id(oncl-core::plugin_ports_manual)'
+            -E 'package(oncl-port-tests) | (binary_id(openncalayer::all) & test(/^ports_(heavy_)?e2e::/)) | binary_id(oncl-core::plugin_ports_manual)'
       # The ports the tests above built (a no-op build then), linted as they ship.
       - name: Plugin operations lint (release modules)
         run: |

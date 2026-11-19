@@ -45,7 +45,7 @@ BEGIN синхронизируется на диск до применения �
 ## Проверка
 
 ```
-cargo test -p oncl-server --test audit
+cargo test -p oncl-server --test all -- audit::
 cargo run -p oncl-server --example audit_smoke -- target/s01-smoke
 ```
 
