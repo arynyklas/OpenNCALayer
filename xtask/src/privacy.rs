@@ -49,12 +49,12 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
     ),
     ("crates/oncl-basics/tests/sign.rs", 'C', &["/keys/"]),
     (
-        "crates/oncl-builtin-tests/tests/basics_sign.rs",
+        "crates/oncl-builtin-tests/tests/all/basics_sign.rs",
         'C',
         &["/keys/"],
     ),
     (
-        "crates/oncl-builtin-tests/tests/commonutils.rs",
+        "crates/oncl-builtin-tests/tests/all/commonutils.rs",
         'C',
         &["/x"],
     ),
