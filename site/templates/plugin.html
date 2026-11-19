@@ -6,6 +6,11 @@
 {%- if plugin.description %}
 <p class="lead">{{ plugin.description[lang] }}</p>
 {%- endif %}
+{%- if plugin.replaced_by %}
+{%- set replacement = data.publishers.plugins[plugin.replaced_by.id] %}
+{%- set by = data.publishers.list[plugin.replaced_by.publisher] %}
+<p class="notice">{{ trans(key="port_replaced_by", lang=lang) }} <a href="{{ get_url(path='@/publishers/' ~ by.name ~ '.md', lang=lang) }}#plugin-{{ replacement.id }}">{{ replacement.name[lang] }}</a> ({{ by.display[lang] }})</p>
+{%- endif %}
 <h2>{{ trans(key="plugin_about", lang=lang) }}</h2>
 <dl class="facts">
 <dt>{{ trans(key="plugin_id", lang=lang) }}</dt><dd><code>{{ plugin.id }}</code></dd>

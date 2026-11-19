@@ -1,12 +1,21 @@
 name: TUF expiry
 
 # The weekly reminder: `cargo xtask tuf check --fail-on-expiring` on `main` fails (and
-# GitHub mails the failure of a scheduled run) when the targets or snapshot expire in less
-# than 10 days (the owner signs a new version: `cargo xtask tuf update --refresh`, monthly),
-# or the root in less than 45 days (`cargo xtask tuf root`, yearly), or any of them has
-# expired. It reads only the committed tree: the timestamp is Pages' business (the daily
-# Pages run goes red when it cannot be signed or published). With no `tuf/v1` and no anchor
-# yet (before the owner's ceremony) it passes. No secret is used or reachable here.
+# GitHub mails the failure of a scheduled run) when the targets, or the snapshot while it is
+# offline (`tuf/v1.toml`), expire in less than 10 days (the owner signs a new version:
+# `cargo xtask tuf update --refresh`, monthly), or the root in less than 45 days
+# (`cargo xtask tuf root`, yearly), or any of them has expired. Once the snapshot is online,
+# Pages signs it for a week on every run, as the timestamp, and the tree has none to check.
+# It reads only the committed tree: the online snapshot and the timestamp are Pages' business
+# (the daily Pages run goes red when they cannot be signed or published). With no `tuf/v1`
+# and no anchor yet (before the owner's ceremony) it passes. No secret is used or reachable
+# here.
+#
+# The same check reads the newest role of every publisher in `tuf/v1`. The expiry of a
+# publisher's role only warns (`warning[role-expired]`, `warning[role-expiring]` become
+# annotations of the run, which stays green): the publisher signs a new one, and an expiring
+# role does not stop the publication. Other findings about the publishers are errors and fail
+# this run, as they stop the publication by Pages (it signs nothing over a role that fails).
 on:
   schedule:
     - cron: "17 6 * * 1"
@@ -33,4 +42,18 @@ jobs:
         with:
           shared-key: pages
       - name: Check the expiry
-        run: cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45
+        run: |
+          status=0
+          cargo xtask tuf check --no-timestamp --fail-on-expiring --min-days 10 --min-root-days 45 \
+            > "$RUNNER_TEMP/expiry.log" 2>&1 || status=$?
+          # The log as text: no line of it is taken for a workflow command.
+          token=$(openssl rand -hex 16)
+          echo "::stop-commands::$token"
+          cat "$RUNNER_TEMP/expiry.log"
+          echo "::$token::"
+          while read -r line; do
+            case "$line" in
+              *"warning[role-expired]"* | *"warning[role-expiring]"*) echo "::warning::${line//%/%25}" ;;
+            esac
+          done < "$RUNNER_TEMP/expiry.log"
+          exit "$status"

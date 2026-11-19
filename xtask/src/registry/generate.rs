@@ -1,5 +1,6 @@
 //! The site's build copy: `site/` copied as it is, plus what is generated — a stub page of
-//! each port in each language and `data/site.json`. Nothing generated is kept in `site/`.
+//! each port and of each publisher in each language and `data/site.json`. Nothing generated
+//! is kept in `site/`.
 
 use std::fs;
 use std::path::Path;
@@ -9,23 +10,35 @@ use anyhow::{Context, bail};
 use super::data::site_data;
 use super::inputs::{read_channels, read_releases, read_upstream};
 use super::ports::load;
+use super::publishers;
 use super::{Inputs, LANGS, SITE_DIR};
 
-/// The index pages of `content/plugins`, the only files `site/` keeps there.
-const PLUGIN_INDEXES: [&str; 3] = ["_index.md", "_index.kk.md", "_index.en.md"];
+/// The index pages of a section, the only files `site/` keeps in `content/plugins` and
+/// `content/publishers`.
+const SECTION_INDEXES: [&str; 3] = ["_index.md", "_index.kk.md", "_index.en.md"];
+
+/// The sections whose pages are generated.
+const GENERATED_SECTIONS: [&str; 2] = ["plugins", "publishers"];
 
 /// The stub page of the port `short`: the template and the short name, no data.
 pub fn stub(short: &str) -> String {
     format!("+++\ntemplate = \"plugin.html\"\n[extra]\nshort = \"{short}\"\n+++\n")
 }
 
+/// The stub page of the publisher `name` (a [`oncl_update::tuf::PublisherName`]): the
+/// template and the name, no data.
+pub fn publisher_stub(name: &str) -> String {
+    format!("+++\ntemplate = \"publisher.html\"\n[extra]\nname = \"{name}\"\n+++\n")
+}
+
 /// Writes the build copy `src`: `root/site` and the generated files.
 ///
 /// # Errors
 ///
-/// `site/` holds generated files or a symbolic link, a port, `registry.toml` or index is
-/// invalid, or I/O fails. A missing or broken external input (releases, `upstream`) is a
-/// warning instead, returned.
+/// `site/` holds generated files or a symbolic link, a port, `registry.toml`, index, the
+/// publishers' registry or a role file is invalid, or I/O fails. A missing or broken
+/// external input (releases, `upstream`) is a warning instead, returned; so is a target of
+/// a publisher's role that the client would leave out.
 pub fn generate(root: &Path, inputs: &Inputs, src: &Path) -> anyhow::Result<Vec<String>> {
     let site = root.join(SITE_DIR);
     check_site(&site)?;
@@ -35,6 +48,11 @@ pub fn generate(root: &Path, inputs: &Inputs, src: &Path) -> anyhow::Result<Vec<
         None => Default::default(),
     };
     let mut warnings = Vec::new();
+    let (publishers, role_warnings) = match &inputs.publishers {
+        Some(dir) => publishers::load(dir, inputs.tuf.as_deref())?,
+        None => Default::default(),
+    };
+    warnings.extend(role_warnings);
     let releases = inputs
         .releases
         .as_ref()
@@ -58,22 +76,28 @@ pub fn generate(root: &Path, inputs: &Inputs, src: &Path) -> anyhow::Result<Vec<
     if let Some(upstream) = &upstream {
         warnings.extend(upstream.warnings.iter().cloned());
     }
-    let data = site_data(&ports, &channels, releases.as_deref(), upstream.as_ref());
+    let data = site_data(
+        &ports,
+        &channels,
+        releases.as_deref(),
+        upstream.as_ref(),
+        &publishers,
+    );
 
     if src.exists() {
         fs::remove_dir_all(src).with_context(|| format!("removing {}", src.display()))?;
     }
     copy_tree(&site, src)?;
-    let pages = src.join("content/plugins");
     for port in &ports {
-        for (lang, _) in LANGS {
-            let name = if lang == "ru" {
-                format!("{}.md", port.short)
-            } else {
-                format!("{}.{lang}.md", port.short)
-            };
-            write(&pages.join(name), stub(&port.short).as_bytes())?;
-        }
+        write_stubs(
+            &src.join("content/plugins"),
+            &port.short,
+            &stub(&port.short),
+        )?;
+    }
+    for publisher in &publishers {
+        let name = publisher.publisher.name.as_str();
+        write_stubs(&src.join("content/publishers"), name, &publisher_stub(name))?;
     }
     let mut json = serde_json::to_string_pretty(&data).context("serializing the site data")?;
     json.push('\n');
@@ -81,6 +105,19 @@ pub fn generate(root: &Path, inputs: &Inputs, src: &Path) -> anyhow::Result<Vec<
     fs::create_dir_all(&data_dir).with_context(|| format!("creating {}", data_dir.display()))?;
     write(&data_dir.join("site.json"), json.as_bytes())?;
     Ok(warnings)
+}
+
+/// Writes `text` as the page `name` of `dir` in every language.
+fn write_stubs(dir: &Path, name: &str, text: &str) -> anyhow::Result<()> {
+    for (lang, _) in LANGS {
+        let file = if lang == "ru" {
+            format!("{name}.md")
+        } else {
+            format!("{name}.{lang}.md")
+        };
+        write(&dir.join(file), text.as_bytes())?;
+    }
+    Ok(())
 }
 
 /// `site/` holds only hand-written files.
@@ -92,14 +129,15 @@ fn check_site(site: &Path) -> anyhow::Result<()> {
     if site.join("data").exists() {
         bail!("{}: data/", generated());
     }
-    let plugins = site.join("content/plugins");
-    let entries =
-        fs::read_dir(&plugins).with_context(|| format!("reading {}", plugins.display()))?;
-    for entry in entries {
-        let name = entry?.file_name();
-        let name = name.to_string_lossy();
-        if !PLUGIN_INDEXES.contains(&name.as_ref()) {
-            bail!("{}: content/plugins/{name}", generated());
+    for section in GENERATED_SECTIONS {
+        let dir = site.join("content").join(section);
+        let entries = fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?;
+        for entry in entries {
+            let name = entry?.file_name();
+            let name = name.to_string_lossy();
+            if !SECTION_INDEXES.contains(&name.as_ref()) {
+                bail!("{}: content/{section}/{name}", generated());
+            }
         }
     }
     Ok(())
@@ -151,10 +189,12 @@ mod tests {
     /// A root with a minimal `site/`.
     fn root() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        let plugins = root.path().join("site/content/plugins");
-        fs::create_dir_all(&plugins).unwrap();
-        for name in PLUGIN_INDEXES {
-            fs::write(plugins.join(name), "+++\n+++\n").unwrap();
+        for section in GENERATED_SECTIONS {
+            let dir = root.path().join("site/content").join(section);
+            fs::create_dir_all(&dir).unwrap();
+            for name in SECTION_INDEXES {
+                fs::write(dir.join(name), "+++\n+++\n").unwrap();
+            }
         }
         fs::write(root.path().join("site/config.toml"), "").unwrap();
         root
@@ -166,6 +206,8 @@ mod tests {
             updates: Some(fixtures().join("updates/v1")),
             releases: Some(fixtures().join("releases.jsonl")),
             upstream: Some(fixtures().join("upstream")),
+            publishers: Some(fixtures().join("publishers")),
+            tuf: Some(fixtures().join("tuf/v1")),
         }
     }
 
@@ -175,6 +217,8 @@ mod tests {
             updates: None,
             releases: None,
             upstream: None,
+            publishers: None,
+            tuf: None,
         }
     }
 
@@ -232,7 +276,19 @@ mod tests {
     fn stubs_carry_only_the_short_name() {
         let root = root();
         let out = tempfile::tempdir().unwrap();
-        generate(root.path(), &all_inputs(), out.path()).unwrap();
+        let warnings = generate(root.path(), &all_inputs(), out.path()).unwrap();
+        // The fixture role's target with a module its publisher was not approved for.
+        assert!(
+            warnings.iter().any(|w| w.contains("kz.acme.rogue")),
+            "{warnings:?}"
+        );
+        // And the one whose name has a bidi override.
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("kz.acme.bidi") && w.contains("name.ru")),
+            "{warnings:?}"
+        );
         let pages = out.path().join("content/plugins");
         for short in ["alpha", "gamma", "hostile"] {
             let expected =
@@ -245,6 +301,19 @@ mod tests {
                 assert_eq!(fs::read_to_string(pages.join(&name)).unwrap(), expected);
             }
         }
+        // Every publisher has its page, the revoked one too.
+        let pages = out.path().join("content/publishers");
+        for name in ["acme", "gone", "olden"] {
+            let expected =
+                format!("+++\ntemplate = \"publisher.html\"\n[extra]\nname = \"{name}\"\n+++\n");
+            for file in [
+                format!("{name}.md"),
+                format!("{name}.kk.md"),
+                format!("{name}.en.md"),
+            ] {
+                assert_eq!(fs::read_to_string(pages.join(&file)).unwrap(), expected);
+            }
+        }
         // Every Markdown file of the build copy is a stub or a copy of `site/`.
         let site = files(&root.path().join("site"));
         for (path, bytes) in files(out.path()) {
@@ -252,7 +321,9 @@ mod tests {
                 let copied = site.get(&Path::new("").join(&path)) == Some(&bytes);
                 let text = String::from_utf8(bytes).unwrap();
                 assert!(
-                    copied || text.starts_with("+++\ntemplate = \"plugin.html\""),
+                    copied
+                        || text.starts_with("+++\ntemplate = \"plugin.html\"")
+                        || text.starts_with("+++\ntemplate = \"publisher.html\""),
                     "{}",
                     path.display()
                 );
@@ -269,6 +340,10 @@ mod tests {
         let err = generate(root.path(), &only_plugins(), out.path()).unwrap_err();
         assert!(err.to_string().contains("generated content"), "{err:#}");
         fs::remove_file(root.path().join("site/content/plugins/x.md")).unwrap();
+        fs::write(root.path().join("site/content/publishers/acme.md"), "").unwrap();
+        let err = generate(root.path(), &only_plugins(), out.path()).unwrap_err();
+        assert!(err.to_string().contains("content/publishers"), "{err:#}");
+        fs::remove_file(root.path().join("site/content/publishers/acme.md")).unwrap();
         fs::create_dir(root.path().join("site/data")).unwrap();
         let err = generate(root.path(), &only_plugins(), out.path()).unwrap_err();
         assert!(err.to_string().contains("generated content"), "{err:#}");

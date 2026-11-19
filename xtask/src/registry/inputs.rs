@@ -149,8 +149,8 @@ struct AssetLine {
     name: String,
 }
 
-/// The releases of the JSON Lines file `path`: drafts and tags other than `v<semver>`
-/// (`plugins-*`, and `pub-*`, the copies of publishers' packages) are left out.
+/// The releases of the JSON Lines file `path`: drafts and tags other than `v<semver>` are
+/// left out: the ports' `plugins-*` and the copies of the publishers' packages, `pub-*`.
 ///
 /// # Errors
 ///

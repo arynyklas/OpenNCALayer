@@ -61,6 +61,12 @@ h1 { font-size: 2rem; line-height: 1.2; }
 .note, .nodata { color: var(--muted); }
 code { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 0.9em; overflow-wrap: anywhere; }
 .hash { font-size: 0.8em; }
+.badge { display: inline-block; padding: 0 0.4em; border: 1px solid var(--border); border-radius: 0.25em; font-size: 0.9em; white-space: nowrap; }
+.badge.revoked, .notice { border-color: var(--focus); }
+.badge.revoked { font-weight: 700; }
+.notice { border-left: 0.25rem solid var(--focus); padding: 0.25rem 0.75rem; max-width: 48rem; }
+details { margin: 0.5rem 0; }
+summary { cursor: pointer; }
 pre { overflow-x: auto; padding: 0.75rem; background: var(--head); border: 1px solid var(--border); }
 .table { overflow-x: auto; margin: 1.5rem 0; border: 1px solid var(--border); }
 table { border-collapse: collapse; width: 100%; }
