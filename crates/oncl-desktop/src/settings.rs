@@ -332,7 +332,9 @@ fn proxy_of(v: &Value) -> Option<ProxySetting> {
 }
 
 /// The update settings of an `updates` object: each member missing keeps its default; `None`
-/// if it is not an object or a member is not understood.
+/// if it is not an object, or `enabled` or `channel` is not understood. A `check_revocations`
+/// that is not a boolean keeps its default alone (logged): a typo in that opt-out must not
+/// turn the updates on as well.
 fn updates_of(v: &Value) -> Option<UpdateSettings> {
     let defaults = UpdateSettings::default();
     let enabled = match v.as_object()?.get(ENABLED) {
@@ -348,7 +350,10 @@ fn updates_of(v: &Value) -> Option<UpdateSettings> {
     };
     let check_revocations = match v.get(CHECK_REVOCATIONS) {
         None => defaults.check_revocations,
-        Some(on) => on.as_bool()?,
+        Some(on) => on.as_bool().unwrap_or_else(|| {
+            tracing::warn!(value = %on, "updates.check_revocations is not a boolean; it stays on");
+            defaults.check_revocations
+        }),
     };
     Some(UpdateSettings {
         enabled,
@@ -946,11 +951,17 @@ mod tests {
             json!({"enabled": false, "channel": "beta", "check_revocations": false})
         );
         assert!(!Settings::load(&f).unwrap().updates.check_revocations);
-        // Not a boolean: the whole `updates` is not understood, as for the other members.
-        let (_d, f) = file_with(r#"{"updates": {"check_revocations": "no"}}"#);
+        // Not a boolean: it alone keeps its default, the other members stay.
+        let (_d, f) = file_with(
+            r#"{"updates": {"enabled": false, "channel": "beta", "check_revocations": "no"}}"#,
+        );
         assert_eq!(
             Settings::load(&f).unwrap().updates,
-            UpdateSettings::default()
+            UpdateSettings {
+                enabled: false,
+                channel: Channel::Beta,
+                check_revocations: true,
+            }
         );
     }
 
