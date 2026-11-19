@@ -493,3 +493,24 @@ fn a_second_validly_signed_file_of_the_accepted_version_is_refused_offline() {
         .unwrap_err();
     assert!(matches!(e, TufError::Hash { .. }), "{e:?}");
 }
+
+#[test]
+fn the_saved_top_level_targets_are_checked_again_offline_with_their_delegations() {
+    let k = top(1);
+    let (repo, anchor) = repository(&k, &[publisher("ecc", 50)]);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    assert!(
+        c.verify_cached_top_level(T0).unwrap().is_none(),
+        "none saved"
+    );
+    c.refresh(T0).unwrap();
+    let (targets, valid_until) = c.verify_cached_top_level(T0).unwrap().unwrap();
+    assert_eq!(valid_until, T0 + Duration::days(30));
+    let delegations = targets.delegations().unwrap().unwrap();
+    assert_eq!(delegations.roles().len(), 1);
+    // Expired: refused.
+    let e = c
+        .verify_cached_top_level(T0 + Duration::days(31))
+        .unwrap_err();
+    assert!(matches!(e, TufError::Expired { .. }), "{e:?}");
+}

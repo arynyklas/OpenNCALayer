@@ -100,6 +100,8 @@ pub struct CatalogBuilder<'r> {
     builtin_modules: BTreeSet<String>,
     /// The delegated roles, in order, each name once: its targets if it was verified.
     roles: Vec<(PublisherName, Option<&'r BTreeMap<TargetPath, Target>>)>,
+    /// The delegations could not be read ([`CatalogBuilder::delegations_unavailable`]).
+    delegations_unavailable: bool,
     capabilities: Option<CapabilitiesReader<'r>>,
 }
 
@@ -147,6 +149,7 @@ impl Catalog {
                 .cloned(),
             builtin_modules: BTreeSet::new(),
             roles: Vec::new(),
+            delegations_unavailable: false,
             capabilities: None,
         }
     }
@@ -355,29 +358,43 @@ impl<'r> CatalogBuilder<'r> {
         }
     }
 
+    /// The delegations of the top-level targets could not be read (or their step failed as
+    /// a whole): every publisher with a role is unavailable, as with an unverified role, and
+    /// the roles given are not used. The owner's revocations in `publishers.json` still hold.
+    pub fn delegations_unavailable(mut self) -> Self {
+        self.delegations_unavailable = true;
+        self
+    }
+
     /// The catalog. A publisher's target among the top-level targets, or a
     /// `publishers.json` that gives a publisher a built-in module, names a publisher active
     /// without a delegated role, or does not name (or names revoked) the publisher of a
-    /// delegated role, is not used: every publisher is unavailable. Active publishers'
-    /// targets are offered. Of every verified role, whatever its publisher's state, the
-    /// versions it revokes are read by their target path alone, on every channel, so they
-    /// stay withdrawn even when the rest of the target no longer holds. Each target left out
-    /// of an active role is logged once.
+    /// delegated role, is not used: every publisher is unavailable. Unless the delegations
+    /// are unavailable, active publishers' targets are offered. Of every verified role,
+    /// whatever its publisher's state, the versions it revokes are read by their target path
+    /// alone, on every channel, so they stay withdrawn even when the rest of the target no
+    /// longer holds. Each target left out of an active role is logged once.
     pub fn build(self) -> Catalog {
         let CatalogBuilder {
             index,
             policy,
             owner_plugin,
             builtin_modules,
-            roles,
+            mut roles,
+            delegations_unavailable,
             capabilities,
         } = self;
+        if delegations_unavailable {
+            roles.clear();
+        }
         let policy = policy.and_then(|policy| {
             if let Some(path) = owner_plugin {
                 return Err(CatalogError::OwnerPluginTarget(path));
             }
             policy.check_builtin(&builtin_modules)?;
-            check_delegations(&policy, &roles)?;
+            if !delegations_unavailable {
+                check_delegations(&policy, &roles)?;
+            }
             Ok(policy)
         });
         let policy = match policy {

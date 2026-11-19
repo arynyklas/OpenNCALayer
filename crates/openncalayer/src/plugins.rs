@@ -1,21 +1,25 @@
 //! The plugins of the daemon: installed in `<data>/plugins/` ([`Store`]), loaded as dynamic
 //! modules ([`PluginModules`]), installed, updated and withdrawn from the catalog (the
-//! plugin releases of the update index of the channel in the settings, read through the TUF
-//! repository), or installed
+//! plugin releases of the update index of the channel in the settings and of the
+//! publishers' delegated roles, read through the TUF repository: [`catalog`]), or installed
 //! from a file the user chose.
 //!
 //! - At the start the enabled plugins not withdrawn are loaded (one that fails is shown with
 //!   its error and logged), and the catalog kept last is read again.
-//! - The catalog is downloaded within 10 to 60 s of the start if none is kept, else after
-//!   [`FIRST_CHECK`], then every [`CHECK_EVERY`] ([`RETRY_AFTER`] after a download failed);
-//!   with updates off (`updates.enabled` of the settings) not at all, but still on demand
-//!   (the plugin window, a page's `installBundle`, «Проверить сейчас»).
-//! - After every catalog accepted on schedule (or on demand with updates on), each plugin
-//!   installed from the catalog moves to the version [`choose_plugin`] picks: downloaded,
-//!   checked against the index (HTTPS, size, sha256, then its manifest: id, version,
-//!   modules, `replaces` and `min_core`), loaded, then recorded; a version that fails any of
-//!   it is marked bad and the old one stays. A version revoked with nothing to move to is
-//!   unloaded and marked withdrawn. Plugins installed from a file are never touched.
+//! - The catalog is checked within 10 to 60 s of the start if none is kept, else after
+//!   [`FIRST_CHECK`], then every [`catalog::PUBLISHER_CHECK_EVERY`] while a publisher's
+//!   plugin is installed, else every [`crate::update::CHECK_EVERY`] ([`RETRY_AFTER`] after
+//!   a download failed); also on demand (the plugin window, a page's `installBundle`,
+//!   «Проверить сейчас»). A scheduled check that finds the repository's snapshot as it was
+//!   when the catalog was last applied reads nothing more.
+//! - After every catalog accepted, each plugin installed from the catalog moves to the
+//!   version [`choose_installed`] picks for it and its publisher: downloaded, checked against
+//!   the catalog (HTTPS, size, sha256, then its manifest: id, version, modules, `replaces`,
+//!   `min_core` and a publisher's declared capabilities), loaded, then recorded; a version
+//!   that fails any of it is marked bad and the old one stays. A version revoked with nothing
+//!   to move to, or a plugin of a revoked publisher, is unloaded and marked withdrawn.
+//!   Plugins installed from a file are never touched. With updates off (`updates.enabled` of
+//!   the settings) only the revocations are applied ([`catalog::Apply::RevocationsOnly`]).
 //! - An install asks the user ([`InstallUi`]) with the capabilities the package declares.
 //! - A request for a module nothing serves that a plugin of the catalog would serve is told
 //!   ([`PluginNotice::Needed`]) and listed in the plugin window.
@@ -26,7 +30,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -42,19 +45,19 @@ use oncl_plugin::{
 };
 use oncl_protocol::{AddInfo, DynamicModules};
 use oncl_ui::PluginActionError;
+use oncl_update::tuf::PublisherName;
 use oncl_update::{
-    Channel, Index, PluginChoice, PluginName, PluginRelease, Sha256, UpdateError, Version,
-    choose_plugin, offer,
+    Channel, PluginChoice, PluginName, PluginRelease, Sha256, UpdateError, Version,
+    choose_installed, offer,
 };
 use time::OffsetDateTime;
 use tracing::{info, warn};
 
 use crate::load_settings;
-use crate::repository::{Repository, VerifiedIndex};
+use crate::repository::{CatalogRead, Repository};
 use crate::update::installer::fetch_package;
-use crate::update::{
-    CHECK_EVERY, DOWNLOAD_TIMEOUT, FIRST_CHECK, INDEX_TIMEOUT, RETRY_AFTER, jitter,
-};
+use crate::update::{DOWNLOAD_TIMEOUT, FIRST_CHECK, INDEX_TIMEOUT, RETRY_AFTER, jitter};
+use catalog::{Apply, InUse};
 
 /// The first download of the catalog when none is kept, this long after the start.
 pub const FIRST_CHECK_WITHOUT_CATALOG: (Duration, Duration) =
@@ -108,6 +111,12 @@ pub enum PluginNotice {
     Updated { name: Localized, version: Version },
     /// A plugin's version is revoked with nothing to move to: it is off.
     Withdrawn { name: Localized },
+    /// The publisher of a plugin is revoked in the catalog: the plugin is off.
+    PublisherRevoked {
+        name: Localized,
+        /// The publisher's display name.
+        publisher: Localized,
+    },
     /// Installing or updating a plugin failed.
     Failed { name: Localized, error: String },
     /// An update of a plugin to `version` may do more than the version installed: it waits
@@ -266,8 +275,9 @@ pub struct PluginService {
     checking: Mutex<()>,
     /// One application of the catalog at a time.
     applying: Mutex<()>,
-    /// An application asked for while one ran: the running one goes over the catalog again.
-    apply_pending: AtomicBool,
+    /// An application asked for while one ran, and the widest it asked for: the running one
+    /// goes over the catalog again.
+    apply_pending: Mutex<Option<Apply>>,
     /// Every change of an installed plugin (turned on or off, removed, installed, updated,
     /// withdrawn): each acts on the state as it is once it holds this.
     changing: Mutex<()>,
@@ -276,15 +286,26 @@ pub struct PluginService {
 /// The catalog in use.
 #[derive(Default)]
 struct Catalog {
-    index: Option<Index>,
-    /// Until when the metadata that vouches for `index` holds.
-    valid_until: Option<OffsetDateTime>,
+    in_use: Option<InUse>,
+    /// The last catalog applied whole: a scheduled check that finds its snapshot again reads
+    /// nothing more, unless it is to apply more than was applied.
+    applied: Option<Applied>,
     /// When it was last downloaded in this run.
     checked: Option<OffsetDateTime>,
     /// Why the last download failed.
     error: Option<String>,
     /// When the last download failed to bring a catalog; `None` after one that did.
     failed_at: Option<Instant>,
+}
+
+/// A catalog applied ([`Catalog::applied`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Applied {
+    channel: Channel,
+    /// The snapshot it was read under.
+    snapshot: u64,
+    /// The widest application of it.
+    apply: Apply,
 }
 
 /// Who wants the catalog: how long they wait for a download running, and whether a recent
@@ -328,6 +349,15 @@ enum Refresh {
     Refused(String),
 }
 
+/// What a catalog download that did not fail brought.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fresh {
+    /// The catalog, read and in use.
+    Read,
+    /// The snapshot is the one of the catalog applied last: nothing else was read.
+    Unchanged,
+}
+
 /// Why a downloaded package is not installed.
 enum Download {
     /// It could not be downloaded: try again later.
@@ -359,7 +389,7 @@ impl PluginService {
             pending: Mutex::default(),
             checking: Mutex::new(()),
             applying: Mutex::new(()),
-            apply_pending: AtomicBool::new(false),
+            apply_pending: Mutex::new(None),
             changing: Mutex::new(()),
         });
         for (id, installed) in service.store.state().plugins {
@@ -404,32 +434,49 @@ impl PluginService {
         Ok(service)
     }
 
-    /// «Проверить сейчас»: downloads the catalog, even with updates off; with them on, the
-    /// plugins of the catalog are updated by it. Blocks for the downloads.
+    /// «Проверить сейчас»: reads the catalog whole, even with updates off, and applies it:
+    /// with updates on the plugins of the catalog are updated by it, with them off only the
+    /// revocations are applied (Р38). Blocks for the downloads.
     pub fn check_now(&self) {
-        if self.refresh(INDEX_TIMEOUT).is_ok() && self.update_settings().enabled {
-            self.apply_catalog();
+        let apply = Apply::with_updates(self.update_settings().enabled);
+        if self.refresh(INDEX_TIMEOUT, None).is_ok() {
+            self.apply_catalog(apply);
         }
     }
 
-    /// One turn of the schedule: with updates on, the catalog downloaded and applied. How
-    /// long until the next.
+    /// One turn of the schedule: the catalog checked and, if the repository published
+    /// since it was last applied, read and applied (with updates off only its revocations).
+    /// How long until the next: [`catalog::check_every`].
     pub fn scheduled_check(&self) -> Duration {
-        if !self.update_settings().enabled {
-            return jitter(CHECK_EVERY);
-        }
-        match self.refresh(INDEX_TIMEOUT) {
-            Ok(()) => {
-                self.apply_catalog();
-                jitter(CHECK_EVERY)
+        let apply = Apply::with_updates(self.update_settings().enabled);
+        match self.refresh(INDEX_TIMEOUT, Some(apply)) {
+            Ok(Fresh::Read) => {
+                self.apply_catalog(apply);
+                jitter(self.check_every())
             }
+            Ok(Fresh::Unchanged) => jitter(self.check_every()),
             Err(Refresh::Unreachable(_)) => jitter(RETRY_AFTER),
-            Err(_) => jitter(CHECK_EVERY),
+            Err(_) => jitter(self.check_every()),
         }
+    }
+
+    /// How far apart the scheduled checks are now: whether a publisher's plugin is
+    /// installed from the catalog (its publisher recorded, or the catalog in use knows it
+    /// by its prefix).
+    fn check_every(&self) -> (Duration, Duration) {
+        let in_use = lock(&self.catalog).in_use.clone();
+        let publisher_plugin = self.store.state().plugins.iter().any(|(id, installed)| {
+            installed.source == Source::Catalog
+                && (installed.publisher.is_some()
+                    || in_use
+                        .as_ref()
+                        .is_some_and(|in_use| in_use.catalog.publisher_of(id).is_some()))
+        });
+        catalog::check_every(publisher_plugin)
     }
 
     fn run_schedule(&self) {
-        let first = if self.valid_index().is_some() {
+        let first = if self.valid_catalog().is_some() {
             FIRST_CHECK
         } else {
             FIRST_CHECK_WITHOUT_CATALOG
@@ -495,7 +542,7 @@ impl PluginService {
             };
         }
         let channel = self.update_settings().channel;
-        let index = self.valid_index().map(oncl_update::Catalog::owner);
+        let index = self.valid_catalog().map(|in_use| in_use.catalog);
         let (checked, error) = {
             let catalog = lock(&self.catalog);
             (catalog.checked, catalog.error.clone())
@@ -568,10 +615,7 @@ impl PluginService {
             Asker::User
         };
         let failed = |name: Localized, error: String| self.install_failed(id, name, error, asker);
-        let Some(index) = self
-            .ensure_index(INDEX_TIMEOUT, asker)
-            .map(oncl_update::Catalog::owner)
-        else {
+        let Some(index) = self.ensure_catalog(INDEX_TIMEOUT, asker) else {
             failed(
                 same_name(id),
                 "the plugin catalog is unavailable".to_owned(),
@@ -606,7 +650,8 @@ impl PluginService {
             failed(localized(&release.name), e.to_string());
             return Err(PluginActionError::Failed(e.to_string()));
         }
-        self.ask(package, bytes, Source::Catalog, origin, guard);
+        let publisher = release.publisher.clone();
+        self.ask(package, bytes, Source::Catalog, publisher, origin, guard);
         Ok(())
     }
 
@@ -653,7 +698,7 @@ impl PluginService {
         let Some(guard) = self.begin_install(&package.manifest.id) else {
             return Err(PluginActionError::BeingInstalled);
         };
-        self.ask(package, bytes, Source::Local, None, guard);
+        self.ask(package, bytes, Source::Local, None, None, guard);
         Ok(())
     }
 
@@ -721,7 +766,7 @@ impl PluginService {
         symname: &str,
         timeout: Duration,
     ) -> Option<PluginRelease> {
-        let index = oncl_update::Catalog::owner(self.ensure_index(timeout, Asker::Page)?);
+        let index = self.ensure_catalog(timeout, Asker::Page)?;
         let state = self.store.state();
         offer(&index, &self.cfg.core, &state.install_id, &state.bad, |r| {
             r.replaces.as_ref().is_some_and(|p| p.symname == symname)
@@ -734,7 +779,7 @@ impl PluginService {
     /// read again) when its entry changes: a plugin newly needed, or by another page. Never
     /// downloads.
     fn missing(&self, module: &str, add_info: &AddInfo) {
-        let Some(index) = self.valid_index().map(oncl_update::Catalog::owner) else {
+        let Some(index) = self.valid_catalog().map(|in_use| in_use.catalog) else {
             return;
         };
         let state = self.store.state();
@@ -758,26 +803,47 @@ impl PluginService {
         });
     }
 
-    /// Downloads the catalog of the channel in the settings within `timeout`, verifies it
-    /// and keeps it.
-    fn refresh(&self, timeout: Duration) -> Result<(), Refresh> {
+    /// Reads the catalog of the channel in the settings within `timeout`, verifies it and
+    /// keeps it. `unless`: a scheduled check that is to apply this much; if the catalog last
+    /// applied that much was read under the snapshot the repository has now, nothing more
+    /// is read ([`Fresh::Unchanged`]).
+    fn refresh(&self, timeout: Duration, unless: Option<Apply>) -> Result<Fresh, Refresh> {
         if self.cfg.repository.is_none() {
             return Err(Refresh::NoRepository);
         }
         let one = lock(&self.checking);
-        self.refresh_locked(&one, timeout)
+        self.refresh_locked(&one, timeout, unless)
     }
 
-    /// [`PluginService::refresh`], `checking` held.
-    fn refresh_locked(&self, _one: &MutexGuard<'_, ()>, timeout: Duration) -> Result<(), Refresh> {
+    /// [`PluginService::refresh`], `checking` held: the parts of the catalog kept in the
+    /// store are written by one check at a time.
+    fn refresh_locked(
+        &self,
+        _one: &MutexGuard<'_, ()>,
+        timeout: Duration,
+        unless: Option<Apply>,
+    ) -> Result<Fresh, Refresh> {
         let channel = self.update_settings().channel;
-        let result = self.download_catalog(channel, timeout);
+        let unless_snapshot = unless.and_then(|apply| {
+            lock(&self.catalog)
+                .applied
+                .filter(|applied| applied.channel == channel && applied.apply >= apply)
+                .map(|applied| applied.snapshot)
+        });
+        let result = self.download_catalog(channel, timeout, unless_snapshot);
         let mut catalog = lock(&self.catalog);
         match &result {
-            Ok(index) => {
-                info!(%channel, seq = index.index.seq, plugins = index.index.plugins.len(), "the plugin catalog is downloaded");
-                catalog.index = Some(index.index.clone());
-                catalog.valid_until = Some(index.valid_until);
+            Ok(read) => {
+                match read {
+                    Some(in_use) => {
+                        let index = in_use.catalog.index();
+                        info!(%channel, seq = index.seq, plugins = in_use.catalog.releases().count(), "the plugin catalog is downloaded");
+                        catalog.in_use = Some(in_use.clone());
+                    }
+                    None => {
+                        info!(%channel, "the plugin catalog is as it was applied last");
+                    }
+                }
                 catalog.checked = Some(OffsetDateTime::now_utc());
                 catalog.error = None;
                 catalog.failed_at = None;
@@ -792,66 +858,73 @@ impl PluginService {
             }
             Err(Refresh::NoRepository) => {}
         }
-        result.map(drop)
+        result.map(|read| match read {
+            Some(_) => Fresh::Read,
+            None => Fresh::Unchanged,
+        })
     }
 
+    /// The catalog of `channel` read and kept; `None` if the snapshot is `unless_snapshot`.
     fn download_catalog(
         &self,
         channel: Channel,
         timeout: Duration,
-    ) -> Result<VerifiedIndex, Refresh> {
+        unless_snapshot: Option<u64>,
+    ) -> Result<Option<InUse>, Refresh> {
         let Some(repository) = &self.cfg.repository else {
             return Err(Refresh::NoRepository);
         };
         let last_seq = self.store.state().last_seq.get(&channel).copied();
-        let verified = repository
-            .index(channel, last_seq, timeout)
+        let read = repository
+            .catalog(channel, last_seq, timeout, unless_snapshot)
             .map_err(|e| match e {
                 UpdateError::NotPublished(_) => Refresh::NotPublished,
                 e if e.retry_soon() => Refresh::Unreachable(e.to_string()),
                 e => Refresh::Refused(e.to_string()),
             })?;
-        // A catalog whose `seq` is not recorded is not used.
-        self.store
-            .save_catalog(channel, &verified.bytes)
-            .map_err(|e| {
-                warn!(error = %e, "cannot keep the plugin catalog");
-                Refresh::Unreachable(e.to_string())
-            })?;
-        Ok(verified)
+        match read {
+            CatalogRead::Unchanged => Ok(None),
+            // A catalog whose `seq` is not recorded is not used.
+            CatalogRead::Read(read) => {
+                catalog::from_read(*read, channel, &self.store, repository, self.builtin())
+                    .map(Some)
+                    .map_err(Refresh::Unreachable)
+            }
+        }
+    }
+
+    /// The modules the core serves itself.
+    fn builtin(&self) -> impl Iterator<Item = String> + '_ {
+        self.cfg.modules.builtin_modules().map(str::to_owned)
     }
 
     /// The catalog of the channel in the settings, if one in use still holds: the one
-    /// downloaded, or the one kept in `<data>/plugins/` (checked again against the saved TUF
-    /// state, offline).
-    fn valid_index(&self) -> Option<Index> {
+    /// downloaded, or the one kept in `<data>/plugins/` (every part checked again against
+    /// the saved TUF state, offline: [`catalog::kept`]).
+    fn valid_catalog(&self) -> Option<InUse> {
         let repository = self.cfg.repository.as_ref()?;
         let channel = self.update_settings().channel;
         let now = OffsetDateTime::now_utc();
         let mut catalog = lock(&self.catalog);
-        if let Some(index) = &catalog.index
-            && index.channel == channel
-            && catalog.valid_until.is_some_and(|until| now < until)
+        if let Some(in_use) = &catalog.in_use
+            && in_use.catalog.index().channel == channel
+            && now < in_use.valid_until
         {
-            return Some(index.clone());
+            return Some(in_use.clone());
         }
-        let kept = self
-            .store
-            .load_catalog(channel, |bytes| repository.verify_kept(channel, bytes, now));
-        catalog.valid_until = kept.as_ref().map(|kept| kept.valid_until);
-        catalog.index = kept.map(|kept| kept.index);
-        catalog.index.clone()
+        catalog.in_use = catalog::kept(channel, &self.store, repository, self.builtin(), now);
+        catalog.in_use.clone()
     }
 
-    /// [`PluginService::valid_index`], or one downloaded within `timeout`. A download
+    /// [`PluginService::valid_catalog`], or one downloaded within `timeout`. A download
     /// already running is waited for: fully for the user, or only within `timeout` for a
     /// page (then `None` once it runs out); a catalog it brought is used, else a download of
     /// our own gets the time left. A page does not download within [`PAGE_RETRY_AFTER`] of a
-    /// failed download. With updates on, a catalog downloaded here is applied in the
-    /// background.
-    fn ensure_index(&self, timeout: Duration, asker: Asker) -> Option<Index> {
-        if let Some(index) = self.valid_index() {
-            return Some(index);
+    /// failed download. A catalog downloaded here is applied in the background, with updates
+    /// off its revocations only.
+    fn ensure_catalog(&self, timeout: Duration, asker: Asker) -> Option<Arc<oncl_update::Catalog>> {
+        if let Some(in_use) = self.valid_catalog() {
+            return Some(in_use.catalog);
         }
         if self.cfg.repository.is_none() || self.page_waits_out_failure(asker) {
             return None;
@@ -875,8 +948,8 @@ impl PluginService {
                 }
             }
         };
-        if let Some(index) = self.valid_index() {
-            return Some(index);
+        if let Some(in_use) = self.valid_catalog() {
+            return Some(in_use.catalog);
         }
         if self.page_waits_out_failure(asker) {
             return None;
@@ -889,19 +962,18 @@ impl PluginService {
         if left.is_zero() {
             return None;
         }
-        self.refresh_locked(&one, left).ok()?;
+        self.refresh_locked(&one, left, None).ok()?;
         drop(one);
-        if self.update_settings().enabled
-            && let Some(service) = self.me.upgrade()
-        {
+        if let Some(service) = self.me.upgrade() {
+            let apply = Apply::with_updates(self.update_settings().enabled);
             let spawned = thread::Builder::new()
                 .name("plugins-apply".into())
-                .spawn(move || service.apply_catalog());
+                .spawn(move || service.apply_catalog(apply));
             if let Err(e) = spawned {
                 warn!(error = %e, "cannot start a thread: the plugin catalog is not applied");
             }
         }
-        self.valid_index()
+        self.valid_catalog().map(|in_use| in_use.catalog)
     }
 
     /// Whether `asker` is a page and the last catalog download failed within
@@ -918,43 +990,75 @@ impl PluginService {
     }
 
     /// Moves each plugin installed from the catalog to the version the catalog in use
-    /// chooses for it. One application at a time: one asked for while another runs marks
-    /// itself pending, and the running one goes over the newest catalog once more. Each
-    /// plugin is changed under `changing`, and only if it is still the one installed from
-    /// the catalog at the version the choice was made for.
-    fn apply_catalog(&self) {
+    /// chooses for it, as far as `apply` allows. One application at a time: one asked for
+    /// while another runs marks itself pending, and the running one goes over the newest
+    /// catalog once more, as the last one asked for. Each plugin is changed under
+    /// `changing`, and only if it is still the one installed from the catalog at the version
+    /// the choice was made for.
+    fn apply_catalog(&self, apply: Apply) {
         let _one = match self.applying.try_lock() {
             Ok(one) => one,
             Err(TryLockError::Poisoned(e)) => e.into_inner(),
             Err(TryLockError::WouldBlock) => {
                 info!("the plugin catalog is being applied already; it goes over it again");
-                self.apply_pending.store(true, Ordering::SeqCst);
+                *lock(&self.apply_pending) = Some(apply);
                 return;
             }
         };
+        let mut apply = apply;
         loop {
-            self.apply_pending.store(false, Ordering::SeqCst);
-            if let Some(index) = self.valid_index() {
-                self.apply_index(&oncl_update::Catalog::owner(index));
+            if let Some(asked) = lock(&self.apply_pending).take() {
+                apply = asked;
             }
-            if !self.apply_pending.swap(false, Ordering::SeqCst) {
-                break;
+            if let Some(in_use) = self.valid_catalog() {
+                self.apply_index(&in_use.catalog, apply);
+                self.record_applied(&in_use, apply);
+            }
+            match lock(&self.apply_pending).take() {
+                Some(asked) => apply = asked,
+                None => break,
             }
         }
     }
 
-    /// One pass of [`PluginService::apply_catalog`] over `index`.
-    fn apply_index(&self, index: &oncl_update::Catalog) {
+    /// `in_use` is applied as far as `apply` allows: if it was read whole, a scheduled check
+    /// that finds its snapshot again reads nothing more; else the next one reads it again.
+    fn record_applied(&self, in_use: &InUse, apply: Apply) {
+        let channel = in_use.catalog.index().channel;
+        let mut catalog = lock(&self.catalog);
+        catalog.applied = in_use.whole_at.map(|snapshot| match catalog.applied {
+            Some(before) if before.channel == channel && before.snapshot == snapshot => Applied {
+                apply: before.apply.max(apply),
+                ..before
+            },
+            _ => Applied {
+                channel,
+                snapshot,
+                apply,
+            },
+        });
+    }
+
+    /// One pass of [`PluginService::apply_catalog`] over `catalog`. A plugin's publisher not
+    /// recorded is restored from the prefixes of `publishers.json` first. With
+    /// [`Apply::RevocationsOnly`] a revoked version is turned off even if the catalog has a
+    /// version to move to, and nothing is installed.
+    fn apply_index(&self, catalog: &oncl_update::Catalog, apply: Apply) {
         let state = self.store.state();
         for (id, snapshot) in &state.plugins {
             if snapshot.source != Source::Catalog {
                 continue;
             }
+            let recorded = match &snapshot.publisher {
+                Some(publisher) => Some(publisher.clone()),
+                None => self.restore_publisher(catalog, id, snapshot),
+            };
             let mut bad = state.bad.get(id).cloned().unwrap_or_default();
             bad.extend(lock(&self.conflicts).get(id).into_iter().flatten().cloned());
-            match choose_plugin(
-                index,
+            match choose_installed(
+                catalog,
                 id,
+                recorded.as_ref(),
                 &snapshot.version,
                 &self.cfg.core,
                 &state.install_id,
@@ -962,7 +1066,7 @@ impl PluginService {
             ) {
                 PluginChoice::Keep => {
                     lock(&self.pending).remove(id);
-                    let listed = index
+                    let listed = catalog
                         .releases()
                         .any(|r| r.id == *id && r.version == snapshot.version && !r.revoked);
                     if !(snapshot.withdrawn && listed) {
@@ -979,29 +1083,31 @@ impl PluginService {
                         let _ = self.load_installed(id);
                     }
                 }
-                PluginChoice::Update(release) | PluginChoice::Downgrade(release) => {
+                PluginChoice::Update(release) | PluginChoice::Downgrade(release)
+                    if apply == Apply::Full =>
+                {
                     self.update_to(release, snapshot);
                 }
-                PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_)
-                    if !snapshot.withdrawn =>
-                {
-                    lock(&self.pending).remove(id);
-                    let _change = lock(&self.changing);
-                    if self.still(id, snapshot).is_none() {
-                        continue;
+                // Revocations only: off a revoked version, never onto another one.
+                PluginChoice::Update(_) | PluginChoice::Downgrade(_) => {
+                    if catalog.is_installed_revoked(id, &snapshot.version, recorded.as_ref()) {
+                        self.withdraw(id, snapshot, None);
                     }
-                    warn!(plugin = %id, version = %snapshot.version, "the plugin's version is revoked; it is turned off");
-                    self.cfg.modules.unload(id);
-                    lock(&self.conflicts).clear();
-                    if let Err(e) = self.store.set_withdrawn(id, true) {
-                        warn!(plugin = %id, error = %e, "cannot record the plugin's state");
-                    }
-                    (self.cfg.notify)(PluginNotice::Withdrawn {
-                        name: self.name_of(id),
-                    });
                 }
-                PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_) => {
-                    lock(&self.pending).remove(id);
+                PluginChoice::Withdrawn => self.withdraw(id, snapshot, None),
+                PluginChoice::PublisherRevoked(publisher) => {
+                    let display = catalog
+                        .policy()
+                        .and_then(|policy| policy.publisher(publisher))
+                        .map_or_else(
+                            || same_name(publisher.as_str()),
+                            |p| Localized {
+                                ru: p.display().ru.clone(),
+                                kk: p.display().kk.clone(),
+                                en: p.display().en.clone(),
+                            },
+                        );
+                    self.withdraw(id, snapshot, Some(display));
                 }
                 // A choice this core does not know leaves the plugin as it is, but is logged:
                 // a newer library may mean a withdrawal by it.
@@ -1010,6 +1116,57 @@ impl PluginService {
                 }
             }
         }
+    }
+
+    /// The publisher of the installed `id` (`snapshot`, none recorded) by the prefixes of
+    /// `catalog`'s `publishers.json`, recorded if the plugin is still `snapshot`. A plugin of
+    /// the owner's index, or one no prefix covers, has none.
+    fn restore_publisher(
+        &self,
+        catalog: &oncl_update::Catalog,
+        id: &str,
+        snapshot: &Installed,
+    ) -> Option<PublisherName> {
+        let publisher = catalog.publisher_of(id)?.clone();
+        let _change = lock(&self.changing);
+        self.still(id, snapshot)?;
+        info!(plugin = id, %publisher, "the plugin's publisher is restored from its prefix");
+        if let Err(e) = self.store.set_publisher(id, Some(publisher.clone())) {
+            warn!(plugin = id, error = %e, "cannot record the plugin's publisher");
+        }
+        Some(publisher)
+    }
+
+    /// Turns the installed `id` (`snapshot`) off: its version is revoked with nothing to move
+    /// to, or its publisher (`publisher`, its display name) is revoked. Told once: a plugin
+    /// withdrawn already is left as it is, but for an update waiting for the user, dropped.
+    fn withdraw(&self, id: &str, snapshot: &Installed, publisher: Option<Localized>) {
+        lock(&self.pending).remove(id);
+        if snapshot.withdrawn {
+            return;
+        }
+        let _change = lock(&self.changing);
+        if self.still(id, snapshot).is_none() {
+            return;
+        }
+        match &publisher {
+            Some(publisher) => {
+                warn!(plugin = %id, publisher = %publisher.en, "the plugin's publisher is revoked; it is turned off");
+            }
+            None => {
+                warn!(plugin = %id, version = %snapshot.version, "the plugin's version is revoked; it is turned off");
+            }
+        }
+        self.cfg.modules.unload(id);
+        lock(&self.conflicts).clear();
+        if let Err(e) = self.store.set_withdrawn(id, true) {
+            warn!(plugin = %id, error = %e, "cannot record the plugin's state");
+        }
+        let name = self.name_of(id);
+        (self.cfg.notify)(match publisher {
+            Some(publisher) => PluginNotice::PublisherRevoked { name, publisher },
+            None => PluginNotice::Withdrawn { name },
+        });
     }
 
     /// The installed `id` as it is now, if it is still `snapshot`'s: from the catalog, at
@@ -1229,12 +1386,14 @@ impl PluginService {
         Ok((read, bytes))
     }
 
-    /// Asks the user about `package`; installs it if they agree.
+    /// Asks the user about `package`; installs it if they agree, from `source`, released by
+    /// `publisher` (a publisher's plugin of the catalog).
     fn ask(
         self: &Arc<Self>,
         package: Package,
         bytes: Vec<u8>,
         source: Source,
+        publisher: Option<PublisherName>,
         origin: Option<String>,
         guard: Installing,
     ) {
@@ -1265,7 +1424,7 @@ impl PluginService {
                     return;
                 };
                 if yes {
-                    service.finish_install(package, &bytes, source);
+                    service.finish_install(package, &bytes, source, publisher.as_ref());
                 } else {
                     info!(plugin = %package.manifest.id, "the user declined the plugin");
                 }
@@ -1274,7 +1433,13 @@ impl PluginService {
     }
 
     /// Loads `package`, then records it.
-    fn finish_install(&self, package: Package, bytes: &[u8], source: Source) {
+    fn finish_install(
+        &self,
+        package: Package,
+        bytes: &[u8],
+        source: Source,
+        publisher: Option<&PublisherName>,
+    ) {
         let _change = lock(&self.changing);
         let id = package.manifest.id.clone();
         let name = package.manifest.name.clone();
@@ -1285,7 +1450,7 @@ impl PluginService {
             }
             return self.failed(name, e.to_string());
         }
-        if let Err(e) = self.store.install(&package, bytes, source, None) {
+        if let Err(e) = self.store.install(&package, bytes, source, publisher) {
             warn!(plugin = %id, error = %e, "cannot record the plugin");
             self.cfg.modules.unload(&id);
             // The version installed before, if any, runs again.
@@ -1456,7 +1621,9 @@ impl Drop for Installing {
     }
 }
 
-/// Whether `package`'s manifest is the one `release` describes, for `core`.
+/// Whether `package`'s manifest is the one `release` describes, for `core`: for a
+/// publisher's release also the capabilities its role declares (`custom.oncl.capabilities`),
+/// read by the rules of the manifest's own.
 fn check_manifest(
     package: &Package,
     release: &PluginRelease,
@@ -1477,6 +1644,13 @@ fn check_manifest(
     let listed = release.replaces.as_ref().map(|r| (&r.symname, &r.version));
     if replaces != listed {
         return differs("replaces");
+    }
+    if let Some(declared) = &release.capabilities {
+        let declared = Capabilities::try_from(declared)
+            .map_err(|e| format!("the catalog's capabilities cannot be read: {e}"))?;
+        if m.capabilities != declared {
+            return differs("capabilities");
+        }
     }
     if m.min_core > *core {
         return Err(format!(
@@ -1579,6 +1753,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+pub mod catalog;
 pub mod manual;
 pub mod window;
 

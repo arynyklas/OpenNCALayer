@@ -240,6 +240,33 @@ fn custom_oncl_maps_onto_a_plugin_release() {
 }
 
 #[test]
+fn unreadable_delegations_leave_the_publishers_unavailable_and_the_owners_revocations_in_force() {
+    let mut revoking = ecc_entry();
+    revoking["revoked_versions"] =
+        json!([{"id": MARKET, "version": "1.0.0", "date": "2027-02-10"}]);
+    let targets = role(&[entry(MARKET, "1.2.0")]);
+    let policy_of = || Ok(policy(vec![revoking.clone()]));
+    let catalog = Catalog::builder(index(vec![]), &BTreeMap::new(), policy_of())
+        .role(&role_name("ecc"), &targets)
+        .delegations_unavailable()
+        .build();
+    assert!(catalog.policy().is_some());
+    assert_eq!(catalog.publisher_state(&ecc()), PublisherState::Unavailable);
+    assert_eq!(catalog.releases().count(), 0, "the role given is not used");
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.0.0"),
+        PluginChoice::Withdrawn
+    ));
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.1.0"),
+        PluginChoice::Keep
+    ));
+    // Without it, an active publisher without a role makes the whole file unused.
+    let catalog = Catalog::builder(index(vec![]), &BTreeMap::new(), policy_of()).build();
+    assert!(catalog.policy().is_none());
+}
+
+#[test]
 fn an_owner_index_id_wins_over_a_publisher_release() {
     let targets = role(&[entry(MARKET, "2.0.0")]);
     let owner = port(MARKET, "1.0.0", "kz.owner.Module", "kz.owner.bundle");

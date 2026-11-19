@@ -779,6 +779,25 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         Ok(root.expires.min(targets.expires))
     }
 
+    /// The top-level targets saved by the last refresh, checked again without the network
+    /// as [`TufClient::verify_cached_target`] checks them, and the moment they stop holding
+    /// (the earlier of the expiry of the root and of the targets); `None` if no targets are
+    /// saved. What a caller reads offline the delegations and the other targets from.
+    /// Nothing is read from the repository and nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TufClient::verify_cached_target`] for the saved targets.
+    pub fn verify_cached_top_level(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<Option<(Targets, OffsetDateTime)>, TufError> {
+        Ok(self.cached_targets(now)?.map(|(root, targets, _)| {
+            let valid_until = root.expires.min(targets.expires);
+            (targets, valid_until)
+        }))
+    }
+
     /// The saved top-level targets, checked again offline as
     /// [`TufClient::verify_cached_target`] says, with the root in force and the state; `None`
     /// if no targets are saved.

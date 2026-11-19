@@ -9,23 +9,31 @@
 //! share, saved under a lock of the directory and merged so that neither loses the other's
 //! versions. A build without a root has no [`Repository`]: updates are off for both.
 //!
+//! The plugin catalog also reads the publishers' side of the repository
+//! ([`Repository::catalog`], `docs/design/publishers.md`): `publishers.json` among the
+//! top-level targets and the publishers' delegated roles ([`TufClient::delegated`]). Their
+//! bytes are kept by the plugin store and checked again offline here
+//! ([`Repository::verify_kept_publishers`], [`Repository::verify_kept_role`],
+//! [`Repository::kept_top_level`]).
+//!
 //! What the consumers get is the index (its `seq` and channel checked by [`Index::accept`]
 //! against the `last_seq` they pass), its bytes, and until when the metadata that vouches for
 //! it holds. Every failure is an [`UpdateError`] ([`UpdateError::from_tuf`]) and is logged
 //! here, once: a repository that is not published or cannot be read at `info`, one that is
 //! refused (an expired or rolled-back role, a signature, a hash) at `warn`.
 
+use std::collections::BTreeMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex, PoisonError, TryLockError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use oncl_pki::http::HttpTransport;
 use oncl_update::tuf::{
-    Fetcher, FileStore, HttpFetcher, Limits, Profile, Response, Store, TufClient, TufError, layout,
-    model::TARGETS_META,
+    Delegated, Fetcher, FileStore, HttpFetcher, Limits, Profile, Response, RoleName, Store, Target,
+    TargetPath, Targets, Trusted, TufClient, TufError, VerifiedRole, layout, model::TARGETS_META,
 };
-use oncl_update::{Channel, Index, MAX_INDEX_LEN, UpdateError};
+use oncl_update::{Channel, Index, MAX_INDEX_LEN, PublisherPolicy, UpdateError};
 use time::OffsetDateTime;
 use tracing::{info, warn};
 
@@ -38,6 +46,43 @@ pub struct VerifiedIndex {
     pub bytes: Vec<u8>,
     /// When the root or the targets metadata that vouches for the index expires: the index is
     /// not used after it without a new refresh.
+    pub valid_until: OffsetDateTime,
+}
+
+/// What [`Repository::catalog`] read.
+#[derive(Debug)]
+pub enum CatalogRead {
+    /// The repository's snapshot is the version the caller named: nothing else was read.
+    Unchanged,
+    /// The catalog as the repository has it now.
+    Read(Box<VerifiedCatalog>),
+}
+
+/// The plugin catalog the repository vouches for: the owner's index and the publishers'
+/// side, each part on its own (an unavailable part leaves its publishers unavailable).
+#[derive(Debug)]
+pub struct VerifiedCatalog {
+    /// The owner's index.
+    pub index: VerifiedIndex,
+    /// The version of the snapshot it was read under.
+    pub snapshot: u64,
+    /// The top-level targets.
+    pub top_level: BTreeMap<TargetPath, Target>,
+    /// `publishers.json`'s bytes: `None` if the top-level targets list none; `Err` why it
+    /// could not be downloaded or verified.
+    pub publishers: Result<Option<Vec<u8>>, String>,
+    /// The delegated roles; `Err` why the delegations could not be read (every publisher
+    /// is unavailable).
+    pub roles: Result<Delegated, String>,
+}
+
+/// The top-level targets saved by the last refresh, as checked offline
+/// ([`Repository::kept_top_level`]).
+#[derive(Debug)]
+pub struct KeptTopLevel {
+    /// The targets file.
+    pub targets: Targets,
+    /// When it, or the root in force, stops being trusted.
     pub valid_until: OffsetDateTime,
 }
 
@@ -166,48 +211,89 @@ impl Repository {
         last_seq: Option<u64>,
         timeout: Duration,
     ) -> Result<VerifiedIndex, UpdateError> {
-        let result = self.download(channel, last_seq, timeout);
-        match &result {
-            Ok(_) => {}
-            Err(UpdateError::NotPublished(_)) => {
-                info!(%channel, "the update repository has no index of the channel yet");
-            }
-            // A published repository that lost a file: refused, though tried again soon.
-            Err(e @ UpdateError::Tuf(TufError::NotFound(_))) => {
-                warn!(error = %e, %channel, "the update repository lost a file; trying again later");
-            }
-            Err(e) if e.retry_soon() => {
-                info!(error = %e, %channel, "cannot read the update repository; trying again later");
-            }
-            Err(e) => warn!(error = %e, %channel, "the update index is refused"),
-        }
+        let result = self.read(channel, timeout, |client, trusted, now| {
+            download_index(client, trusted, channel, last_seq, now)
+        });
+        log_read(&result, channel);
         result
     }
 
-    fn download(
+    /// The plugin catalog of `channel`, read within `timeout` as [`Repository::index`]
+    /// reads the index, unless the snapshot refreshed is version `unless_snapshot`: then
+    /// nothing more is read ([`CatalogRead::Unchanged`]). Else the index, then the
+    /// publishers' side: `publishers.json` (at most [`PublisherPolicy::MAX_LEN`] bytes) and
+    /// the delegated roles ([`TufClient::delegated`]). A failure of the publishers' side is
+    /// in the result, logged, and fails nothing else.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`Repository::index`].
+    pub fn catalog(
         &self,
         channel: Channel,
         last_seq: Option<u64>,
         timeout: Duration,
-    ) -> Result<VerifiedIndex, UpdateError> {
+        unless_snapshot: Option<u64>,
+    ) -> Result<CatalogRead, UpdateError> {
+        let result = self.read(channel, timeout, |client, trusted, now| {
+            let snapshot = trusted.snapshot().version;
+            if unless_snapshot == Some(snapshot) {
+                return Ok(CatalogRead::Unchanged);
+            }
+            let index = download_index(client, trusted, channel, last_seq, now)?;
+            let publishers = match trusted.target(PublisherPolicy::TARGET) {
+                None => Ok(None),
+                Some(_) => client
+                    .download_target(
+                        trusted,
+                        PublisherPolicy::TARGET,
+                        PublisherPolicy::MAX_LEN as u64,
+                        now,
+                    )
+                    .map(Some)
+                    .map_err(|e| {
+                        warn!(error = %e, "cannot read the publishers' rules; every publisher is unavailable");
+                        e.to_string()
+                    }),
+            };
+            let roles = client.delegated(trusted, now).map_err(|e| {
+                warn!(error = %e, "cannot read the publishers' delegations; every publisher is unavailable");
+                e.to_string()
+            });
+            if let Ok(roles) = &roles {
+                for (role, verified) in roles.roles() {
+                    if let Err(e) = verified {
+                        warn!(%role, error = %e, "a publisher's role is refused; the publisher is unavailable");
+                    }
+                }
+            }
+            Ok(CatalogRead::Read(Box::new(VerifiedCatalog {
+                index,
+                snapshot,
+                top_level: trusted.targets().targets.clone(),
+                publishers,
+                roles,
+            })))
+        });
+        log_read(&result, channel);
+        result
+    }
+
+    /// Refreshes the metadata within `timeout`, then `then`, the client still held.
+    fn read<T>(
+        &self,
+        channel: Channel,
+        timeout: Duration,
+        then: impl FnOnce(
+            &mut TufClient<DeadlineFetcher, FileStore>,
+            &Trusted,
+            OffsetDateTime,
+        ) -> Result<T, UpdateError>,
+    ) -> Result<T, UpdateError> {
         // The deadline counts from the call, the wait for a refresh running included: a caller
         // with ten seconds does not wait twenty for another's download and then take its own.
         let deadline = Instant::now() + timeout;
-        let mut client = loop {
-            match self.client.try_lock() {
-                Ok(client) => break client,
-                Err(TryLockError::Poisoned(e)) => break e.into_inner(),
-                Err(TryLockError::WouldBlock) => {
-                    if Instant::now() >= deadline {
-                        return Err(UpdateError::Tuf(TufError::Fetch(
-                            "another check of the update repository is running: no time left"
-                                .to_owned(),
-                        )));
-                    }
-                    thread::sleep(Duration::from_millis(20));
-                }
-            }
-        };
+        let mut client = self.client_until(deadline)?;
         *client
             .fetcher()
             .deadline
@@ -222,7 +308,6 @@ impl Repository {
             .load()
             .map(|state| !state.ever_published)
             .unwrap_or(false);
-        let of_channel = |e| UpdateError::from_tuf(e, channel);
         let trusted = client.refresh(now).map_err(|e| match e {
             TufError::NotFound(path)
                 if never_published
@@ -231,17 +316,31 @@ impl Repository {
             {
                 UpdateError::NotPublished(channel)
             }
-            e => of_channel(e),
+            e => UpdateError::from_tuf(e, channel),
         })?;
-        let bytes = client
-            .download_target(&trusted, &channel.target_path(), MAX_INDEX_LEN, now)
-            .map_err(of_channel)?;
-        let index = Index::accept(&bytes, channel, last_seq)?;
-        Ok(VerifiedIndex {
-            index,
-            bytes,
-            valid_until: trusted.root().expires.min(trusted.targets().expires),
-        })
+        then(&mut client, &trusted, now)
+    }
+
+    /// The refreshing client, once no other read holds it, or an error at `deadline`.
+    fn client_until(
+        &self,
+        deadline: Instant,
+    ) -> Result<MutexGuard<'_, TufClient<DeadlineFetcher, FileStore>>, UpdateError> {
+        loop {
+            match self.client.try_lock() {
+                Ok(client) => return Ok(client),
+                Err(TryLockError::Poisoned(e)) => return Ok(e.into_inner()),
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return Err(UpdateError::Tuf(TufError::Fetch(
+                            "another check of the update repository is running: no time left"
+                                .to_owned(),
+                        )));
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
     }
 
     /// Whether `bytes`, an index of `channel` kept from an earlier download, are what the
@@ -260,6 +359,59 @@ impl Repository {
     ) -> Result<OffsetDateTime, String> {
         self.offline
             .verify_cached_target(&channel.target_path(), bytes, now)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Whether `bytes`, a `publishers.json` kept from an earlier [`Repository::catalog`],
+    /// are what the targets metadata saved by the last refresh lists, as
+    /// [`Repository::verify_kept`] checks an index; and until when.
+    ///
+    /// # Errors
+    ///
+    /// Why not, in words.
+    pub fn verify_kept_publishers(
+        &self,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<OffsetDateTime, String> {
+        self.offline
+            .verify_cached_target(PublisherPolicy::TARGET, bytes, now)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The file `bytes` of the delegated role `role` kept from an earlier
+    /// [`Repository::catalog`], checked again without the network
+    /// ([`TufClient::verify_cached_role`]).
+    ///
+    /// # Errors
+    ///
+    /// Why not, in words.
+    pub fn verify_kept_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<VerifiedRole, String> {
+        self.offline
+            .verify_cached_role(role, bytes, now)
+            .map_err(|e| e.to_string())
+    }
+
+    /// The top-level targets saved by the last refresh, checked again without the network
+    /// ([`TufClient::verify_cached_top_level`]); `None` if none are saved.
+    ///
+    /// # Errors
+    ///
+    /// Why they do not hold, in words.
+    pub fn kept_top_level(&self, now: OffsetDateTime) -> Result<Option<KeptTopLevel>, String> {
+        self.offline
+            .verify_cached_top_level(now)
+            .map(|kept| {
+                kept.map(|(targets, valid_until)| KeptTopLevel {
+                    targets,
+                    valid_until,
+                })
+            })
             .map_err(|e| e.to_string())
     }
 
@@ -286,6 +438,43 @@ impl Repository {
             .as_ref()
             .and_then(|s| s.meta.get(TARGETS_META).copied());
         Ok(behind(listed_snapshot, accepted_snapshot) || behind(listed_targets, state.targets))
+    }
+}
+
+/// The index of `channel` among `trusted`'s targets, downloaded and accepted.
+fn download_index(
+    client: &TufClient<DeadlineFetcher, FileStore>,
+    trusted: &Trusted,
+    channel: Channel,
+    last_seq: Option<u64>,
+    now: OffsetDateTime,
+) -> Result<VerifiedIndex, UpdateError> {
+    let bytes = client
+        .download_target(trusted, &channel.target_path(), MAX_INDEX_LEN, now)
+        .map_err(|e| UpdateError::from_tuf(e, channel))?;
+    let index = Index::accept(&bytes, channel, last_seq)?;
+    Ok(VerifiedIndex {
+        index,
+        bytes,
+        valid_until: trusted.root().expires.min(trusted.targets().expires),
+    })
+}
+
+/// Logs a failed read of `channel`'s index, once.
+fn log_read<T>(result: &Result<T, UpdateError>, channel: Channel) {
+    match result {
+        Ok(_) => {}
+        Err(UpdateError::NotPublished(_)) => {
+            info!(%channel, "the update repository has no index of the channel yet");
+        }
+        // A published repository that lost a file: refused, though tried again soon.
+        Err(e @ UpdateError::Tuf(TufError::NotFound(_))) => {
+            warn!(error = %e, %channel, "the update repository lost a file; trying again later");
+        }
+        Err(e) if e.retry_soon() => {
+            info!(error = %e, %channel, "cannot read the update repository; trying again later");
+        }
+        Err(e) => warn!(error = %e, %channel, "the update index is refused"),
     }
 }
 

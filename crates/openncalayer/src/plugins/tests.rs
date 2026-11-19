@@ -11,6 +11,8 @@ use oncl_update::{PluginReplaces, Sha256};
 use serde_json::json;
 
 use crate::repository::tests::{BASE, Server, refresh_url, timestamp_url};
+use crate::update::CHECK_EVERY;
+use oncl_update::Index;
 pub(in crate::plugins) const ID: &str = "io.github.arynyklas.openncalayer.example";
 pub(in crate::plugins) const MODULE: &str = "io.github.arynyklas.openncalayer.Example";
 const ORIGIN: &str = "https://shop.kz";
@@ -538,15 +540,21 @@ fn local_plugin_is_not_updated() {
 }
 
 #[test]
-fn disabled_updates_skip_schedule_but_allow_on_demand() {
+fn updates_off_apply_only_revocations_on_schedule_and_on_demand() {
     let sandbox = Sandbox::new(false);
     let service = sandbox.service();
     sandbox.publish(1, vec![sandbox.release("0.1.0", &example("0.1.0"))]);
+    // The schedule checks the catalog, for its revocations (no publisher's plugin: rarely).
     let wait = service.scheduled_check();
     assert!(wait >= CHECK_EVERY.0 && wait <= CHECK_EVERY.1);
-    assert!(sandbox.transport.asked().is_empty(), "nothing downloaded");
+    assert!(
+        !sandbox.transport.asked().is_empty(),
+        "the catalog is checked"
+    );
+    assert!(sandbox.notices().is_empty(), "nothing is installed");
+    assert!(sandbox.store().state().plugins.is_empty());
 
-    // On demand: the catalog is downloaded.
+    // On demand: the user installs.
     service.install_from_catalog(ID, None).unwrap();
     assert_eq!(
         sandbox.notices(),
@@ -568,14 +576,57 @@ fn disabled_updates_skip_schedule_but_allow_on_demand() {
         "but does not update"
     );
     assert_eq!(sandbox.store().state().last_seq[&Channel::Stable], 2);
+    // Nothing new: the scheduled check reads the snapshot only.
+    let asked = sandbox.transport.asked().len();
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.transport.asked()[asked..]
+            .iter()
+            .filter(|(url, ..)| url.contains("/targets/"))
+            .count(),
+        0,
+        "no target is downloaded"
+    );
 
-    // Updates on: the scheduled check updates.
+    // Updates on: the scheduled check reads the same snapshot again, to update.
     std::fs::write(
         sandbox.dir.path().join("settings.json"),
         r#"{"updates": {"enabled": true, "channel": "stable"}}"#,
     )
     .unwrap();
     service.scheduled_check();
+    assert_eq!(sandbox.installed_version(), Some(v("0.2.0")));
+}
+
+#[test]
+fn updates_off_withdraw_a_revoked_version_even_with_a_replacement() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.2.0");
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": false, "channel": "stable"}}"#,
+    )
+    .unwrap();
+    let older = sandbox.release("0.1.0", &example("0.1.0"));
+    let mut revoked = sandbox.release("0.2.0", &example("0.2.0"));
+    revoked.revoked = true;
+    let newer = sandbox.release("0.3.0", &example("0.3.0"));
+    sandbox.publish(2, vec![older.clone(), revoked.clone(), newer]);
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    assert_eq!(sandbox.installed_version(), Some(v("0.2.0")));
+    assert!(sandbox.store().state().plugins[ID].withdrawn);
+    assert!(sandbox.modules.names().is_empty());
+    assert_eq!(package_downloads(&sandbox, "0.3.0"), 0);
+    // A revoked version with only an older one to move back to: off all the same (Р38).
+    sandbox.publish(3, vec![older, revoked]);
+    service.check_now();
+    assert!(sandbox.notices().is_empty());
+    assert_eq!(package_downloads(&sandbox, "0.1.0"), 0);
     assert_eq!(sandbox.installed_version(), Some(v("0.2.0")));
 }
 
@@ -1493,7 +1544,7 @@ fn an_offer_waits_for_a_download_running_within_its_budget() {
         let one = lock(&other.checking);
         held_tx.send(()).unwrap();
         thread::sleep(Duration::from_millis(500));
-        other.refresh_locked(&one, INDEX_TIMEOUT).unwrap();
+        other.refresh_locked(&one, INDEX_TIMEOUT, None).unwrap();
     });
     held.recv().unwrap();
     assert!(Bundles::request_install(
@@ -1567,8 +1618,8 @@ fn an_application_asked_for_meanwhile_goes_over_the_newest_catalog() {
     let server = Arc::clone(&sandbox.server);
     sandbox.transport.during(&package_url("0.2.0"), move || {
         server.publish(&transport, Channel::Stable, &body);
-        newer.refresh(INDEX_TIMEOUT).unwrap();
-        newer.apply_catalog();
+        newer.refresh(INDEX_TIMEOUT, None).unwrap();
+        newer.apply_catalog(Apply::Full);
     });
     service.check_now();
     assert_eq!(sandbox.installed_version(), Some(v("0.3.0")));
@@ -1804,3 +1855,5 @@ mod consent {
         assert!(marks.contains(&&AddedLine::Network), "{marks:?}");
     }
 }
+
+mod publishers;
