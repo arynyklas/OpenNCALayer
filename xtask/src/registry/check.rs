@@ -14,17 +14,20 @@ pub const CSP: &str =
     "default-src 'none'; style-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'";
 
 /// The pages every build has.
-pub const REQUIRED: [&str; 13] = [
+pub const REQUIRED: [&str; 16] = [
     "index.html",
     "plugins/index.html",
+    "publishers/index.html",
     "download/index.html",
     "upstream/index.html",
     "kk/index.html",
     "kk/plugins/index.html",
+    "kk/publishers/index.html",
     "kk/download/index.html",
     "kk/upstream/index.html",
     "en/index.html",
     "en/plugins/index.html",
+    "en/publishers/index.html",
     "en/download/index.html",
     "en/upstream/index.html",
     "404.html",
@@ -557,8 +560,8 @@ mod tests {
     fn minimal_site_passes() {
         let dir = site(&[]);
         let report = check(dir.path(), BASE).unwrap();
-        assert_eq!(report.pages, 13);
-        assert_eq!(report.links, 26);
+        assert_eq!(report.pages, REQUIRED.len());
+        assert_eq!(report.links, 2 * REQUIRED.len());
     }
 
     #[test]

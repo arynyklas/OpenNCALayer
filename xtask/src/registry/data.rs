@@ -15,6 +15,7 @@ use super::inputs::{
     ChannelView, Facts, HistoryKind, PluginChange, PluginView, Release, Upstream, latest,
 };
 use super::ports::{Conformance, Port, PortStatus};
+use super::publishers::{PublishersData, SitePublisher, publishers_data};
 use crate::index::{chromium_name, firefox_name, release_asset_url, release_notes_url};
 use crate::package::{linux, macos, windows};
 
@@ -36,6 +37,8 @@ pub struct SiteData {
     pub releases: ReleasesData,
     /// The facts of the `upstream` branch.
     pub upstream: UpstreamData,
+    /// The third-party publishers and their plugins.
+    pub publishers: PublishersData,
 }
 
 /// A port.
@@ -71,6 +74,18 @@ pub struct PluginData {
     pub channels: BTreeMap<String, PluginView>,
     /// Whether the original changed since the port.
     pub original: OriginalChange,
+    /// The publisher's plugin that replaces it (`supersedes`), if that plugin is in the
+    /// catalog.
+    pub replaced_by: Option<ReplacedBy>,
+}
+
+/// A publisher's plugin replacing a port.
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplacedBy {
+    /// The publisher's name.
+    pub publisher: String,
+    /// The plugin's id.
+    pub id: String,
 }
 
 /// Whether the original bundle changed after the port.
@@ -217,6 +232,9 @@ pub struct BundleRow {
     pub ours: Option<String>,
     /// Whether the original's version differs from ours.
     pub changed: bool,
+    /// The publisher's plugin whose catalog row has the bundle's `id`, replacing it where no
+    /// port does.
+    pub replacement: Option<String>,
 }
 
 /// An entry of the history.
@@ -251,17 +269,47 @@ pub struct IssueLink {
     pub url: String,
 }
 
-/// The site's data from the ports, the channels, and the external inputs if read.
+/// The site's data from the ports, the channels, the external inputs if read, and the
+/// publishers.
 pub fn site_data(
     ports: &[Port],
     channels: &BTreeMap<Channel, ChannelView>,
     releases: Option<&[Release]>,
     upstream: Option<&Upstream>,
+    sites: &[SitePublisher],
 ) -> SiteData {
     let facts = upstream.and_then(|u| u.facts.as_ref());
+    let ported = ports
+        .iter()
+        .map(|p| p.registry.original.symname.clone())
+        .collect();
+    let publishers = publishers_data(sites, &ported);
+    // An active publisher's plugin in the catalog replaces the ports its entry supersedes.
+    let mut replaced_by: BTreeMap<&str, ReplacedBy> = BTreeMap::new();
+    for site in sites.iter().filter(|s| s.publisher.is_active()) {
+        for (port, id) in &site.publisher.supersedes {
+            if publishers
+                .plugins
+                .get(id)
+                .is_some_and(|p| !p.channels.is_empty())
+            {
+                replaced_by.insert(
+                    port.as_str(),
+                    ReplacedBy {
+                        publisher: site.publisher.name.as_str().to_owned(),
+                        id: id.clone(),
+                    },
+                );
+            }
+        }
+    }
     let plugins: BTreeMap<String, PluginData> = ports
         .iter()
-        .map(|port| (port.short.clone(), plugin_data(port, channels, facts)))
+        .map(|port| {
+            let mut data = plugin_data(port, channels, facts);
+            data.replaced_by = replaced_by.remove(port.manifest.id.as_str());
+            (port.short.clone(), data)
+        })
         .collect();
     let order = LANGS
         .iter()
@@ -296,13 +344,17 @@ pub fn site_data(
             prerelease: prerelease.map(release_data),
         }
     });
+    let upstream = upstream.map_or_else(UpstreamData::default, |u| {
+        upstream_data(u, ports, &publishers)
+    });
     SiteData {
         schema: 1,
         plugins,
         order,
         channels,
         releases,
-        upstream: upstream.map_or_else(UpstreamData::default, |u| upstream_data(u, ports)),
+        upstream,
+        publishers,
     }
 }
 
@@ -356,10 +408,11 @@ fn plugin_data(
             })
             .collect(),
         original: original_change(&original.symname, &original.version, facts),
+        replaced_by: None,
     }
 }
 
-fn upstream_data(upstream: &Upstream, ports: &[Port]) -> UpstreamData {
+fn upstream_data(upstream: &Upstream, ports: &[Port], publishers: &PublishersData) -> UpstreamData {
     let core = oncl_builtin_accessory::bundles();
     let bundles = upstream
         .facts
@@ -384,6 +437,11 @@ fn upstream_data(upstream: &Upstream, ports: &[Port]) -> UpstreamData {
                 port: port.map(|p| p.short.clone()),
                 changed: ours.as_ref().is_some_and(|ours| *ours != bundle.version),
                 ours,
+                replacement: publishers
+                    .plugins
+                    .values()
+                    .find(|p| p.anchor.as_ref() == Some(symname))
+                    .map(|p| p.id.clone()),
             }
         })
         .collect();
@@ -502,7 +560,7 @@ mod tests {
             facts: Some(facts(&[(symname, "999.0", true), ("x y", "1", false)])),
             ..Upstream::default()
         };
-        let data = upstream_data(&upstream, &[]);
+        let data = upstream_data(&upstream, &[], &PublishersData::default());
         let row = data.bundles.iter().find(|b| b.symname == symname).unwrap();
         assert_eq!(row.ours.as_deref(), Some(version));
         assert!(row.changed);
@@ -550,7 +608,7 @@ mod tests {
     #[test]
     fn capabilities_rendered_per_language() {
         let ports = load(&fixtures().join("plugins")).unwrap();
-        let data = site_data(&ports, &BTreeMap::new(), None, None);
+        let data = site_data(&ports, &BTreeMap::new(), None, None, &[]);
         let alpha = &data.plugins["alpha"];
         for (lang, l) in LANGS {
             let lines = &alpha.capabilities[lang];
@@ -567,21 +625,21 @@ mod tests {
     #[test]
     fn order_by_localized_name() {
         let ports = load(&fixtures().join("plugins")).unwrap();
-        let data = site_data(&ports, &BTreeMap::new(), None, None);
+        let data = site_data(&ports, &BTreeMap::new(), None, None, &[]);
         // "<script…" sorts before letters; Cyrillic after Latin.
         assert_eq!(data.order["ru"], ["hostile", "alpha", "gamma"]);
         assert_eq!(data.order["en"], ["hostile", "alpha", "gamma"]);
         let mut ports = ports;
         ports[0].manifest.name.en = "zeta".to_owned();
         ports[1].manifest.name.en = "Beta".to_owned();
-        let data = site_data(&ports, &BTreeMap::new(), None, None);
+        let data = site_data(&ports, &BTreeMap::new(), None, None, &[]);
         assert_eq!(data.order["en"], ["hostile", "gamma", "alpha"]);
     }
 
     #[test]
     fn history_newest_first_with_links() {
         let upstream = read_upstream(&fixtures().join("upstream")).unwrap();
-        let data = upstream_data(&upstream, &[]);
+        let data = upstream_data(&upstream, &[], &PublishersData::default());
         assert!(data.available);
         assert_eq!(data.version.as_deref(), Some("1.4"));
         let ids: Vec<&str> = data.history.iter().map(|h| h.id.as_str()).collect();
