@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use oncl_flows::capabilities::capability_text;
+use oncl_pack::read_limited;
 use oncl_plugin::operations::is_invisible;
 use oncl_plugin::{Capabilities, is_symbolic_name};
 use oncl_update::Channel;
@@ -27,7 +28,6 @@ use oncl_update::tuf::{Envelope, Limits, Profile, Targets};
 use serde::Serialize;
 
 use super::LANGS;
-use crate::plugin::read_limited;
 use crate::publishers::{Publisher, Registry, State};
 
 /// The repository: the copies of the packages are its releases.
