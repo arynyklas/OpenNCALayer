@@ -438,7 +438,7 @@ impl Repository {
 
     /// The file `bytes` of the delegated role `role` kept from an earlier
     /// [`Repository::catalog`], checked again without the network
-    /// ([`TufClient::verify_cached_role`]).
+    /// ([`TufClient::verify_cached_current_role`]).
     ///
     /// # Errors
     ///
@@ -450,7 +450,7 @@ impl Repository {
         now: OffsetDateTime,
     ) -> Result<VerifiedRole, String> {
         self.offline
-            .verify_cached_role(role, bytes, now)
+            .verify_cached_current_role(role, bytes, now)
             .map_err(|e| e.to_string())
     }
 

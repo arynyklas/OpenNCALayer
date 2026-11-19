@@ -11,8 +11,14 @@
 //! - `privacy` and `index` run on every run: no `if`, or one that names events only
 //!   (`github.event_name == '…'` joined by `||`), never an output of `changes`.
 //!
+//! And in every workflow and composite action (`.github/workflows/*.yml`,
+//! `.github/actions/*/action.yml`): each `apt-get` command carries the network timeouts and
+//! retries of [`APT_OPTIONS`], and its step has a `timeout-minutes` of its own, so a stalled
+//! mirror fails the step in minutes instead of holding the job to its limit.
+//!
 //! The file is read line by line in the block style it is written in: jobs are the keys
-//! indented by two spaces under `jobs:`, their keys by four.
+//! indented by two spaces under `jobs:`, their keys by four; steps are the items of a
+//! `steps:` list.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -22,6 +28,12 @@ use std::path::PathBuf;
 const NOT_NEEDED: [&str; 1] = ["check"];
 /// The jobs that must run on every run.
 const ALWAYS: [&str; 2] = ["privacy", "index"];
+/// What every `apt-get` command passes: 30 s network timeouts and 3 retries.
+const APT_OPTIONS: [&str; 3] = [
+    "-o Acquire::http::Timeout=30",
+    "-o Acquire::https::Timeout=30",
+    "-o Acquire::Retries=3",
+];
 
 /// One job: its id and the lines of its body (indentation kept).
 struct Job {
@@ -152,6 +164,188 @@ fn real_ci() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows/ci.yml");
     // A Windows checkout may have CRLF line ends: the mutations are written with LF.
     fs::read_to_string(&path).unwrap().replace("\r\n", "\n")
+}
+
+fn indent(line: &str) -> usize {
+    line.len() - line.trim_start_matches(' ').len()
+}
+
+/// The steps of a workflow or a composite action: each item of every `steps:` list, with its
+/// lines (indentation kept) and the indentation of its `- `.
+fn steps(text: &str) -> Vec<(usize, Vec<&str>)> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut out: Vec<(usize, Vec<&str>)> = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let opener = lines[i];
+        i += 1;
+        if opener.trim() != "steps:" {
+            continue;
+        }
+        let mut item = None;
+        while i < lines.len() {
+            let line = lines[i];
+            let trimmed = line.trim();
+            let at = indent(line);
+            // Blank lines, and comments outside a step's body, neither belong to a step nor
+            // end the list.
+            if trimmed.is_empty() || (trimmed.starts_with('#') && item.is_none_or(|s| at <= s)) {
+                i += 1;
+                continue;
+            }
+            let item_at = *item.get_or_insert(at);
+            if at == item_at && trimmed.starts_with("- ") {
+                out.push((at, vec![line]));
+            } else if at > item_at
+                && let Some(step) = out.last_mut()
+            {
+                step.1.push(line);
+            } else {
+                break;
+            }
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The number of steps of a workflow or composite action that run `apt-get`, and what is
+/// wrong with them.
+fn check_apt(file: &str, text: &str) -> (usize, Vec<String>) {
+    let mut count = 0;
+    let mut bad = Vec::new();
+    for (at, lines) in steps(text) {
+        // The commands, `\` continuations joined, comments left out.
+        let mut commands = Vec::new();
+        let mut current = String::new();
+        for line in &lines {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            match trimmed.strip_suffix('\\') {
+                Some(part) => {
+                    current.push_str(part);
+                    current.push(' ');
+                }
+                None => {
+                    current.push_str(trimmed);
+                    commands.push(std::mem::take(&mut current));
+                }
+            }
+        }
+        commands.push(current);
+        let apt: Vec<&String> = commands.iter().filter(|c| c.contains("apt-get")).collect();
+        if apt.is_empty() {
+            continue;
+        }
+        count += 1;
+        let step = lines
+            .iter()
+            .find_map(|l| l.trim().trim_start_matches("- ").strip_prefix("name:"))
+            .map_or_else(|| lines[0].trim().to_owned(), |n| n.trim().to_owned());
+        let has_timeout = lines.iter().any(|l| {
+            indent(l) <= at + 2
+                && l.trim()
+                    .trim_start_matches("- ")
+                    .starts_with("timeout-minutes:")
+        });
+        if !has_timeout {
+            bad.push(format!(
+                "{file}: the step {step:?} runs apt-get without its own timeout-minutes"
+            ));
+        }
+        for command in apt {
+            for option in APT_OPTIONS {
+                if !command.contains(option) {
+                    bad.push(format!(
+                        "{file}: the step {step:?} runs apt-get without {option}: {command}"
+                    ));
+                }
+            }
+        }
+    }
+    (count, bad)
+}
+
+/// The workflows and composite actions, by their path under `.github/`.
+fn github_files() -> Vec<(String, String)> {
+    let github = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.github");
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(github.join("workflows")).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|e| e == "yml" || e == "yaml") {
+            paths.push(path);
+        }
+    }
+    for entry in fs::read_dir(github.join("actions")).unwrap() {
+        let dir = entry.unwrap().path();
+        for name in ["action.yml", "action.yaml"] {
+            if dir.join(name).is_file() {
+                paths.push(dir.join(name));
+            }
+        }
+    }
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            let name = path.strip_prefix(&github).unwrap().display().to_string();
+            (
+                name,
+                fs::read_to_string(&path).unwrap().replace("\r\n", "\n"),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn every_apt_step_fails_fast() {
+    let mut count = 0;
+    let mut bad = Vec::new();
+    for (name, text) in github_files() {
+        let (n, b) = check_apt(&name, &text);
+        count += n;
+        bad.extend(b);
+    }
+    assert!(bad.is_empty(), "{bad:#?}");
+    // The check sees the steps it is about.
+    assert!(count >= 1, "no step runs apt-get");
+}
+
+fn assert_apt_found(text: &str, needle: &str) {
+    let (_, bad) = check_apt("ci.yml", text);
+    assert!(
+        bad.iter().any(|b| b.contains(needle)),
+        "not caught ({needle:?}): {bad:#?}"
+    );
+}
+
+#[test]
+fn an_apt_step_without_its_timeout_is_found() {
+    assert_apt_found(
+        &mutated(
+            "      - name: Install pcscd and vpcd\n        timeout-minutes: 10\n",
+            "      - name: Install pcscd and vpcd\n",
+        ),
+        "\"Install pcscd and vpcd\" runs apt-get without its own timeout-minutes",
+    );
+}
+
+#[test]
+fn an_apt_command_without_the_options_is_found() {
+    assert_apt_found(
+        &mutated(" -o Acquire::Retries=3 update\n", " update\n"),
+        "without -o Acquire::Retries=3",
+    );
+    // The options count per command, continuations included.
+    assert_apt_found(
+        &mutated(
+            "if ! sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \\\n",
+            "if ! sudo apt-get \\\n",
+        ),
+        "\"Install pcscd and vpcd\" runs apt-get without -o Acquire::http::Timeout=30",
+    );
 }
 
 #[test]

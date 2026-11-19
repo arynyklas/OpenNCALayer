@@ -7,7 +7,7 @@ name: Index check
 # request or a push to `main` changes the update indexes or the trust root, and
 # `cargo xtask tuf check --no-timestamp` (the TUF repository `tuf/v1` verified with the
 # client's code from the trust anchor, its targets equal to the indexes, history unchanged
-# against the base) when it changes `tuf/` or the anchor too. Without `tuf/` and the anchor
+# against the base) when it changes `tuf/`, `publishers/` or the anchor too. Without `tuf/` and the anchor
 # (before the owner's ceremony) that check says so and passes. ci.yml calls it (job `index`)
 # on every pull request and push to `main`, and it decides in the job whether those changed,
 # so it always reports and is part of ci.yml's required `check`: with nothing relevant
@@ -58,11 +58,11 @@ jobs:
             base=""
             changed=""
           fi
-          if printf '%s\n' "$changed" | grep -qE '^(updates/|tuf/|crates/oncl-update/keys/)'; then
+          if printf '%s\n' "$changed" | grep -qE '^(updates/|tuf/|publishers/|crates/oncl-update/keys/)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"
-            echo "nothing under updates/, tuf/ or crates/oncl-update/keys/ changed: no index to check"
+            echo "nothing under updates/, tuf/, publishers/ or crates/oncl-update/keys/ changed: no index to check"
           fi
           echo "base=$base" >> "$GITHUB_OUTPUT"
       - name: Install toolchain (rust-toolchain.toml)

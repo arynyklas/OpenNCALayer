@@ -667,6 +667,32 @@ fn the_workflows_keep_the_rules_for_the_timestamp_secret() {
     assert!(bad.is_empty(), "{bad:#?}");
 }
 
+/// `tuf check` compares the signed repository with `publishers/`: a change there runs the
+/// index check on pull requests, Pages on `main`, and counts as a site change in CI.
+#[test]
+fn a_change_of_publishers_runs_the_tuf_check_and_pages() {
+    let files = real_workflows();
+    let text = |name: &str| {
+        files
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, t)| t.as_str())
+            .unwrap_or_else(|| panic!("{name}"))
+    };
+    assert!(
+        text("index-check.yml")
+            .contains("grep -qE '^(updates/|tuf/|publishers/|crates/oncl-update/keys/)'"),
+        "index-check.yml"
+    );
+    let pages: Value = parse_yaml(text("pages.yml")).unwrap();
+    let paths = format!("{:?}", pages["on"]["push"]["paths"]);
+    assert!(paths.contains("publishers/**"), "{paths}");
+    assert!(
+        text("ci.yml").contains("updates/* | tuf/* | publishers/*) site=true ;;"),
+        "ci.yml"
+    );
+}
+
 /// The real workflows with `pages.yml` changed by replacing `from` with `to` (which must be
 /// there) and `extra` files added.
 fn mutated(from: &str, to: &str, extra: &[(&str, &str)]) -> Vec<(String, String)> {

@@ -9,10 +9,10 @@ use std::sync::LazyLock;
 
 use oncl_update::tuf::{Limits, MemoryStore, Role, TufClient, TufError, build};
 use time::{Duration, OffsetDateTime};
-use xtask::tuf::check::{self, Expiry, Options, Outcome, Report, TimestampMode};
+use xtask::tuf::check::{self, Expiry, Options, Outcome, Report, Stage};
 use xtask::tuf::keystore;
 use xtask::tuf::published::{self, Published};
-use xtask::tuf::repo::DirFetcher;
+use xtask::tuf::repo::{DirFetcher, SnapshotMode};
 use xtask::tuf::timestamp::{self, KeySource};
 use xtask::tuf::{PassphraseSource, init, root, update};
 
@@ -73,6 +73,8 @@ static TEMPLATE: LazyLock<PathBuf> = LazyLock::new(|| {
         keys: &dir.join("keys"),
         index: &dir.join("indexes"),
         out: &dir.join("repo"),
+        publishers: &dir.join("publishers"),
+        mode: SnapshotMode::Offline,
         refresh: false,
         now: t0(),
         passphrase: &source,
@@ -86,8 +88,13 @@ fn template() -> &'static Path {
 }
 
 fn world() -> World {
+    world_of(template())
+}
+
+/// A world copied from the directory `template`.
+fn world_of(template: &Path) -> World {
     let dir = tempfile::tempdir().unwrap();
-    copy_dir(template(), dir.path());
+    copy_dir(template, dir.path());
     World { dir }
 }
 
@@ -111,12 +118,44 @@ impl World {
         PassphraseSource::File(self.p("pass.txt"))
     }
 
+    fn publishers(&self) -> PathBuf {
+        self.p("publishers")
+    }
+    fn config(&self) -> PathBuf {
+        self.p("repo.toml")
+    }
+    fn mode(&self) -> SnapshotMode {
+        xtask::tuf::repo::read_mode(&self.config()).unwrap()
+    }
+
     fn update(&self, now: OffsetDateTime, refresh: bool) -> anyhow::Result<update::Outcome> {
         update::update(&update::Options {
             keys: &self.keys(),
             index: &self.indexes(),
             out: &self.repo(),
+            publishers: &self.publishers(),
+            mode: self.mode(),
             refresh,
+            now,
+            passphrase: &self.pass(),
+        })
+    }
+
+    fn root(
+        &self,
+        now: OffsetDateTime,
+        rotate: &[Role],
+        online: bool,
+    ) -> anyhow::Result<root::Rotated> {
+        root::root(&root::Options {
+            keys: &self.keys(),
+            out: &self.repo(),
+            config: &self.config(),
+            rotate_root: rotate.contains(&Role::Root),
+            rotate_targets: rotate.contains(&Role::Targets),
+            rotate_snapshot: rotate.contains(&Role::Snapshot),
+            rotate_timestamp: rotate.contains(&Role::Timestamp),
+            online,
             now,
             passphrase: &self.pass(),
         })
@@ -132,6 +171,8 @@ impl World {
             out,
             anchor: &self.anchor(),
             index: &self.indexes(),
+            publishers: &self.publishers(),
+            mode: self.mode(),
             key: &KeySource::File(key.to_owned()),
             now,
         })
@@ -141,19 +182,22 @@ impl World {
         self.timestamp_at(&self.repo(), now, &self.keys().join("timestamp.key"))
     }
 
-    fn check(
+    fn check_dir(
         &self,
-        mode: TimestampMode,
+        dir: &Path,
+        stage: Stage,
         now: OffsetDateTime,
         fail: bool,
         base: Option<&str>,
     ) -> Report {
         match check::check(&Options {
-            dir: &self.repo(),
+            dir,
             index: Some(&self.indexes()),
+            publishers: Some(&self.publishers()),
             anchor: Some(&self.anchor()),
             now,
-            timestamp: mode,
+            stage,
+            mode: self.mode(),
             expiry: Expiry {
                 min_days: 10,
                 min_root_days: 45,
@@ -168,8 +212,31 @@ impl World {
         }
     }
 
+    fn check(&self, stage: Stage, now: OffsetDateTime, fail: bool, base: Option<&str>) -> Report {
+        self.check_dir(&self.repo(), stage, now, fail, base)
+    }
+
     fn tree(&self, now: OffsetDateTime) -> Report {
-        self.check(TimestampMode::Absent, now, false, None)
+        self.check(Stage::Tree, now, false, None)
+    }
+}
+
+/// Options of `check::check` over `dir` from `anchor`, without indexes or publishers.
+fn bare<'a>(dir: &'a Path, anchor: &'a Path, now: OffsetDateTime) -> Options<'a> {
+    Options {
+        dir,
+        index: None,
+        publishers: None,
+        anchor: Some(anchor),
+        now,
+        stage: Stage::Tree,
+        mode: SnapshotMode::Offline,
+        expiry: Expiry {
+            min_days: 10,
+            min_root_days: 45,
+            fail: false,
+        },
+        base: None,
     }
 }
 
@@ -224,12 +291,7 @@ fn init_update_timestamp_check_end_to_end() {
     // The timestamp is signed over a copy, the client accepts it, and so does the check.
     let signed = w.timestamp(t0() + Duration::hours(1)).unwrap();
     assert_eq!(signed.version, (1_790_000_000 + 3600) as u64);
-    let full = w.check(
-        TimestampMode::Required,
-        t0() + Duration::hours(1),
-        true,
-        None,
-    );
+    let full = w.check(Stage::Published, t0() + Duration::hours(1), true, None);
     assert!(full.problems.is_empty(), "{:?}", full.problems);
     let mut store = MemoryStore::default();
     let trusted = refresh(&w, &mut store, t0() + Duration::hours(1)).unwrap();
@@ -270,6 +332,8 @@ fn update_is_idempotent_and_refresh_moves_the_expiry() {
         keys: &w.keys(),
         index: &w.indexes(),
         out: &w.repo(),
+        publishers: &w.publishers(),
+        mode: SnapshotMode::Offline,
         refresh: false,
         now: t0() + Duration::days(1),
         passphrase: &source,
@@ -279,7 +343,7 @@ fn update_is_idempotent_and_refresh_moves_the_expiry() {
         done,
         update::Outcome::UpToDate {
             targets: 1,
-            snapshot: 1
+            snapshot: Some(1)
         }
     ));
     assert_eq!(files(&w.repo()), before);
@@ -289,7 +353,7 @@ fn update_is_idempotent_and_refresh_moves_the_expiry() {
     let update::Outcome::Written(written) = w.update(later, true).unwrap() else {
         panic!("a refresh writes");
     };
-    assert_eq!((written.targets, written.snapshot), (2, 2));
+    assert_eq!((written.targets, written.snapshot), (2, Some(2)));
     let after = files(&w.repo());
     assert_eq!(after.len(), before.len() + 2, "{after:?}");
     let report = w.tree(later);
@@ -298,7 +362,7 @@ fn update_is_idempotent_and_refresh_moves_the_expiry() {
     // The expiry moved: 30 days from the refresh.
     let v = report.verified.unwrap();
     assert_eq!(v.targets.expires, later + Duration::days(30));
-    assert_eq!(v.snapshot.expires, later + Duration::days(30));
+    assert_eq!(v.snapshot.unwrap().expires, later + Duration::days(30));
     assert_eq!(v.targets.version, 2);
 
     // Changed content: a new version with a new file, and the old one stays.
@@ -307,7 +371,7 @@ fn update_is_idempotent_and_refresh_moves_the_expiry() {
     else {
         panic!("a changed index writes");
     };
-    assert_eq!((written.targets, written.snapshot), (3, 3));
+    assert_eq!((written.targets, written.snapshot), (3, Some(3)));
     assert!(
         written.reason.contains("indexes/stable.json"),
         "{}",
@@ -338,16 +402,16 @@ fn expiring_and_expired_metadata_is_flagged() {
     let w = world();
     // 25 days in: 5 left of 30.
     let soon = t0() + Duration::days(25);
-    let warn = w.check(TimestampMode::Absent, soon, false, None);
+    let warn = w.check(Stage::Tree, soon, false, None);
     assert!(warn.problems.is_empty(), "{:?}", warn.problems);
     let w_codes: Vec<_> = warn.warnings.iter().map(|p| p.code).collect();
     assert_eq!(w_codes, ["expiring", "expiring"], "{:?}", warn.warnings);
-    let fail = w.check(TimestampMode::Absent, soon, true, None);
+    let fail = w.check(Stage::Tree, soon, true, None);
     assert_eq!(codes(&fail), ["expiring", "expiring"]);
     // Past the 30 days the signatures and the chain are still verified, and the expiry is
     // what is reported.
     let late = t0() + Duration::days(31);
-    let report = w.check(TimestampMode::Absent, late, false, None);
+    let report = w.check(Stage::Tree, late, false, None);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
     assert_eq!(
         report
@@ -358,12 +422,12 @@ fn expiring_and_expired_metadata_is_flagged() {
         2
     );
     assert_eq!(
-        codes(&w.check(TimestampMode::Absent, late, true, None)),
+        codes(&w.check(Stage::Tree, late, true, None)),
         ["expired", "expired"]
     );
     // The root has a year: 330 days in, 35 are left, under the 45.
     let year = t0() + Duration::days(330);
-    let report = w.check(TimestampMode::Absent, year, false, None);
+    let report = w.check(Stage::Tree, year, false, None);
     assert!(
         report
             .warnings
@@ -426,6 +490,8 @@ fn a_wrong_passphrase_writes_nothing_and_keys_are_not_overwritten() {
         keys: &w.keys(),
         index: &w.indexes(),
         out: &w.repo(),
+        publishers: &w.publishers(),
+        mode: SnapshotMode::Offline,
         refresh: true,
         now: t0() + Duration::days(1),
         passphrase: &PassphraseSource::File(w.p("wrong.txt")),
@@ -465,17 +531,7 @@ fn rotation_case(role: Role) {
     refresh(&w, &mut store, t0() + Duration::hours(1)).unwrap();
     fs::remove_file(w.repo().join("metadata/timestamp.json")).unwrap();
 
-    let rotated = root::root(&root::Options {
-        keys: &w.keys(),
-        out: &w.repo(),
-        rotate_root: role == Role::Root,
-        rotate_targets: role == Role::Targets,
-        rotate_snapshot: role == Role::Snapshot,
-        rotate_timestamp: role == Role::Timestamp,
-        now,
-        passphrase: &w.pass(),
-    })
-    .unwrap();
+    let rotated = w.root(now, &[role], false).unwrap();
     assert_eq!(rotated.version, 2);
     assert_eq!(rotated.new_keys.len(), 1);
     let (new_role, id, file) = &rotated.new_keys[0];
@@ -547,17 +603,7 @@ fn rotating_the_root_key_is_followed_by_a_client_that_knew_the_old_root() {
 fn a_plain_root_is_a_renewal_with_the_same_keys() {
     let w = world();
     let later = t0() + Duration::days(340);
-    let rotated = root::root(&root::Options {
-        keys: &w.keys(),
-        out: &w.repo(),
-        rotate_root: false,
-        rotate_targets: false,
-        rotate_snapshot: false,
-        rotate_timestamp: false,
-        now: later,
-        passphrase: &w.pass(),
-    })
-    .unwrap();
+    let rotated = w.root(later, &[], false).unwrap();
     assert!(rotated.new_keys.is_empty());
     // The targets and snapshot of root 1 still verify (same keys); refresh them and check.
     w.update(later, true).unwrap();
@@ -571,17 +617,7 @@ fn a_plain_root_is_a_renewal_with_the_same_keys() {
     // anchor holds with the new root, which is then in force.
     let w = world();
     let expired = t0() + Duration::days(400);
-    let renewed = root::root(&root::Options {
-        keys: &w.keys(),
-        out: &w.repo(),
-        rotate_root: false,
-        rotate_targets: false,
-        rotate_snapshot: false,
-        rotate_timestamp: false,
-        now: expired,
-        passphrase: &w.pass(),
-    })
-    .unwrap();
+    let renewed = w.root(expired, &[], false).unwrap();
     assert_eq!(renewed.version, 2);
     assert_eq!(renewed.expires, expired + Duration::days(365));
     let anchor = fs::read(w.anchor()).unwrap();
@@ -633,17 +669,12 @@ fn history_is_kept_against_the_base_revision() {
     let base = Some("HEAD");
 
     // Nothing changed: nothing to say.
-    let report = w.check(TimestampMode::Absent, later, false, base);
+    let report = w.check(Stage::Tree, later, false, base);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
 
     // A new version extends it.
     w.update(later + Duration::days(1), true).unwrap();
-    let report = w.check(
-        TimestampMode::Absent,
-        later + Duration::days(1),
-        false,
-        base,
-    );
+    let report = w.check(Stage::Tree, later + Duration::days(1), false, base);
     assert!(report.problems.is_empty(), "{:?}", report.problems);
 
     // A published file changed or gone, or the newest version back.
@@ -651,7 +682,7 @@ fn history_is_kept_against_the_base_revision() {
     fs::remove_file(w.repo().join("metadata/3.snapshot.json")).unwrap();
     fs::remove_file(w.repo().join("metadata/2.targets.json")).unwrap();
     fs::remove_file(w.repo().join("metadata/2.snapshot.json")).unwrap();
-    let report = w.check(TimestampMode::Absent, later, false, base);
+    let report = w.check(Stage::Tree, later, false, base);
     let found = codes(&report);
     assert!(found.contains(&"file-removed"), "{found:?}");
     assert!(found.contains(&"version-rollback"), "{found:?}");
@@ -659,7 +690,7 @@ fn history_is_kept_against_the_base_revision() {
     let mut bytes = fs::read(&root_file).unwrap();
     bytes.push(b'\n');
     fs::write(&root_file, bytes).unwrap();
-    let report = w.check(TimestampMode::Absent, later, false, base);
+    let report = w.check(Stage::Tree, later, false, base);
     assert!(
         codes(&report).contains(&"file-modified"),
         "{:?}",
@@ -667,20 +698,9 @@ fn history_is_kept_against_the_base_revision() {
     );
 
     // A repository that was there and is gone.
-    let nothing = check::check(&Options {
-        dir: &w.p("repo-gone"),
-        index: None,
-        anchor: Some(&w.p("anchor-gone.json")),
-        now: later,
-        timestamp: TimestampMode::Absent,
-        expiry: Expiry {
-            min_days: 10,
-            min_root_days: 45,
-            fail: false,
-        },
-        base: None,
-    })
-    .unwrap();
+    let gone = w.p("repo-gone");
+    let gone_anchor = w.p("anchor-gone.json");
+    let nothing = check::check(&bare(&gone, &gone_anchor, later)).unwrap();
     assert!(matches!(nothing, Outcome::NoRepository));
 }
 
@@ -693,6 +713,8 @@ fn assert_refused(w: &World, now: OffsetDateTime, anchor: Option<&Path>, what: &
         out: &out,
         anchor: anchor.unwrap_or(&w.anchor()),
         index: &w.indexes(),
+        publishers: &w.publishers(),
+        mode: SnapshotMode::Offline,
         key: &KeySource::File(w.keys().join("timestamp.key")),
         now,
     })
@@ -802,6 +824,8 @@ fn the_timestamp_key_comes_from_the_environment_and_a_missing_one_fails() {
         out: &out,
         anchor: &w.anchor(),
         index: &w.indexes(),
+        publishers: &w.publishers(),
+        mode: SnapshotMode::Offline,
         key: &KeySource::Env("ONCL_TUF_TEST_NO_SUCH_VARIABLE".to_owned()),
         now,
     })
@@ -994,21 +1018,9 @@ fn a_missing_and_a_removed_repository_are_told_apart() {
     }
     let w = world();
     // The anchor is there, the directory is not.
-    let report = match check::check(&Options {
-        dir: &w.p("no-such-repository"),
-        index: None,
-        anchor: Some(&w.anchor()),
-        now: t0(),
-        timestamp: TimestampMode::Absent,
-        expiry: Expiry {
-            min_days: 10,
-            min_root_days: 45,
-            fail: false,
-        },
-        base: None,
-    })
-    .unwrap()
-    {
+    let missing = w.p("no-such-repository");
+    let anchor = w.anchor();
+    let report = match check::check(&bare(&missing, &anchor, t0())).unwrap() {
         Outcome::Checked(report) => report,
         Outcome::NoRepository => panic!("the anchor is there"),
     };
@@ -1020,19 +1032,12 @@ fn a_missing_and_a_removed_repository_are_told_apart() {
     git(w.dir.path(), &["add", "repo"]);
     git(w.dir.path(), &["commit", "-q", "-m", "base"]);
     fs::remove_dir_all(w.repo()).unwrap();
+    let repo = w.repo();
+    let no_anchor = w.p("no-anchor.json");
     let gone = |base| {
         check::check(&Options {
-            dir: &w.repo(),
-            index: None,
-            anchor: Some(&w.p("no-anchor.json")),
-            now: t0(),
-            timestamp: TimestampMode::Absent,
-            expiry: Expiry {
-                min_days: 10,
-                min_root_days: 45,
-                fail: false,
-            },
             base,
+            ..bare(&repo, &no_anchor, t0())
         })
         .unwrap()
     };
@@ -1048,20 +1053,9 @@ fn a_missing_and_a_removed_repository_are_told_apart() {
 fn an_anchor_that_is_not_a_root_of_the_repository_and_a_gap_in_the_roots_are_detected() {
     let w = world();
     let other = fresh_world(&["stable"]);
-    let report = check::check(&Options {
-        dir: &w.repo(),
-        index: None,
-        anchor: Some(&other.anchor()),
-        now: t0(),
-        timestamp: TimestampMode::Absent,
-        expiry: Expiry {
-            min_days: 10,
-            min_root_days: 45,
-            fail: false,
-        },
-        base: None,
-    })
-    .unwrap();
+    let repo = w.repo();
+    let other_anchor = other.anchor();
+    let report = check::check(&bare(&repo, &other_anchor, t0())).unwrap();
     let Outcome::Checked(report) = report else {
         panic!()
     };
@@ -1071,17 +1065,7 @@ fn an_anchor_that_is_not_a_root_of_the_repository_and_a_gap_in_the_roots_are_det
         report.problems
     );
 
-    root::root(&root::Options {
-        keys: &w.keys(),
-        out: &w.repo(),
-        rotate_root: false,
-        rotate_targets: false,
-        rotate_snapshot: false,
-        rotate_timestamp: false,
-        now: t0() + Duration::days(1),
-        passphrase: &w.pass(),
-    })
-    .unwrap();
+    w.root(t0() + Duration::days(1), &[], false).unwrap();
     assert!(w.tree(t0() + Duration::days(1)).problems.is_empty());
     fs::remove_file(w.repo().join("metadata/1.root.json")).unwrap();
     let report = w.tree(t0() + Duration::days(1));
@@ -1103,7 +1087,7 @@ fn files_without_a_version_an_unlisted_index_and_a_foreign_target_are_detected()
     git(w.dir.path(), &["add", "repo"]);
     git(w.dir.path(), &["commit", "-q", "-m", "base"]);
     fs::write(w.repo().join("notes.txt"), b"x").unwrap();
-    let report = w.check(TimestampMode::Absent, t0(), false, Some("HEAD"));
+    let report = w.check(Stage::Tree, t0(), false, Some("HEAD"));
     let found = codes(&report);
     assert!(found.contains(&"no-version-bump"), "{found:?}");
     assert!(found.contains(&"stray-file"), "{found:?}");
@@ -1174,16 +1158,11 @@ fn a_root_that_does_not_verify_takes_the_new_keys_with_it() {
     // A file where root 3 would be: the client follows the chain to it once root 2 is there.
     fs::write(w.repo().join("metadata/3.root.json"), b"not a root").unwrap();
     let rotate = || {
-        root::root(&root::Options {
-            keys: &w.keys(),
-            out: &w.repo(),
-            rotate_root: false,
-            rotate_targets: true,
-            rotate_snapshot: false,
-            rotate_timestamp: true,
-            now: t0() + Duration::days(1),
-            passphrase: &w.pass(),
-        })
+        w.root(
+            t0() + Duration::days(1),
+            &[Role::Targets, Role::Timestamp],
+            false,
+        )
     };
     let err = rotate().unwrap_err();
     assert!(err.to_string().contains("does not verify"), "{err}");
@@ -1240,19 +1219,27 @@ fn a_timestamp_key_with_the_line_end_of_a_secret_still_signs() {
     }
 }
 
+/// The workspace.
+fn workspace() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
 /// The committed `tuf/v1` of this repository, as every client reads it: those released before
 /// delegations (`Profile::Legacy`) and those from 0.1.2 (`Profile::Delegating`). Its
 /// timestamp is signed online when Pages is published, so the client follows the chain of
-/// roots up to it, and the newest snapshot and targets are then checked against the final
-/// root as the client checks them.
+/// roots up to it, and the newest targets (and, while the snapshot is offline, the newest
+/// snapshot) are then checked against the final root as the client checks them. Once the
+/// snapshot is online, the committed snapshots are the owner's old ones and are not read.
 #[test]
 fn the_committed_tuf_v1_reads_in_both_profiles() {
     use oncl_update::tuf::ed25519::verify_role;
     use oncl_update::tuf::model::TARGETS_META;
     use oncl_update::tuf::{Digest, Envelope, Profile, Root, Snapshot, Targets, layout};
 
-    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let workspace = workspace();
     let dir = workspace.join(xtask::tuf::REPO_DIR);
+    let online = xtask::tuf::repo::read_mode(&workspace.join(xtask::tuf::CONFIG)).unwrap()
+        == SnapshotMode::Online;
     let anchor = fs::read(workspace.join("crates/oncl-update/keys/root.json")).unwrap();
     let limits = Limits::default();
     let (last_root, last_targets, last_snapshot) =
@@ -1269,7 +1256,11 @@ fn the_committed_tuf_v1_reads_in_both_profiles() {
     // A clock at which every newest file is still valid.
     let now = [
         Root::from_signed(&root_file.signed).unwrap().expires,
-        snapshot.expires,
+        if online {
+            OffsetDateTime::now_utc() + Duration::days(36_500)
+        } else {
+            snapshot.expires
+        },
         Targets::from_signed(&targets_file.signed, Profile::Delegating)
             .unwrap()
             .expires,
@@ -1298,23 +1289,25 @@ fn the_committed_tuf_v1_reads_in_both_profiles() {
             .unwrap(),
         };
         assert_eq!(root.version, last_root, "{profile:?}");
-        verify_role(&snapshot_file, &root, Role::Snapshot, "the snapshot").unwrap();
-        let listed = snapshot.targets();
-        assert_eq!(listed.version, last_targets, "{profile:?}");
-        assert!(
-            listed
-                .length
-                .is_none_or(|l| l == targets_bytes.len() as u64)
-                && listed
-                    .sha256
-                    .is_none_or(|h| h == Digest::of(&targets_bytes)),
-            "{profile:?}: the snapshot lists other targets"
-        );
+        if !online {
+            verify_role(&snapshot_file, &root, Role::Snapshot, "the snapshot").unwrap();
+            let listed = snapshot.targets();
+            assert_eq!(listed.version, last_targets, "{profile:?}");
+            assert!(
+                listed
+                    .length
+                    .is_none_or(|l| l == targets_bytes.len() as u64)
+                    && listed
+                        .sha256
+                        .is_none_or(|h| h == Digest::of(&targets_bytes)),
+                "{profile:?}: the snapshot lists other targets"
+            );
+        }
         verify_role(&targets_file, &root, Role::Targets, "the targets").unwrap();
         let targets = Targets::from_signed(&targets_file.signed, profile)
             .unwrap_or_else(|e| panic!("{profile:?}: {e}"));
         assert_eq!(targets.version, last_targets, "{profile:?}");
-        if profile == Profile::Delegating {
+        if profile == Profile::Delegating && !online {
             // What the plugin catalog reads apart: the delegations, if any, and every role's
             // file listed by its length and sha256.
             targets.delegations().unwrap();
@@ -1329,5 +1322,101 @@ fn the_committed_tuf_v1_reads_in_both_profiles() {
     }
 }
 
-#[path = "tuf/v2.rs"]
-mod v2;
+/// `tuf check` of the committed tree, as the index check in CI runs it (`--no-timestamp`,
+/// the workspace's indexes, publishers and snapshot mode), at a clock at which nothing has
+/// expired: no problem.
+#[test]
+fn the_committed_tuf_v1_passes_the_check() {
+    let workspace = workspace();
+    let dir = workspace.join(xtask::tuf::REPO_DIR);
+    let anchor = workspace.join(xtask::tuf::ANCHOR);
+    let mode = xtask::tuf::repo::read_mode(&workspace.join(xtask::tuf::CONFIG)).unwrap();
+    let index = workspace.join(xtask::index::INDEX_DIR);
+    let publishers = workspace.join(xtask::publishers::PUBLISHERS_DIR);
+    let at = |now| {
+        let options = Options {
+            index: Some(&index),
+            publishers: Some(&publishers),
+            mode,
+            ..bare(&dir, &anchor, now)
+        };
+        match check::check(&options).unwrap() {
+            Outcome::Checked(report) => *report,
+            Outcome::NoRepository => panic!("tuf/v1 is committed"),
+        }
+    };
+    let first = at(OffsetDateTime::now_utc());
+    let verified = first
+        .verified
+        .as_ref()
+        .unwrap_or_else(|| panic!("{:?}", first.problems));
+    let earliest = verified
+        .expiries()
+        .into_iter()
+        .map(|(_, _, expires)| expires)
+        .min()
+        .unwrap();
+    let report = at(earliest - Duration::seconds(1));
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+}
+
+/// The monthly `tuf update --refresh` of an offline snapshot keeps the repository what the
+/// clients released before delegations read: no `delegations`, no `publishers.json`, a
+/// snapshot that lists the targets alone, with their length and sha256.
+#[test]
+fn the_monthly_refresh_keeps_the_repository_of_every_released_client() {
+    use oncl_update::tuf::model::TARGETS_META;
+
+    let w = world();
+    let later = t0() + Duration::days(29);
+    let update::Outcome::Written(written) = w.update(later, true).unwrap() else {
+        panic!("a refresh writes");
+    };
+    assert_eq!((written.snapshot, written.delegated), (Some(2), None));
+    assert!(written.settled.is_empty());
+    let report = w.tree(later);
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    let v = report.verified.unwrap();
+    assert!(v.legacy_reads && v.delegations.is_none());
+    assert_eq!(v.targets.targets.len(), 2);
+    let snapshot = v.snapshot.unwrap();
+    assert_eq!(
+        snapshot.meta.keys().collect::<Vec<_>>(),
+        [TARGETS_META],
+        "the snapshot lists the targets alone"
+    );
+    assert!(snapshot.targets().length.is_some() && snapshot.targets().sha256.is_some());
+    assert!(
+        report
+            .notes
+            .iter()
+            .any(|n| n.starts_with("clients 0.1.0 and 0.1.1 read this repository")),
+        "{:?}",
+        report.notes
+    );
+    // And the clients released before delegations follow it.
+    w.timestamp(later + Duration::hours(1)).unwrap();
+    let anchor = fs::read(w.anchor()).unwrap();
+    let mut legacy = TufClient::new(
+        &anchor,
+        DirFetcher::new(w.repo()),
+        MemoryStore::default(),
+        Limits::default(),
+    )
+    .unwrap()
+    .with_profile(oncl_update::tuf::Profile::Legacy);
+    assert_eq!(
+        legacy
+            .refresh(later + Duration::hours(1))
+            .unwrap()
+            .targets()
+            .version,
+        2
+    );
+}
+
+#[path = "tuf/delegations.rs"]
+mod delegations;
+
+#[path = "tuf/online.rs"]
+mod online;

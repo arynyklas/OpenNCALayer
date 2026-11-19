@@ -1,28 +1,40 @@
 //! The owner's registry of third-party plugin publishers (`docs/design/publishers.md`,
 //! "Подключение издателя"): `publishers/<name>/publisher.toml`, one file per publisher,
-//! merged by the owner only. `cargo xtask tuf update` makes two things of it for `tuf/v2`,
-//! and `cargo xtask tuf check` verifies the signed repository against them:
+//! merged by the owner only. Once it has an entry, `cargo xtask tuf update` makes two
+//! things of it for the top-level targets of `tuf/v1`, and `cargo xtask tuf check`
+//! verifies the signed repository against them:
 //!
 //! - [`Registry::delegations`], the `delegations` member of the top-level targets: a role
 //!   `pub-<name>` for each active publisher, with its keys and threshold, the paths
 //!   `plugins/<name>/*/*` and `terminating: true`, in the order of the names;
-//! - [`Registry::publishers_json`], the target `publishers.json`: every publisher, active or
-//!   revoked, with its id prefix, modules, bundles, superseded ports and the versions the
-//!   owner revoked.
+//! - [`Registry::publishers_json`], the target `publishers.json`: every publisher, active,
+//!   retired or revoked, with its id prefix, modules, bundles, superseded ports and the
+//!   versions the owner revoked.
 //!
-//! The schema is strict (unknown keys are refused) and so are the rules: the name is a
-//! [`PublisherName`] and the name of its directory; the id prefix is a reverse domain ending
-//! in `.`, never nested in another publisher's or the project's own; modules and bundles are
-//! valid names, not built-in, not the core's, not another publisher's and not served by a
-//! port of the owner's indexes unless that port is in `supersedes`; keys are distinct across
-//! publishers and are no key of a root; `display` is not the project's name.
+//! The schema is strict (unknown keys and states are refused) and so are the rules: the
+//! name is a [`PublisherName`] and the name of its directory; the id prefix is a reverse
+//! domain ending in `.`, never nested in another publisher's or the project's own; modules
+//! and bundles are valid names, not built-in, not the core's, not another publisher's (in
+//! any case) and not served by a port of the owner's indexes unless that port is in
+//! `supersedes`; keys are distinct across publishers and are no key of a root; `display` is
+//! not the project's name. A retired publisher keeps its prefix, modules, bundles and ports;
+//! a revoked one keeps its prefix only.
+//!
+//! `revoke_all = "<date>"` and the move to `retired` are settled by `tuf update` into
+//! explicit `[[revoked_versions]]` of the file ([`Registry::settle`]), so `publishers.json`
+//! stays a function of the files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
-use oncl_update::tuf::{KeyId, Limits, PathPattern, PublicKey, PublisherName, RoleName, Root};
+use oncl_update::catalog::{PublisherPolicy, Standing};
+use oncl_update::tuf::ed25519::verify_threshold;
+use oncl_update::tuf::{
+    Envelope, KeyId, Limits, PathPattern, Profile, PublicKey, PublisherName, RoleKeys, RoleName,
+    Root, Targets,
+};
 use oncl_update::{Index, Version};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -33,20 +45,23 @@ pub const PUBLISHERS_DIR: &str = "publishers";
 /// The file of one publisher, in its directory.
 pub const FILE_NAME: &str = "publisher.toml";
 
-/// The target path of the rules of the publishers in `tuf/v2`.
+/// The target path of the rules of the publishers in the top-level targets.
 pub const TARGET: &str = "publishers.json";
 
 /// The `schema` of `publishers.json`.
 pub const SCHEMA: u32 = 1;
 
-/// The most publishers, active and revoked, `publishers.json` lists.
-pub const MAX_PUBLISHERS: usize = 128;
+/// The most publishers, of every state, `publishers.json` lists (Р37).
+pub const MAX_PUBLISHERS: usize = PublisherPolicy::MAX_PUBLISHERS;
 
-/// The largest `publishers.json`.
-pub const MAX_JSON_LEN: usize = 64 << 10;
+/// The most revoked versions `publishers.json` lists, all publishers together (Р37).
+pub const MAX_REVOKED_VERSIONS: usize = PublisherPolicy::MAX_REVOKED_VERSIONS;
+
+/// The largest `publishers.json` (Р37): what the client reads.
+pub const MAX_JSON_LEN: usize = PublisherPolicy::MAX_LEN;
 
 /// The largest `publisher.toml` read.
-const MAX_FILE_LEN: u64 = 64 << 10;
+const MAX_FILE_LEN: u64 = 1 << 20;
 
 /// The prefix of the project's own plugin ids: no publisher's prefix is nested with it.
 const PROJECT_PREFIX: &str = "io.github.arynyklas.openncalayer.";
@@ -60,16 +75,31 @@ const MAX_DISPLAY: usize = 128;
 /// The longest URL or contact line.
 const MAX_URL: usize = 2048;
 
-/// Whether a publisher's plugins are offered.
+/// Whether a publisher's plugins are offered (`docs/design/publishers.md`, "Состояния
+/// издателя"). Any other value of `state` is refused: a typo never reaches a signature.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum State {
     /// Delegated to: its role is in the top-level targets.
     #[default]
     Active,
+    /// No new versions: not delegated to any more, installed plugins keep working unless
+    /// their versions are revoked. Its prefix, modules, bundles and ports stay its own.
+    Retired,
     /// Not delegated to any more; its prefix stays reserved, and clients switch its plugins
     /// off.
     Revoked,
+}
+
+impl State {
+    /// `active`, `retired` or `revoked`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            State::Active => "active",
+            State::Retired => "retired",
+            State::Revoked => "revoked",
+        }
+    }
 }
 
 /// A publisher's name in the three interface languages.
@@ -100,10 +130,13 @@ pub struct RevokedVersion {
 pub struct Publisher {
     /// Its name, and the name of its directory.
     pub name: PublisherName,
-    /// Active or revoked.
+    /// Active, retired or revoked.
     pub state: State,
     /// When it was revoked, `YYYY-MM-DD`: exactly for a revoked publisher.
     pub revoked: Option<String>,
+    /// `YYYY-MM-DD`: revoke every version its role had in git on that date. `tuf update`
+    /// settles it into `revoked_versions` and takes it out of the file ([`Registry::settle`]).
+    pub revoke_all: Option<String>,
     /// Its name for people.
     pub display: Display,
     /// The prefix of its plugin ids, ending in `.`.
@@ -139,9 +172,20 @@ impl Publisher {
         self.state == State::Active
     }
 
+    /// Whether its prefix, modules, bundles and ports are its own: unless it is revoked.
+    pub fn keeps_rules(&self) -> bool {
+        self.state != State::Revoked
+    }
+
     /// Whether `id` is under its prefix.
     pub fn covers(&self, id: &str) -> bool {
         id.starts_with(&self.id_prefix)
+    }
+
+    /// Whether the owner may revoke versions of `id` for it: a plugin id under its prefix.
+    /// [`Registry::settle`] and `tuf check` use the same filter.
+    pub fn may_revoke(&self, id: &str) -> bool {
+        self.covers(id) && is_plugin_id(id)
     }
 }
 
@@ -153,6 +197,8 @@ struct RawPublisher {
     state: State,
     #[serde(default)]
     revoked: Option<String>,
+    #[serde(default)]
+    revoke_all: Option<String>,
     display: Display,
     id_prefix: String,
     #[serde(default)]
@@ -310,10 +356,23 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
         );
     }
     match (raw.state, &raw.revoked) {
-        (State::Active, None) => {}
-        (State::Active, Some(_)) => bail!("revoked is set, but the state is active"),
+        (State::Active | State::Retired, None) => {}
+        (state @ (State::Active | State::Retired), Some(_)) => {
+            bail!("revoked is set, but the state is {}", state.as_str())
+        }
         (State::Revoked, Some(date)) if is_date(date) => {}
         (State::Revoked, _) => bail!("a revoked publisher needs revoked = \"YYYY-MM-DD\""),
+    }
+    match (raw.state, &raw.revoke_all) {
+        (_, None) => {}
+        (State::Revoked, Some(_)) => bail!(
+            "revoke_all is set, but the publisher is revoked: every plugin of a revoked \
+             publisher is off already"
+        ),
+        (State::Active | State::Retired, Some(date)) if is_date(date) => {}
+        (State::Active | State::Retired, Some(date)) => {
+            bail!("revoke_all {date:?} is not YYYY-MM-DD")
+        }
     }
     let mut keys = Vec::with_capacity(raw.keys.len());
     for key in &raw.keys {
@@ -425,6 +484,7 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
         name,
         state: raw.state,
         revoked: raw.revoked,
+        revoke_all: raw.revoke_all,
         display: raw.display,
         id_prefix: raw.id_prefix,
         modules: raw.modules,
@@ -501,9 +561,11 @@ impl Registry {
     }
 
     /// The registry of `publishers`, the rules between them checked: names, prefixes,
-    /// modules, bundles, superseded ports and keys distinct, prefixes not nested, modules
-    /// not built-in and bundles not the core's, at most [`MAX_PUBLISHERS`] publishers and
-    /// [`Limits::max_delegations`] active ones.
+    /// modules, bundles, superseded ports and keys distinct (modules and bundles in any
+    /// case, as the client compares them), prefixes not nested, modules not built-in and
+    /// bundles not the core's, at most [`MAX_PUBLISHERS`] publishers,
+    /// [`MAX_REVOKED_VERSIONS`] revoked versions and [`Limits::max_delegations`] active
+    /// publishers. A retired publisher's modules, bundles and ports count as its own.
     ///
     /// # Errors
     ///
@@ -515,6 +577,17 @@ impl Registry {
                 publishers.len()
             );
         }
+        let revoked: usize = publishers
+            .iter()
+            .filter(|p| p.keeps_rules())
+            .map(|p| p.revoked_versions.len())
+            .sum();
+        if revoked > MAX_REVOKED_VERSIONS {
+            bail!(
+                "{revoked} revoked versions: publishers.json lists at most \
+                 {MAX_REVOKED_VERSIONS}, all publishers together"
+            );
+        }
         let max_active = Limits::default().max_delegations as usize;
         let active = publishers.iter().filter(|p| p.is_active()).count();
         if active > max_active {
@@ -522,8 +595,8 @@ impl Registry {
         }
         let builtin = crate::index::builtin_modules()?;
         let mut by_name = BTreeMap::new();
-        let mut module_owner: BTreeMap<&str, &PublisherName> = BTreeMap::new();
-        let mut bundle_owner: BTreeMap<&str, &PublisherName> = BTreeMap::new();
+        let mut module_owner: BTreeMap<String, &PublisherName> = BTreeMap::new();
+        let mut bundle_owner: BTreeMap<String, &PublisherName> = BTreeMap::new();
         let mut port_owner: BTreeMap<&str, &PublisherName> = BTreeMap::new();
         let mut key_owner: BTreeMap<KeyId, &PublisherName> = BTreeMap::new();
         for (i, p) in publishers.iter().enumerate() {
@@ -552,14 +625,14 @@ impl Registry {
                     );
                 }
             }
-            if !p.is_active() {
+            if !p.keeps_rules() {
                 continue;
             }
             for module in &p.modules {
-                if builtin.contains(module) {
+                if builtin.iter().any(|b| b.eq_ignore_ascii_case(module)) {
                     bail!("{}: {module} is a built-in module", p.name);
                 }
-                if let Some(owner) = module_owner.insert(module, &p.name) {
+                if let Some(owner) = module_owner.insert(module.to_ascii_lowercase(), &p.name) {
                     bail!(
                         "the module {module} is claimed by both {owner} and {}",
                         p.name
@@ -573,7 +646,7 @@ impl Registry {
                 {
                     bail!("{}: the bundle {bundle} is the core's", p.name);
                 }
-                if let Some(owner) = bundle_owner.insert(bundle, &p.name) {
+                if let Some(owner) = bundle_owner.insert(bundle.to_ascii_lowercase(), &p.name) {
                     bail!(
                         "the bundle {bundle} is claimed by both {owner} and {}",
                         p.name
@@ -600,6 +673,12 @@ impl Registry {
     /// Every publisher, by name.
     pub fn publishers(&self) -> impl Iterator<Item = &Publisher> {
         self.publishers.values()
+    }
+
+    /// Whether there is no publisher: then the top-level targets have neither
+    /// `delegations` nor `publishers.json`, as before the first publisher.
+    pub fn is_empty(&self) -> bool {
+        self.publishers.is_empty()
     }
 
     /// The active publishers, by name.
@@ -635,10 +714,102 @@ impl Registry {
         Ok(())
     }
 
-    /// The owner's `indexes` against the active publishers: no plugin of an index is under a
-    /// publisher's prefix, no module or bundle a publisher claims is served by a port unless
-    /// the publisher supersedes that port, and every port a publisher supersedes is a plugin
-    /// of some index (its plugin id is under the publisher's prefix: [`parse_publisher`]).
+    /// Р24: the newest role file of every active publisher in the repository `dir` is
+    /// signed by a threshold of the keys its `publisher.toml` keeps. A rotation removes the
+    /// old key only after the role was re-signed with the new one: otherwise the clients
+    /// would get a delegation their newest role does not verify under. A publisher without
+    /// a role file yet passes.
+    ///
+    /// # Errors
+    ///
+    /// Every publisher whose newest role file falls short, or a role file that cannot be
+    /// read.
+    pub fn check_newest_roles(&self, dir: &Path) -> anyhow::Result<()> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        let newest = crate::tuf::repo::Listing::read(dir)?.newest_roles();
+        let mut short = Vec::new();
+        for p in self.active() {
+            let role = p.role();
+            let Some(version) = newest.get(&role) else {
+                continue;
+            };
+            let what = oncl_update::tuf::layout::delegated_path(*version, &role);
+            let bytes = fs::read(dir.join(&what)).with_context(|| format!("reading {what}"))?;
+            let envelope = Envelope::parse(&bytes, Limits::default().delegated, &what)
+                .map_err(|e| anyhow::anyhow!("{what}: {e}"))?;
+            let keys: BTreeMap<KeyId, PublicKey> =
+                p.keys.iter().map(|k| (k.key_id(), *k)).collect();
+            let role_keys = RoleKeys {
+                keyids: keys.keys().copied().collect(),
+                threshold: p.threshold,
+            };
+            if let Err(e) = verify_threshold(&envelope, &role_keys, &keys, &what) {
+                short.push(format!(
+                    "publishers/{}: {e}: the newest role file is not signed by a threshold of \
+                     the keys publisher.toml keeps; the publisher re-signs the role with the \
+                     new key before the old key is removed (Р24)",
+                    p.name
+                ));
+            }
+        }
+        if short.is_empty() {
+            Ok(())
+        } else {
+            bail!("{}", short.join("\n"))
+        }
+    }
+
+    /// Р28: every publisher of the signed `publishers.json` `earlier` is still in the
+    /// registry, with the same name and id prefix. Entries are kept for good: a publisher
+    /// missing from the file is unavailable to the clients, never revoked.
+    ///
+    /// # Errors
+    ///
+    /// If `earlier` cannot be read, or lists a publisher that went or whose prefix changed.
+    pub fn keeps(&self, earlier: &[u8]) -> anyhow::Result<()> {
+        #[derive(Deserialize)]
+        struct Earlier {
+            publishers: Vec<Entry>,
+        }
+        #[derive(Deserialize)]
+        struct Entry {
+            name: String,
+            id_prefix: String,
+        }
+        let earlier: Earlier = serde_json::from_slice(earlier)
+            .with_context(|| format!("{TARGET} does not read as one"))?;
+        let mut broken = Vec::new();
+        for entry in &earlier.publishers {
+            let now = PublisherName::parse(&entry.name)
+                .ok()
+                .and_then(|name| self.publishers.get(&name));
+            match now {
+                None => broken.push(format!("{} is gone", entry.name)),
+                Some(p) if p.id_prefix != entry.id_prefix => broken.push(format!(
+                    "{} has the id_prefix {} instead of {}",
+                    entry.name, p.id_prefix, entry.id_prefix
+                )),
+                Some(_) => {}
+            }
+        }
+        if broken.is_empty() {
+            Ok(())
+        } else {
+            bail!(
+                "{}: an entry of publishers/ is never removed, and its name and id_prefix never \
+                 change (Р28)",
+                broken.join("; ")
+            )
+        }
+    }
+
+    /// The owner's `indexes` against the publishers: no plugin of an index is under a
+    /// publisher's prefix, no module or bundle an active or retired publisher claims is
+    /// served by a port unless the publisher supersedes that port, and every port an active
+    /// publisher supersedes is a plugin of some index (its plugin id is under the
+    /// publisher's prefix: [`parse_publisher`]).
     ///
     /// # Errors
     ///
@@ -657,11 +828,15 @@ impl Registry {
                         );
                     }
                 }
-                for p in self.active() {
+                for p in self.publishers().filter(|p| p.keeps_rules()) {
                     if p.supersedes.contains_key(&port.id) {
                         continue;
                     }
-                    if let Some(module) = port.modules.iter().find(|m| p.modules.contains(m)) {
+                    if let Some(module) = port
+                        .modules
+                        .iter()
+                        .find(|m| p.modules.iter().any(|own| own.eq_ignore_ascii_case(m)))
+                    {
                         bail!(
                             "{} claims the module {module}, which the port {} serves (only a \
                              port in its supersedes may share it)",
@@ -670,7 +845,9 @@ impl Registry {
                         );
                     }
                     if let Some(replaces) = &port.replaces
-                        && p.bundles.contains(&replaces.symname)
+                        && p.bundles
+                            .iter()
+                            .any(|own| own.eq_ignore_ascii_case(&replaces.symname))
                     {
                         bail!(
                             "{} claims the bundle {}, which the port {} replaces (only a port \
@@ -699,8 +876,8 @@ impl Registry {
         Ok(())
     }
 
-    /// The `delegations` member of the top-level targets of `tuf/v2`: every active
-    /// publisher's role, by name.
+    /// The `delegations` member of the top-level targets: every active publisher's role, by
+    /// name. A retired or revoked publisher has none.
     pub fn delegations(&self) -> Value {
         let mut keys = Map::new();
         let mut roles = Vec::new();
@@ -722,11 +899,11 @@ impl Registry {
         json!({"keys": keys, "roles": roles})
     }
 
-    /// `publishers.json`: canonical JSON and a newline.
+    /// `publishers.json`: canonical JSON and a newline, read back as the client reads it.
     ///
     /// # Errors
     ///
-    /// If it would be larger than [`MAX_JSON_LEN`].
+    /// If it would be larger than [`MAX_JSON_LEN`], or the client would not read it whole.
     pub fn publishers_json(&self) -> anyhow::Result<Vec<u8>> {
         let entries: Vec<Value> = self.publishers().map(entry).collect();
         let value = json!({"schema": SCHEMA, "publishers": entries});
@@ -739,8 +916,288 @@ impl Registry {
                 bytes.len()
             );
         }
+        let policy = PublisherPolicy::from_json(&bytes)
+            .map_err(|e| anyhow::anyhow!("the client would not read publishers.json: {e}"))?;
+        if let Some(p) = policy
+            .publishers()
+            .iter()
+            .find(|p| matches!(p.standing(), Standing::Unknown { .. }))
+        {
+            bail!(
+                "publishers.json gives {} a state the client does not know",
+                p.name()
+            );
+        }
         Ok(bytes)
     }
+
+    /// What `tuf update` writes into the files of `dir` (`publishers/`) before it signs,
+    /// so that `publishers.json` stays a function of them (`docs/design/publishers.md`,
+    /// "Подключение издателя"):
+    ///
+    /// - a retired publisher whose role `delegated` still names (the move to `retired`):
+    ///   every target of the newest file of its role in the repository `repo` marked
+    ///   `revoked: true` becomes an owner's revoked version dated `today`, so that the
+    ///   publisher's own revocations outlive its role;
+    /// - `revoke_all = "<date>"`: every target of every file of the publisher's role in git
+    ///   at the last commit on or before that date (first parents of `HEAD`) becomes a
+    ///   revoked version of that date, and the line goes. A shallow clone is refused, and so
+    ///   is a date that finds nothing while the role has files: a revocation never silently
+    ///   revokes nothing.
+    ///
+    /// Only versions [`Publisher::may_revoke`] are added, and none already revoked. A date
+    /// (`revoke_all`, `revoked`, `revoked_versions`) after `today` (UTC) is refused. Nothing
+    /// is written here.
+    ///
+    /// # Errors
+    ///
+    /// If a file cannot be read, a date is in the future, git cannot answer for
+    /// `revoke_all` (or the clone is shallow), `revoke_all` finds no version of a role that
+    /// has files, or the result does not read back as the file it should be.
+    pub fn settle(
+        &self,
+        dir: &Path,
+        repo: &Path,
+        delegated: &BTreeSet<RoleName>,
+        today: &str,
+    ) -> anyhow::Result<Vec<Settled>> {
+        let newest = if repo.is_dir() {
+            crate::tuf::repo::Listing::read(repo)?.newest_roles()
+        } else {
+            BTreeMap::new()
+        };
+        let mut settled = Vec::new();
+        for p in self.publishers() {
+            let mut dates = p
+                .revoke_all
+                .iter()
+                .chain(p.revoked.iter())
+                .chain(p.revoked_versions.iter().map(|r| &r.date));
+            if let Some(date) = dates.find(|d| d.as_str() > today) {
+                bail!(
+                    "publishers/{}: the date {date} is after today ({today}, UTC): a revocation \
+                     is dated when it is made",
+                    p.name
+                );
+            }
+            let role = p.role();
+            let mut added: Vec<RevokedVersion> = Vec::new();
+            let mut why = Vec::new();
+            let mut add = |id: String, version: Version, date: &str| {
+                let known = |list: &[RevokedVersion]| {
+                    list.iter().any(|r| r.id == id && r.version == version)
+                };
+                if p.may_revoke(&id) && !known(&p.revoked_versions) && !known(&added) {
+                    added.push(RevokedVersion {
+                        id,
+                        version,
+                        date: date.to_owned(),
+                    });
+                }
+            };
+            if p.state == State::Retired
+                && delegated.contains(&role)
+                && let Some(version) = newest.get(&role)
+            {
+                let what = oncl_update::tuf::layout::delegated_path(*version, &role);
+                let bytes =
+                    fs::read(repo.join(&what)).with_context(|| format!("reading {what}"))?;
+                for (id, version, revoked) in role_entries(&bytes, &what)? {
+                    if revoked {
+                        add(id, version, today);
+                    }
+                }
+                why.push(format!(
+                    "retired: the versions {what} revokes are revoked by the owner"
+                ));
+            }
+            if let Some(date) = &p.revoke_all {
+                let files = role_files_at(repo, &role, date)?;
+                let mut found = 0;
+                for (what, bytes) in files {
+                    for (id, version, _) in role_entries(&bytes, &what)? {
+                        found += 1;
+                        add(id, version, date);
+                    }
+                }
+                if found == 0 && newest.contains_key(&role) {
+                    bail!(
+                        "publishers/{}: revoke_all = \"{date}\" finds no version of {role} in \
+                         git on that date, but the role has files: check the date (the commit \
+                         that added them is later?) and write the versions in revoked_versions \
+                         if need be",
+                        p.name
+                    );
+                }
+                why.push(format!(
+                    "revoke_all = \"{date}\": every version of {role} in git on that date"
+                ));
+            }
+            if added.is_empty() && p.revoke_all.is_none() {
+                continue;
+            }
+            let path = dir.join(p.name.as_str()).join(FILE_NAME);
+            let before =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            let after = settled_text(&before, &added);
+            let back = parse_publisher(&after, p.name.as_str()).with_context(|| {
+                format!(
+                    "{} could not be settled: write its revoked_versions by hand",
+                    path.display()
+                )
+            })?;
+            if back.revoke_all.is_some()
+                || back.revoked_versions.len() != p.revoked_versions.len() + added.len()
+            {
+                bail!(
+                    "{} could not be settled: write its revoked_versions by hand and remove \
+                     revoke_all",
+                    path.display()
+                );
+            }
+            settled.push(Settled {
+                name: p.name.clone(),
+                path,
+                before,
+                after,
+                added,
+                why: why.join("; "),
+            });
+        }
+        Ok(settled)
+    }
+}
+
+/// A `publisher.toml` that [`Registry::settle`] rewrites.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Settled {
+    /// The publisher.
+    pub name: PublisherName,
+    /// The file.
+    pub path: PathBuf,
+    /// Its text now.
+    pub before: String,
+    /// Its text settled: the versions added, `revoke_all` gone.
+    pub after: String,
+    /// The versions added to `revoked_versions`.
+    pub added: Vec<RevokedVersion>,
+    /// Why, for the owner.
+    pub why: String,
+}
+
+/// `text` without its `revoke_all` line and with a `[[revoked_versions]]` table for each of
+/// `added` at the end. The line is a key of the top table, so it is looked for only before
+/// the first table header.
+fn settled_text(text: &str, added: &[RevokedVersion]) -> String {
+    let mut out = String::with_capacity(text.len() + added.len() * 96);
+    let mut top = true;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            top = false;
+        }
+        let is_revoke_all = trimmed
+            .strip_prefix("revoke_all")
+            .is_some_and(|rest| rest.trim_start().starts_with('='));
+        if !(top && is_revoke_all) {
+            out.push_str(line);
+        }
+    }
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for r in added {
+        out.push_str(&format!(
+            "\n[[revoked_versions]]\nid = \"{}\"\nversion = \"{}\"\ndate = \"{}\"\n",
+            r.id, r.version, r.date
+        ));
+    }
+    out
+}
+
+/// The targets of the role file `bytes` (`what`, for errors): plugin id and version from
+/// the path `plugins/<name>/<id>/<version>.onclp`, and whether the entry says
+/// `revoked: true`. A path of another form, or a version that is not semver, is no plugin
+/// release (the client skips it) and is left out.
+///
+/// # Errors
+///
+/// If the file is not a role file the client could read.
+pub fn role_entries(bytes: &[u8], what: &str) -> anyhow::Result<Vec<(String, Version, bool)>> {
+    let envelope = Envelope::parse(bytes, Limits::default().delegated, what)
+        .map_err(|e| anyhow::anyhow!("{what}: {e}"))?;
+    // A role delegates no further: the profile that refuses `delegations` reads it.
+    let targets = Targets::from_signed(&envelope.signed, Profile::Legacy)
+        .map_err(|e| anyhow::anyhow!("{what}: {e}"))?;
+    let mut entries = Vec::new();
+    for (path, target) in &targets.targets {
+        let mut parts = path.as_str().split('/');
+        let (Some("plugins"), Some(_), Some(id), Some(file), None) = (
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+            parts.next(),
+        ) else {
+            continue;
+        };
+        let Ok(version) = Version::parse(file.strip_suffix(".onclp").unwrap_or(file)) else {
+            continue;
+        };
+        let revoked = target
+            .custom
+            .as_ref()
+            .and_then(|custom| custom.get("oncl"))
+            .and_then(|oncl| oncl.get("revoked"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        entries.push((id.to_owned(), version, revoked));
+    }
+    Ok(entries)
+}
+
+/// The files of `role` in the repository `repo` at the last git commit on or before the
+/// end of `date` (UTC): `(path, bytes)`. None before the first commit.
+fn role_files_at(
+    repo: &Path,
+    role: &RoleName,
+    date: &str,
+) -> anyhow::Result<Vec<(String, Vec<u8>)>> {
+    let (git_dir, _) = crate::index::existing_ancestor(repo)?;
+    let shallow = crate::index::git(&git_dir, &["rev-parse", "--is-shallow-repository"])?;
+    if !shallow.status.success() || String::from_utf8_lossy(&shallow.stdout).trim() != "false" {
+        bail!(
+            "revoke_all needs the whole git history of {}: this clone is shallow or not a git \
+             repository (`git fetch --unshallow`)",
+            repo.display()
+        );
+    }
+    let before = format!("--before={date} 23:59:59 +0000");
+    let found = crate::index::git(
+        &git_dir,
+        &["rev-list", "-1", "--first-parent", &before, "HEAD"],
+    )?;
+    if !found.status.success() {
+        bail!(
+            "revoke_all needs the git history of {}: git rev-list: {}",
+            repo.display(),
+            String::from_utf8_lossy(&found.stderr).trim()
+        );
+    }
+    let rev = String::from_utf8_lossy(&found.stdout).trim().to_owned();
+    if rev.is_empty() {
+        return Ok(Vec::new());
+    }
+    let files = crate::tuf::check::base_files(repo, &rev)?;
+    Ok(files
+        .into_iter()
+        .filter(|(path, _)| {
+            matches!(
+                crate::tuf::repo::classify(path),
+                crate::tuf::repo::Kind::Delegated { role: ref r, .. } if r == role
+            )
+        })
+        .collect())
 }
 
 /// A publisher's entry in `publishers.json`.
@@ -754,7 +1211,7 @@ fn entry(p: &Publisher) -> Value {
             "id_prefix": p.id_prefix,
             "revoked": p.revoked,
         }),
-        State::Active => {
+        State::Active | State::Retired => {
             let revoked: Vec<Value> = p
                 .revoked_versions
                 .iter()
@@ -762,7 +1219,7 @@ fn entry(p: &Publisher) -> Value {
                 .collect();
             let mut value = json!({
                 "name": p.name.as_str(),
-                "state": "active",
+                "state": p.state.as_str(),
                 "display": display,
                 "id_prefix": p.id_prefix,
                 "modules": p.modules,
@@ -891,6 +1348,23 @@ mod tests {
                 "ecc",
                 "under kz.ecc.",
             ),
+            (good.clone() + "state = \"suspended\"\n", "ecc", "suspended"),
+            (
+                good.clone() + "state = \"retired\"\nrevoked = \"2027-01-01\"\n",
+                "ecc",
+                "state is retired",
+            ),
+            (
+                good.clone() + "revoke_all = \"2027-13-01\"\n",
+                "ecc",
+                "revoke_all",
+            ),
+            (
+                good.clone()
+                    + "state = \"revoked\"\nrevoked = \"2027-01-01\"\nrevoke_all = \"2027-01-01\"\n",
+                "ecc",
+                "revoke_all is set",
+            ),
         ];
         for (text, dir, expected) in cases {
             let err = format!("{:#}", parse_publisher(&text, dir).unwrap_err());
@@ -914,6 +1388,57 @@ mod tests {
         let taken = publisher("bbb", "kz.b.", &builtin[0], 2);
         let err = Registry::new(vec![taken]).unwrap_err();
         assert!(err.to_string().contains("built-in"), "{err}");
+    }
+
+    #[test]
+    fn a_retired_publisher_keeps_its_rules_and_loses_its_role() {
+        let mut a = publisher("aaa", "kz.a.", "kz.a.M", 1);
+        a.state = State::Retired;
+        // Its module stays its own, in any case, as the client compares modules.
+        let taker = publisher("bbb", "kz.b.", "KZ.A.M", 2);
+        let err = Registry::new(vec![a.clone(), taker]).unwrap_err();
+        assert!(err.to_string().contains("claimed by both"), "{err}");
+        let registry = Registry::new(vec![a]).unwrap();
+        assert_eq!(registry.delegations()["roles"], json!([]));
+        let json: Value = serde_json::from_slice(&registry.publishers_json().unwrap()).unwrap();
+        assert_eq!(json["publishers"][0]["state"], "retired");
+        assert_eq!(json["publishers"][0]["modules"], json!(["kz.a.M"]));
+    }
+
+    #[test]
+    fn publishers_json_keeps_the_limits_of_the_client() {
+        let mut a = publisher("aaa", "kz.a.", "kz.a.M", 1);
+        a.revoked_versions = (0..=MAX_REVOKED_VERSIONS)
+            .map(|n| RevokedVersion {
+                id: "kz.a.tool".to_owned(),
+                version: Version::new(1, 0, n as u64),
+                date: "2027-01-01".to_owned(),
+            })
+            .collect();
+        let err = Registry::new(vec![a.clone()]).unwrap_err();
+        assert!(err.to_string().contains("revoked versions"), "{err}");
+        a.revoked_versions.pop();
+        let bytes = Registry::new(vec![a]).unwrap().publishers_json().unwrap();
+        assert!(bytes.len() <= MAX_JSON_LEN);
+    }
+
+    #[test]
+    fn a_settled_file_loses_revoke_all_and_gains_the_versions() {
+        let text = toml_of("ecc", "kz.ecc.", "kz.ecc.Signer", 7).replace(
+            "bundles = []\n",
+            "bundles = []\nrevoke_all = \"2027-04-01\" # the leak\n",
+        );
+        let before = parse_publisher(&text, "ecc").unwrap();
+        assert_eq!(before.revoke_all.as_deref(), Some("2027-04-01"));
+        let added = [RevokedVersion {
+            id: "kz.ecc.market".to_owned(),
+            version: Version::new(1, 2, 0),
+            date: "2027-04-01".to_owned(),
+        }];
+        let after = parse_publisher(&settled_text(&text, &added), "ecc").unwrap();
+        assert_eq!(after.revoke_all, None);
+        assert_eq!(after.revoked_versions, added);
+        assert_eq!(after.keys, before.keys);
     }
 
     #[test]

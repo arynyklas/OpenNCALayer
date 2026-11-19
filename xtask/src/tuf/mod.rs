@@ -1,31 +1,29 @@
-//! `cargo xtask tuf`: the operator's side of the TUF repositories that authenticate the
-//! update indexes (`docs/design/tuf.md`, `docs/dev/release.md`) and, in `tuf/v2`, the
+//! `cargo xtask tuf`: the operator's side of the TUF repository `tuf/v1`, which
+//! authenticates the update indexes (`docs/design/tuf.md`, `docs/dev/release.md`) and the
 //! publishers' plugins (`docs/design/publishers.md`). The verifier and the builder are
 //! `oncl_update::tuf`: this module only decides what to sign, when, and with which key, and
 //! checks the result with the client's own code. Nothing here has a second implementation of
 //! canonical JSON, signatures or the client workflow.
 //!
-//! - [`init`]: the keys and root version 1 (the ceremony, once per repository);
-//! - [`update`]: targets (and, in `tuf/v1`, snapshot) over the update indexes and the
-//!   publishers, signed with the owner's keys;
-//! - [`snapshot`]: the snapshot of `tuf/v2`, which CI signs with its online key;
+//! - [`init`]: the keys and root version 1 (the ceremony, once);
+//! - [`update`]: the top-level targets over the update indexes and the publishers (and,
+//!   while the snapshot is offline, the snapshot), signed with the owner's keys;
+//! - [`snapshot`]: the snapshot CI signs with its online key, once the snapshot is online;
 //! - [`timestamp`]: the file CI signs, with the online key, when Pages is published;
 //! - [`root`]: the next root: a renewal, or a rotation of any role's key;
-//! - [`check`], [`check_v2`]: offline verification of a repository with the client over a
-//!   directory;
+//! - [`check`]: offline verification of the repository with the client over a directory;
 //! - [`published`]: the client over HTTPS against the published site.
 //!
-//! A repository is a directory ([`repo`]): `metadata/<N>.root.json`, `<N>.targets.json`,
+//! The repository is a directory ([`repo`]): `metadata/<N>.root.json`, `<N>.targets.json`,
 //! `<N>.snapshot.json` (every version is kept for good), `metadata/timestamp.json` (never
-//! committed) and `targets/indexes/<sha256>.<channel>.json`. `tuf/v2` has its own chain of
-//! roots and online snapshot and timestamp keys, and shares the targets key of `tuf/v1`; its
-//! top-level targets delegate to the publishers ([`crate::publishers`]) and also list
-//! `targets/<sha256>.publishers.json`; the publishers' roles are
-//! `metadata/<N>.pub-<name>.json`; its snapshot is never committed. Secret keys are in
-//! [`keystore`].
+//! committed) and `targets/indexes/<sha256>.<channel>.json`. Once `publishers/` has an
+//! entry, the top-level targets also delegate to the publishers ([`crate::publishers`]) and
+//! list `targets/<sha256>.publishers.json`; the publishers' roles are
+//! `metadata/<N>.pub-<name>.json`. How the snapshot is signed is in `tuf/v1.toml`
+//! ([`repo::SnapshotMode`]): offline by the owner, committed; or online by CI, never
+//! committed. Secret keys are in [`keystore`].
 
 pub mod check;
-pub mod check_v2;
 pub mod cli;
 pub mod init;
 pub mod keystore;
@@ -47,15 +45,12 @@ use zeroize::Zeroizing;
 /// Where the repository is committed, from the workspace root.
 pub const REPO_DIR: &str = "tuf/v1";
 
-/// Where `tuf/v2` is committed, from the workspace root.
-pub const V2_REPO_DIR: &str = "tuf/v2";
+/// The snapshot mode of the repository (`snapshot = "offline"` or `"online"`), from the
+/// workspace root: the file beside the repository ([`repo::config_path`]).
+pub const CONFIG: &str = "tuf/v1.toml";
 
 /// The root of trust the client embeds (a copy of root version 1), from the workspace root.
 pub const ANCHOR: &str = "crates/oncl-update/keys/root.json";
-
-/// The root of trust of `tuf/v2`, from the workspace root: its root version 1, until the
-/// client that reads `tuf/v2` embeds it (`docs/design/publishers.md`, "Миграция").
-pub const V2_ANCHOR: &str = "tuf/v2/metadata/1.root.json";
 
 /// How long each role's metadata is valid, in days, from the moment it is signed
 /// (`docs/design/tuf.md`).
@@ -66,9 +61,9 @@ pub const TARGETS_DAYS: i64 = 30;
 pub const SNAPSHOT_DAYS: i64 = 30;
 /// See [`ROOT_DAYS`].
 pub const TIMESTAMP_DAYS: i64 = 7;
-/// The snapshot of `tuf/v2`, signed online on every publication
+/// The snapshot CI signs once the snapshot is online, on every publication
 /// (`docs/design/publishers.md`, "Сроки и лимиты").
-pub const V2_SNAPSHOT_DAYS: i64 = 7;
+pub const ONLINE_SNAPSHOT_DAYS: i64 = 7;
 
 /// The largest index (and so target) the tools read: the client's own limit.
 pub const MAX_TARGET: u64 = oncl_update::MAX_INDEX_LEN;
