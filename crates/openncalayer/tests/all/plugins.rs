@@ -4,8 +4,6 @@
 //! `e2e install-plugin` installs a package for `run`, and `ONCL_E2E_EXTRA_CA` lets the
 //! plugins' HTTPS trust another CA.
 
-#![cfg(feature = "e2e-prompter")]
-
 use futures_util::{SinkExt, StreamExt};
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_plugin::{Package, Source, Store};

@@ -2,8 +2,6 @@
 //! and the browser extension bridge: a port installed in the data directory answers the
 //! page with the core's windows answered by a script.
 
-#![cfg(feature = "e2e-prompter")]
-
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_plugin::{Package, Source, Store};
 use serde_json::{Value, json};
