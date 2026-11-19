@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use oncl_desktop::UpdateSettings;
 use oncl_plugin::{Capabilities, Store};
-use oncl_update::tuf::{RoleName, Target, TargetPath, VerifiedRole};
+use oncl_update::tuf::{Limits, RoleName, Target, TargetPath, VerifiedRole};
 use oncl_update::{Channel, Index, PublisherPolicy};
 use time::OffsetDateTime;
 use tracing::{info, warn};
@@ -28,10 +28,6 @@ use crate::update::CHECK_EVERY;
 /// reaches it within hours (Р26). Otherwise [`CHECK_EVERY`].
 pub const PUBLISHER_CHECK_EVERY: (Duration, Duration) =
     (Duration::from_secs(3600), Duration::from_secs(3 * 3600));
-
-/// The most delegated roles read from the kept files: as many as the client follows
-/// ([`oncl_update::tuf::Limits::max_delegations`]).
-const MAX_ROLES: usize = 32;
 
 /// What an application of the catalog may do to the installed plugins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -212,7 +208,8 @@ pub fn kept(
             // Only the roles delegated now, each once (and at most as many as the client
             // follows): no other kept file is read.
             let mut listed: Vec<(RoleName, Option<VerifiedRole>)> = Vec::new();
-            for name in names.take(MAX_ROLES) {
+            let most = usize::try_from(Limits::default().max_delegations).unwrap_or(usize::MAX);
+            for name in names.take(most) {
                 if listed.iter().any(|(listed, _)| *listed == name) {
                     continue;
                 }

@@ -83,6 +83,8 @@ pub enum PluginActionError {
     /// A newer update took the place of the one the user was shown: it must be reviewed
     /// again.
     Superseded,
+    /// Updates are off: an update waiting for the user is not installed until they are on.
+    UpdatesOff,
     /// Anything else: the technical detail, shown after a translated prefix.
     Failed(String),
 }
@@ -352,6 +354,7 @@ fn action_error_text(e: &PluginActionError, kind: Action, l: Locale) -> String {
         PluginActionError::NotInstalled => t.not_installed.to_owned(),
         PluginActionError::NothingToConfirm => t.nothing_to_confirm.to_owned(),
         PluginActionError::Superseded => t.superseded.to_owned(),
+        PluginActionError::UpdatesOff => t.updates_off.to_owned(),
         PluginActionError::Failed(detail) => detail.clone(),
     };
     failed.replace("{0}", &why)
@@ -792,6 +795,7 @@ struct Texts {
     pending_update: &'static str,
     nothing_to_confirm: &'static str,
     superseded: &'static str,
+    updates_off: &'static str,
     installed_already: &'static str,
     being_installed: &'static str,
     no_catalog: &'static str,
@@ -835,6 +839,7 @@ impl Texts {
                 pending_update: "{version} нұсқасына жаңарту сіздің рұқсатыңызды күтеді: плагин қосымша мыналарды істей алады: {0}",
                 nothing_to_confirm: "рұқсат күтетін жаңарту жоқ",
                 superseded: "жаңартудың жаңарақ нұсқасы келді: оны қайта қарап шығыңыз",
+                updates_off: "жаңартулар өшірулі: оларды баптауларда қосыңыз",
                 installed_already: "ол орнатылып қойған",
                 being_installed: "ол қазір орнатылуда",
                 no_catalog: "плагиндер каталогы қолжетімсіз",
@@ -873,6 +878,7 @@ impl Texts {
                 pending_update: "Обновление до версии {version} ждёт вашего разрешения: плагин сможет ещё {0}",
                 nothing_to_confirm: "обновление не ждёт разрешения",
                 superseded: "пришла более новая версия обновления: просмотрите её снова",
+                updates_off: "обновления выключены: включите их в настройках",
                 installed_already: "он уже установлен",
                 being_installed: "он уже устанавливается",
                 no_catalog: "каталог плагинов недоступен",
@@ -911,6 +917,7 @@ impl Texts {
                 pending_update: "The update to version {version} waits for your permission: the plugin will also be able to {0}",
                 nothing_to_confirm: "no update waits for permission",
                 superseded: "a newer version of the update arrived: review it again",
+                updates_off: "updates are off: turn them on in the settings",
                 installed_already: "it is installed already",
                 being_installed: "it is being installed already",
                 no_catalog: "the plugin catalog is unavailable",

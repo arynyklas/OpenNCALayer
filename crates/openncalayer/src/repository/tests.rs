@@ -11,7 +11,7 @@ use oncl_update::{Channel, Index, PublisherPolicy, UpdateError};
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
-use super::{CatalogRead, Repository};
+use super::{CatalogRead, PUBLISHERS_TIMEOUT, Repository};
 use crate::update::tests::FakeTransport;
 
 /// Where the fake repository is "published".
@@ -554,7 +554,10 @@ fn the_catalog_brings_the_publishers_side_and_stops_at_an_unchanged_snapshot() {
     publish_with_publishers(&server, &transport, publishers);
     let r = repository(&server, dir.path(), &transport);
 
-    let CatalogRead::Read(read) = r.catalog(Channel::Stable, None, TIMEOUT, None).unwrap() else {
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
         panic!("nothing read");
     };
     assert_eq!(read.index.index.seq, 1);
@@ -570,8 +573,14 @@ fn the_catalog_brings_the_publishers_side_and_stops_at_an_unchanged_snapshot() {
     // The same snapshot again: nothing but the metadata is read.
     let asked = transport.asked().len();
     assert!(matches!(
-        r.catalog(Channel::Stable, None, TIMEOUT, Some(read.snapshot))
-            .unwrap(),
+        r.catalog(
+            Channel::Stable,
+            None,
+            TIMEOUT,
+            PUBLISHERS_TIMEOUT,
+            Some(read.snapshot)
+        )
+        .unwrap(),
         CatalogRead::Unchanged
     ));
     assert!(
@@ -610,7 +619,10 @@ fn the_publishers_side_fails_alone() {
     server.repo().delegations = Some(json!({"keys": {}, "roles": 7}));
     server.publish(&transport, Channel::Stable, &index(Channel::Stable, 2));
     let r = repository(&server, dir.path(), &transport);
-    let CatalogRead::Read(read) = r.catalog(Channel::Stable, None, TIMEOUT, None).unwrap() else {
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
         panic!("nothing read");
     };
     assert_eq!(read.index.index.seq, 2);
@@ -628,7 +640,10 @@ fn the_publishers_side_fails_alone() {
     server.repo().remove_target(PublisherPolicy::TARGET);
     server.repo().delegations = None;
     server.publish(&transport, Channel::Stable, &index(Channel::Stable, 3));
-    let CatalogRead::Read(read) = r.catalog(Channel::Stable, None, TIMEOUT, None).unwrap() else {
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
         panic!("nothing read");
     };
     assert_eq!(read.publishers.unwrap(), None);

@@ -515,7 +515,7 @@ fn kept_role_and_publishers_round_trip() {
     let store = Store::open(dir.path()).unwrap();
     let until = OffsetDateTime::now_utc() + Duration::days(1);
     assert!(store.load_publishers(|_| Ok(until)).is_none());
-    assert!(store.load_roles(|_, _| Ok::<_, String>(())).is_empty());
+    assert!(store.load_role(&role("pub-ecc"), <[u8]>::to_vec).is_none());
     store.save_publishers(b"{\"publishers\":[]}").unwrap();
     assert_eq!(
         std::fs::read(dir.path().join("plugins/catalog/publishers.json")).unwrap(),
@@ -536,29 +536,25 @@ fn kept_role_and_publishers_round_trip() {
         std::fs::read(dir.path().join("plugins/catalog/roles/pub-ecc.json")).unwrap(),
         b"ecc"
     );
-    // Not a role's file: skipped.
-    std::fs::write(dir.path().join("plugins/catalog/roles/targets.json"), b"x").unwrap();
-    std::fs::write(dir.path().join("plugins/catalog/roles/pub-ecc.tmp"), b"x").unwrap();
-    let roles = store.load_roles(|role, bytes| {
-        if bytes == b"ecc" {
-            Ok((role.to_string(), bytes.to_vec()))
-        } else {
-            Err("no longer holds".to_owned())
-        }
-    });
     assert_eq!(
-        roles,
-        vec![
-            (role("pub-ecc"), Ok(("pub-ecc".to_owned(), b"ecc".to_vec()))),
-            (role("pub-other"), Err("no longer holds".to_owned())),
-        ]
+        store.load_role(&role("pub-ecc"), <[u8]>::to_vec),
+        Some(b"ecc".to_vec())
+    );
+    assert_eq!(
+        store.load_role(&role("pub-other"), <[u8]>::to_vec),
+        Some(b"other".to_vec())
     );
     // Saved again: replaced.
     store.save_role(&role("pub-ecc"), b"ecc 2").unwrap();
     assert_eq!(
-        store.load_roles(|_, bytes| Ok::<_, String>(bytes.to_vec()))[0],
-        (role("pub-ecc"), Ok(b"ecc 2".to_vec()))
+        store.load_role(&role("pub-ecc"), <[u8]>::to_vec),
+        Some(b"ecc 2".to_vec())
     );
+    // Longer than any role the client keeps: not read.
+    store
+        .save_role(&role("pub-big"), &vec![b' '; (128 << 10) + 1])
+        .unwrap();
+    assert!(store.load_role(&role("pub-big"), <[u8]>::to_vec).is_none());
 }
 
 #[test]
@@ -579,8 +575,8 @@ fn prune_roles_removes_only_undelegated() {
     store
         .prune_roles(&std::collections::BTreeSet::from([role("pub-ecc")]))
         .unwrap();
-    let left = store.load_roles(|_, _| Ok::<_, String>(()));
-    assert_eq!(left, vec![(role("pub-ecc"), Ok(()))]);
+    assert!(store.load_role(&role("pub-ecc"), |_| ()).is_some());
+    assert!(store.load_role(&role("pub-gone"), |_| ()).is_none());
     assert!(!roles.join("pub-gone.json").exists());
     assert!(!roles.join("targets.json").exists());
     // `publishers.json` is not a role's file.

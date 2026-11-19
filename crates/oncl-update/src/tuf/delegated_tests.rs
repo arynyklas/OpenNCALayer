@@ -514,3 +514,45 @@ fn the_saved_top_level_targets_are_checked_again_offline_with_their_delegations(
         .unwrap_err();
     assert!(matches!(e, TufError::Expired { .. }), "{e:?}");
 }
+
+#[test]
+fn a_kept_role_holds_offline_only_at_the_version_the_snapshot_lists() {
+    let k = top(1);
+    let (repo, anchor) = repository(&k, &[publisher("ecc", 50)]);
+    let mut c = client(&anchor, &repo, MemoryStore::default());
+    let trusted = c.refresh(T0).unwrap();
+    let delegated = c.delegated(&trusted, T0).unwrap();
+    let kept = delegated
+        .role(&role("pub-ecc"))
+        .unwrap()
+        .unwrap()
+        .file()
+        .to_vec();
+    c.verify_cached_role(&role("pub-ecc"), &kept, T0).unwrap();
+    // Version 2 is signed by a key the delegation does not name: refused online, and the
+    // version 1 kept no longer holds offline either.
+    let mut forged = publisher("ecc", 50);
+    forged.signers = vec![key(51)];
+    publish(&repo, &k, 2, &[forged]);
+    let trusted = c.refresh(T0).unwrap();
+    assert!(
+        c.delegated(&trusted, T0)
+            .unwrap()
+            .role(&role("pub-ecc"))
+            .unwrap()
+            .is_err()
+    );
+    let e = c
+        .verify_cached_role(&role("pub-ecc"), &kept, T0)
+        .unwrap_err();
+    assert!(
+        matches!(
+            e,
+            TufError::Delegation {
+                error: DelegationError::NotAccepted,
+                ..
+            }
+        ),
+        "{e:?}"
+    );
+}

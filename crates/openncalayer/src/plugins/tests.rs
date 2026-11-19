@@ -1569,7 +1569,9 @@ fn an_offer_waits_for_a_download_running_within_its_budget() {
         let one = lock(&other.checking);
         held_tx.send(()).unwrap();
         asking.recv().unwrap();
-        other.refresh_locked(&one, INDEX_TIMEOUT, None).unwrap();
+        other
+            .refresh_locked(&one, INDEX_TIMEOUT, PUBLISHERS_TIMEOUT, None)
+            .unwrap();
     });
     held.recv().unwrap();
     asking_tx.send(()).unwrap();
@@ -1941,10 +1943,10 @@ fn a_waiting_update_is_confirmed_only_while_the_catalog_still_chooses_it() {
 
     // Updates off: it keeps waiting, not installed.
     updates_off(&sandbox);
-    assert!(matches!(
+    assert_eq!(
         service.confirm_update(ID, &sha),
-        Err(PluginActionError::Failed(_))
-    ));
+        Err(PluginActionError::UpdatesOff)
+    );
     assert_eq!(pending_sha(&service), sha);
 
     // Revoked since (the catalog read, not applied yet): dropped, not installed.
@@ -1998,4 +2000,74 @@ fn a_leftover_full_application_is_capped_once_updates_are_off() {
     assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
     assert_eq!(package_downloads(&sandbox, "0.2.0"), 0);
     assert!(sandbox.notices().is_empty());
+}
+
+#[test]
+fn a_revoked_version_stays_off_when_its_replacement_cannot_be_recorded() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let mut revoked = sandbox.release("0.1.0", &example("0.1.0"));
+    revoked.revoked = true;
+    let new = sandbox.release("0.2.0", &example("0.2.0"));
+    sandbox.publish(2, vec![revoked, new]);
+    sandbox.transport.reply(&package_url("0.2.0"), 503, b"");
+    service.scheduled_check();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    // 0.2.0 loads, but its package file cannot be written: nothing runs.
+    sandbox
+        .transport
+        .serve(&package_url("0.2.0"), &example("0.2.0"));
+    let blocker = sandbox
+        .dir
+        .path()
+        .join(format!("plugins/packages/{ID}-0.2.0.onclp"));
+    std::fs::create_dir_all(blocker.join("blocker")).unwrap();
+    service.scheduled_check();
+    assert!(matches!(
+        &sandbox.notices()[..],
+        [PluginNotice::Failed { .. }]
+    ));
+    assert!(
+        sandbox.modules.names().is_empty(),
+        "the revoked version is not loaded again"
+    );
+    assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
+    assert!(sandbox.store().state().plugins[ID].withdrawn);
+    // Once it can be written, the next check installs it.
+    std::fs::remove_dir_all(&blocker).unwrap();
+    service.scheduled_check();
+    assert_eq!(sandbox.installed_version(), Some(v("0.2.0")));
+    assert_eq!(sandbox.modules.names(), [MODULE]);
+}
+
+#[test]
+fn a_revoked_version_is_off_while_its_replacement_waits_for_the_user() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let old = sandbox.release("0.1.0", &example("0.1.0"));
+    let wider = sandbox.release("0.2.0", &example_wider("0.2.0"));
+    sandbox.publish(2, vec![old.clone(), wider.clone()]);
+    service.check_now();
+    let sha = pending_sha(&service);
+    assert!(!sha.is_empty());
+    sandbox.notices();
+    let mut revoked = old;
+    revoked.revoked = true;
+    sandbox.publish(3, vec![revoked, wider]);
+    service.check_now();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    assert!(sandbox.modules.names().is_empty());
+    assert_eq!(pending_sha(&service), sha, "the update still waits");
+    service.confirm_update(ID, &sha).unwrap();
+    assert_eq!(sandbox.installed_version(), Some(v("0.2.0")));
+    assert!(!sandbox.store().state().plugins[ID].withdrawn);
+    assert_eq!(sandbox.modules.names(), [MODULE]);
 }
