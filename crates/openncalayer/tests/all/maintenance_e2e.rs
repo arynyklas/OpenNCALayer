@@ -5,9 +5,9 @@
 //! installation and the Apps & Features key are throw-away.
 //!
 //! Needs the harness binary: `cargo build -p oncl-winget-setup --bin oncl-winget-harness`
-//! first, then `cargo test -p openncalayer --features e2e-prompter --test maintenance_e2e --
-//! --ignored`. Not covered here: the check for an open window, which needs the real UI.
-#![cfg(windows)]
+//! first, then `cargo test -p openncalayer --features e2e-prompter --test all
+//! maintenance_e2e:: -- --ignored`. Not covered here: the check for an open window, which
+//! needs the real UI.
 
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
