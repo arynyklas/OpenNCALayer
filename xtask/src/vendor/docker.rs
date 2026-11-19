@@ -468,6 +468,76 @@ fn collect_texts(
     Ok(texts)
 }
 
+/// The largest bare repository check 25 copies out of its container (shallow: one revision).
+pub const MAX_VCS_REPO: u64 = 256 << 20;
+
+/// Whether `name` may be check 25's network by its name alone: not a built-in or another
+/// container's namespace (`host`, `bridge`, `default`, `none`, `container:…`, `ns:…`,
+/// `slirp4netns`, `pasta`), a plain name.
+///
+/// # Errors
+///
+/// Why it is refused.
+pub fn network_name(name: &str) -> Result<(), String> {
+    let builtin = [
+        "host",
+        "bridge",
+        "default",
+        "none",
+        "slirp4netns",
+        "pasta",
+        "private",
+    ];
+    if name.contains(':') || builtin.contains(&name.to_ascii_lowercase().as_str()) {
+        return Err(format!(
+            "--network {name} is a built-in or shared network: use the egress-only bridge of \
+             docs/dev/publishers.md («Сеть проверки 25»)"
+        ));
+    }
+    if name.is_empty()
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+    {
+        return Err(format!("--network {name:?} is not a network name"));
+    }
+    Ok(())
+}
+
+/// Checks `name` ([`network_name`]) and that the engine has it as a user-defined bridge.
+///
+/// # Errors
+///
+/// It is refused, missing or of another driver.
+pub fn check_network(engine: &Engine, name: &str) -> anyhow::Result<()> {
+    network_name(name).map_err(|e| anyhow::anyhow!(e))?;
+    let out = engine
+        .command()
+        .args(["network", "inspect", "--format", "{{.Driver}}", name])
+        .output()
+        .with_context(|| format!("starting {}", engine.0))?;
+    let driver = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    if !out.status.success() || driver != "bridge" {
+        bail!("--network {name} is not a user-defined bridge network (driver {driver:?})");
+    }
+    Ok(())
+}
+
+/// The bytes of the regular files under `dir`, links not followed.
+fn tree_size(dir: &Path) -> std::io::Result<u64> {
+    let mut total = 0;
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            total += tree_size(&entry.path())?;
+        } else if kind.is_file() {
+            total += entry.metadata()?.len();
+        }
+    }
+    Ok(total)
+}
+
 /// The git configuration of check 25's fetch: `https` only, no redirect, no credential.
 const GIT_SANDBOX: [&str; 10] = [
     "-c",
@@ -600,6 +670,14 @@ pub fn git_fetch(
             engine.0,
             String::from_utf8_lossy(&cp.stderr).trim()
         );
+    }
+    if !fs::symlink_metadata(dest)?.is_dir() {
+        bail!("the copied repository is not a directory");
+    }
+    // `Tree::from_git` then keeps to the archive's own limits (MAX_UNPACKED, MAX_ENTRIES).
+    let size = tree_size(dest)?;
+    if size > MAX_VCS_REPO {
+        bail!("the repository of one revision is {size} bytes, more than {MAX_VCS_REPO}");
     }
     Ok(())
 }
@@ -899,6 +977,30 @@ mod tests {
             !fetch.contains("--network=none") && fetch.contains(" fetch --source"),
             "{fetch}"
         );
+    }
+
+    #[test]
+    fn check_25_runs_on_a_named_user_network_only() {
+        network_name("oncl-vcs").unwrap();
+        network_name("oncl_vcs.1").unwrap();
+        for refused in [
+            "host",
+            "bridge",
+            "Default",
+            "none",
+            "slirp4netns",
+            "pasta",
+            "private",
+            "container:runner",
+            "ns:/proc/1/ns/net",
+            "slirp4netns:allow_host_loopback=true",
+            "",
+            "a b",
+        ] {
+            assert!(network_name(refused).is_err(), "{refused}");
+        }
+        // A name that passes still has to be a user-defined bridge the engine knows.
+        assert!(check_network(&Engine("no-such-engine".into()), "oncl-vcs").is_err());
     }
 
     #[test]

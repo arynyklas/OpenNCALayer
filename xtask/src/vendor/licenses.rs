@@ -255,6 +255,12 @@ pub type LicenceTexts = BTreeMap<(String, String), Vec<(String, String)>>;
 /// The largest licence file read.
 const MAX_LICENCE_FILE: u64 = 1 << 20;
 
+/// The most licence files of one crate.
+pub const MAX_LICENCE_FILES: usize = 64;
+
+/// The largest `THIRD-PARTY.txt`, its licence texts all together.
+pub const MAX_THIRD_PARTY: usize = 16 << 20;
+
 /// Whether `name` is a licence file's: `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
 /// `UNLICENSE*`, in any case.
 pub fn is_licence_file(name: &str) -> bool {
@@ -278,6 +284,10 @@ pub fn licence_files(dir: &std::path::Path) -> anyhow::Result<Vec<(String, Strin
         if !entry.file_type()?.is_file() || !is_licence_file(&name) {
             continue;
         }
+        // One past the cap is enough for check 20 to refuse the crate.
+        if files.len() > MAX_LICENCE_FILES {
+            break;
+        }
         let bytes = oncl_pack::read_limited(&entry.path(), MAX_LICENCE_FILE)?;
         files.push((name, String::from_utf8_lossy(&bytes).into_owned()));
     }
@@ -292,7 +302,7 @@ pub fn licence_files(dir: &std::path::Path) -> anyhow::Result<Vec<(String, Strin
 ///
 /// A line per crate without one.
 pub fn check_texts(crates: &[WasmCrate], texts: &LicenceTexts) -> Result<(), Vec<String>> {
-    let problems: Vec<String> = crates
+    let mut problems: Vec<String> = crates
         .iter()
         .filter(|c| {
             texts
@@ -307,6 +317,25 @@ pub fn check_texts(crates: &[WasmCrate], texts: &LicenceTexts) -> Result<(), Vec
             )
         })
         .collect();
+    for ((name, version), files) in texts {
+        if files.len() > MAX_LICENCE_FILES {
+            problems.push(format!(
+                "{name} {version} has {} licence files, more than {MAX_LICENCE_FILES}",
+                files.len()
+            ));
+        }
+    }
+    let total: usize = texts
+        .values()
+        .flatten()
+        .map(|(n, t)| n.len() + t.len())
+        .sum();
+    if total > MAX_THIRD_PARTY {
+        problems.push(format!(
+            "the licence texts are {total} bytes, more than THIRD-PARTY.txt takes \
+             ({MAX_THIRD_PARTY})"
+        ));
+    }
     if problems.is_empty() {
         Ok(())
     } else {
@@ -602,6 +631,44 @@ mod tests {
                 "==== serde 1.0.0 — LICENSE-MIT ====\n\nMIT License\n\nCopyright serde\n"
             ),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn check_20_caps_licence_files_per_crate_and_in_all() {
+        let c = |name: &str| WasmCrate {
+            name: name.into(),
+            version: "1.0.0".into(),
+            license: Some("MIT".into()),
+            source: None,
+            repository: None,
+            manifest_path: String::new(),
+        };
+        let mut texts = LicenceTexts::new();
+        let many: Vec<(String, String)> = (0..=MAX_LICENCE_FILES)
+            .map(|n| (format!("LICENSE-{n}"), "x".into()))
+            .collect();
+        texts.insert(("a".into(), "1.0.0".into()), many);
+        let err = check_texts(&[c("a")], &texts).unwrap_err();
+        assert!(err[0].contains("more than 64"), "{err:?}");
+        let mut big = LicenceTexts::new();
+        for n in 0..17 {
+            big.insert(
+                (format!("c{n}"), "1.0.0".into()),
+                vec![("LICENSE".into(), "x".repeat(1 << 20))],
+            );
+        }
+        let crates: Vec<WasmCrate> = (0..17).map(|n| c(&format!("c{n}"))).collect();
+        let err = check_texts(&crates, &big).unwrap_err();
+        assert!(err[0].contains("THIRD-PARTY.txt takes"), "{err:?}");
+        // licence_files stops one past the cap.
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..70 {
+            std::fs::write(dir.path().join(format!("LICENSE-{n}")), "x").unwrap();
+        }
+        assert_eq!(
+            licence_files(dir.path()).unwrap().len(),
+            MAX_LICENCE_FILES + 1
         );
     }
 

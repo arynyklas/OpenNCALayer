@@ -873,17 +873,12 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
             builder,
             out,
         } => {
-            if matches!(network.as_str(), "host" | "bridge" | "default") {
-                bail!(
-                    "--network {network} reaches the runner: make the egress-only network of \
-                     docs/dev/publishers.md («Сеть проверки 25»)"
-                );
-            }
+            let engine = Engine::from_env();
+            docker::check_network(&engine, &network)?;
             let loaded = pr::load_pr(&root, &base, &head, &layout, OffsetDateTime::now_utc())?;
             let work = tempfile::tempdir()?;
             let listed = listed_builder(&root, builder.as_deref())?;
             let image = listed.image();
-            let engine = Engine::from_env();
             let sandbox = super::provenance::Sandbox {
                 engine: &engine,
                 image: &image,
