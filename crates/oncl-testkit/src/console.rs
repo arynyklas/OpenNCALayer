@@ -1,33 +1,40 @@
 //! Tests that need a real Windows console (Ctrl-Break delivery, a pseudoconsole) cannot run
-//! where cargo has none: an IDE runner, a service, an agent shell. They skip there, with a
-//! line saying why, unless `ONCL_REQUIRE_ORACLES=1` (set in CI) makes the missing console a
-//! failure.
+//! where cargo has none: an IDE runner, a service, an agent shell. They skip there with a
+//! `skipped:` line, as a test whose program is missing does ([`crate::tool`]), and with
+//! [`REQUIRE_ENV`] set (CI) the missing console fails the test instead.
 
-/// The variable that turns a skip into a failure.
-pub const REQUIRE_VAR: &str = "ONCL_REQUIRE_ORACLES";
+use crate::tool::{REQUIRE_ENV, current_test, oracles_required};
+use std::io::Write as _;
 
 /// Whether the test may go on: `available` says whether `what` (a console feature) works
-/// here. When it does not, the test skips (`false`, with a note on stderr) unless
-/// `ONCL_REQUIRE_ORACLES=1`, which panics instead.
+/// here. When it does not, the test skips: `false`, after a line on stderr that bypasses the
+/// harness' output capture.
 ///
 /// # Panics
 ///
-/// Panics if `what` is missing and `ONCL_REQUIRE_ORACLES=1`.
+/// If `what` is missing and [`oracles_required`].
+#[must_use]
 pub fn proceed(what: &str, available: bool) -> bool {
     if available {
         return true;
     }
+    let test = current_test();
     assert!(
-        std::env::var_os(REQUIRE_VAR).is_none_or(|v| v != "1"),
-        "no {what}, and {REQUIRE_VAR}=1 requires it"
+        !oracles_required(),
+        "{test} needs {what}, which is missing. The test fails rather than skips because \
+         {REQUIRE_ENV} is set (unset it, or set it to 0, to skip instead)."
     );
-    eprintln!("skipped: no {what}, see docs/dev/development.md «Что нужно для тестов»");
+    let _ = writeln!(
+        std::io::stderr().lock(),
+        "skipped: {test} needs {what}; see docs/dev/development.md «Что нужно для тестов»"
+    );
     false
 }
 
 /// Whether this process is attached to a console, which a Ctrl-Break sent to a child of its
 /// own process group needs: without one `GenerateConsoleCtrlEvent` fails.
 #[cfg(windows)]
+#[must_use]
 pub fn attached() -> bool {
     use windows_sys::Win32::System::Console::GetConsoleProcessList;
     let mut pid = 0u32;
@@ -37,9 +44,14 @@ pub fn attached() -> bool {
 }
 
 /// Whether a test may deliver Ctrl-Break to its child; see [`proceed`].
+///
+/// # Panics
+///
+/// If there is no console and [`oracles_required`].
 #[cfg(windows)]
+#[must_use]
 pub fn ctrl_break_possible() -> bool {
-    proceed("console to deliver CTRL_BREAK through", attached())
+    proceed("a console to deliver CTRL_BREAK through", attached())
 }
 
 #[cfg(test)]
