@@ -1,9 +1,7 @@
 //! The Kaztoken driver against the emulated Kaztoken: the exact commands, the key map,
 //! signatures equal to the software ones, the PIN counter.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::backend::{Backend, Protocol};
 use oncl_token::drivers::{check_pin, open_driver};

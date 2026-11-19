@@ -1,9 +1,7 @@
 //! The eToken 72K driver against the emulated token: the exact commands, aliases as hex of
 //! object names, signatures equal to the software ones, no count of PIN tries.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::drivers::open_driver;
 use oncl_token::{TokenError, TokenKind, Tokens};

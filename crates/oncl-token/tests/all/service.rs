@@ -2,9 +2,7 @@
 //! entries, and keys that sign on the card — one transaction per signature, the card reset
 //! after it, a refused PIN never sent again, another card or a removed card an error.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::cms::{self, SignOptions};
 use oncl_pki::info::cert_info;
 use oncl_pki::key::{KeyAlg, KeyError, SigAlg};
