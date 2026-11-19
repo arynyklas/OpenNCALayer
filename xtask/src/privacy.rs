@@ -118,12 +118,12 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
     ("crates/oncl-pki/tests/csr.rs", 'C', &[r"\\Users\\Тест\\"]),
     ("crates/oncl-pki/tests/keystore.rs", 'C', &[r"\\keys"]),
     (
-        "crates/oncl-plugin/tests/package.rs",
+        "crates/oncl-plugin/tests/all/package.rs",
         'C',
         &["/plugin.wasm"],
     ),
     (
-        "crates/oncl-plugin/tests/runtime.rs",
+        "crates/oncl-plugin/tests/all/runtime.rs",
         'C',
         &[r"\\k.p12", r"\\keys"],
     ),

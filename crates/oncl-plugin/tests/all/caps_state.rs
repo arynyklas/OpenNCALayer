@@ -2,7 +2,7 @@
 //! `settings_put`) and the values its instances share in the process (`shared_get`,
 //! `shared_put`).
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::testing::{ScriptedPrompter, Step};

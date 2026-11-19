@@ -2,7 +2,7 @@
 //! storage dialog, the readers of `keys_terminals`, and `keys_open` with the PIN a port
 //! passes (its tries, a blocked PIN, a PIN the card cannot take).
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::StorageKind;

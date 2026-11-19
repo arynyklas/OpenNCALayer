@@ -2,7 +2,7 @@
 //! `keys_sign_xml_ex`, `keys_sign_xades`, `xml_verify`): what the core checks, through the
 //! ABI.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_pdk::abi::{

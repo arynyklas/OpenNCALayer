@@ -3,7 +3,7 @@
 //! of an ID card (`tokens_id_card`), through guests in WebAssembly text that call them with
 //! fixed arguments.
 
-mod common;
+use crate::common;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;

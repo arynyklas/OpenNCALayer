@@ -1,7 +1,7 @@
 //! The key choice of the manual window (`call_manual`, design `manual-plugins.md` 3.5):
 //! the plugin's filter against the one key the user bound, never a dialog.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::OcspCache;

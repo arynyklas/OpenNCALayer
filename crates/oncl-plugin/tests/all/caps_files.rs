@@ -2,7 +2,7 @@
 //! names (`page_file_read`, `page_file_write`): page paths only under the page-path rules,
 //! each file or folder once the user allows it in the session.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::testing::{ScriptedPrompter, Step};

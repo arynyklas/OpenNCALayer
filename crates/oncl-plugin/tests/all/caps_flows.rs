@@ -3,7 +3,7 @@
 //! the built-in modules' time-stamps and the causes of the core's failures, through guests
 //! in WebAssembly text that call them with fixed arguments.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::testing::{ScriptedPrompter, Step};

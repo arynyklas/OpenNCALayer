@@ -1,7 +1,7 @@
 //! The example plugin of `crates/oncl-pdk/example`, built with the guest SDK, in the
 //! runtime: its CommonInvoker dialect, its state, and what happens when it misbehaves.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_plugin::{Engine, Instance, Manifest, Package, PluginError};

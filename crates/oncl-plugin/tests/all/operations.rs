@@ -2,7 +2,7 @@
 //! encoding of a profile, and what an update adds. The reference text is the design,
 //! `docs/design/manual-plugins.md` section 4.1.
 
-mod common;
+use crate::common;
 
 use oncl_pdk::abi::Import;
 use oncl_plugin::operations::{

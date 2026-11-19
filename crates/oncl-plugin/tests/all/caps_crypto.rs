@@ -2,7 +2,7 @@
 //! `tsp_request`, `ocsp_fetch`, `crl_fetch`): the core makes every request, only to the PKI
 //! hosts, against the mock TSA, OCSP responder and CRL distribution point.
 
-mod common;
+use crate::common;
 
 use common::*;
 use der::Encode;

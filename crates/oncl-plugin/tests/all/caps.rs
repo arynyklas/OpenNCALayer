@@ -2,7 +2,7 @@
 //! WebAssembly text): keys chosen in scripted dialogs and used by handle, the dialogs, files
 //! and HTTP within the manifest's prefixes.
 
-mod common;
+use crate::common;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
