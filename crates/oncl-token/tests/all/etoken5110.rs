@@ -2,9 +2,7 @@
 //! RSA in one extended APDU or in pieces, signatures equal to the software ones, the
 //! certificate with a status word after it.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::backend::Protocol;
 use oncl_token::drivers::open_driver;

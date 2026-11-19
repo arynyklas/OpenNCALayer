@@ -1,8 +1,6 @@
 //! Helpers of the driver and service tests: emulated cards with synthetic keys, APDU
 //! transcripts against golden files, software signatures to compare with.
 
-#![allow(dead_code, reason = "each test binary uses a part")]
-
 use hex_literal::hex;
 use oncl_pki::key::{PrivateKey, SigAlg, digest_info};
 use oncl_testkit::synthetic;

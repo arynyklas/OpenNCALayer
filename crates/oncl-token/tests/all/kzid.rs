@@ -2,9 +2,7 @@
 //! of 4 characters, key pairs sharing certificate files, the cards of 2020, the holder data
 //! read without the PIN.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::backend::Protocol;
 use oncl_token::drivers::{KeySlot, check_pin, open_driver};

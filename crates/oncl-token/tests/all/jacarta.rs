@@ -1,9 +1,7 @@
 //! The JaCarta driver against the emulated token: the exact commands, RSA in an extended
 //! APDU (and so not over T=0), signatures equal to the software ones.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::backend::Protocol;
 use oncl_token::drivers::open_driver;

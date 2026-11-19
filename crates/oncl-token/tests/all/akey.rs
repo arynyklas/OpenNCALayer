@@ -2,9 +2,7 @@
 //! token information, `nca_` labels only, records spanning responses, signatures equal to
 //! the software ones, certificates as DER.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_token::backend::{Backend, Protocol};
 use oncl_token::drivers::{check_pin, open_driver};
