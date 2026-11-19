@@ -482,7 +482,10 @@ mod tests {
     /// A copy of the fixture's registry and repository.
     fn copy() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
-        for (from, to) in [("publishers", "publishers"), ("tuf/v1/metadata", "tuf/metadata")] {
+        for (from, to) in [
+            ("publishers", "publishers"),
+            ("tuf/v1/metadata", "tuf/metadata"),
+        ] {
             let to = dir.path().join(to);
             fs::create_dir_all(&to).unwrap();
             for entry in fs::read_dir(fixtures().join(from)).unwrap() {
@@ -491,8 +494,11 @@ mod tests {
                     fs::create_dir_all(to.join(entry.file_name())).unwrap();
                     for file in fs::read_dir(entry.path()).unwrap() {
                         let file = file.unwrap();
-                        fs::copy(file.path(), to.join(entry.file_name()).join(file.file_name()))
-                            .unwrap();
+                        fs::copy(
+                            file.path(),
+                            to.join(entry.file_name()).join(file.file_name()),
+                        )
+                        .unwrap();
                     }
                 } else {
                     fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
@@ -556,4 +562,3 @@ mod tests {
         assert_eq!(shell_quoted("a';rm -rf ~;'"), r"'a'\'';rm -rf ~;'\'''");
     }
 }
-

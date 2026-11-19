@@ -89,7 +89,11 @@ pub fn generate(root: &Path, inputs: &Inputs, src: &Path) -> anyhow::Result<Vec<
     }
     copy_tree(&site, src)?;
     for port in &ports {
-        write_stubs(&src.join("content/plugins"), &port.short, &stub(&port.short))?;
+        write_stubs(
+            &src.join("content/plugins"),
+            &port.short,
+            &stub(&port.short),
+        )?;
     }
     for publisher in &publishers {
         let name = publisher.publisher.name.as_str();

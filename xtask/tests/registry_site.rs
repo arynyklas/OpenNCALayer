@@ -151,7 +151,10 @@ fn fixture_publishers_data_matches_expectations() {
         list["acme"]["plugins"],
         serde_json::json!(["kz.acme.market", "kz.acme.sign"])
     );
-    assert_eq!(list["olden"]["plugins"], serde_json::json!(["kz.olden.tool"]));
+    assert_eq!(
+        list["olden"]["plugins"],
+        serde_json::json!(["kz.olden.tool"])
+    );
     // Latin before Cyrillic, case-insensitively.
     assert_eq!(
         publishers["order"]["en"],
@@ -183,14 +186,12 @@ fn fixture_publishers_data_matches_expectations() {
     assert_eq!(sign["channels"]["beta"]["version"], "2.0.0");
     assert_eq!(sign["anchor"], "kz.example.unported");
     // A retired publisher's plugins are offered on no channel.
-    assert_eq!(
-        plugins["kz.olden.tool"]["channels"],
-        serde_json::json!({})
-    );
+    assert_eq!(plugins["kz.olden.tool"]["channels"], serde_json::json!({}));
 
     let v = &market["versions"][2];
     let sha = v["sha256"].as_str().unwrap();
-    let release = format!("https://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-{sha}/");
+    let release =
+        format!("https://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-{sha}/");
     assert_eq!(
         v["package_url"],
         format!("{release}kz.acme.market-1.0.0.onclp")
@@ -221,7 +222,9 @@ fn fixture_publishers_data_matches_expectations() {
         "{verify}"
     );
     assert!(
-        verify.starts_with("docker run --rm -v \"$PWD:/in:ro\" ghcr.io/arynyklas/oncl-plugin-builder@sha256:"),
+        verify.starts_with(
+            "docker run --rm -v \"$PWD:/in:ro\" ghcr.io/arynyklas/oncl-plugin-builder@sha256:"
+        ),
         "{verify}"
     );
     assert!(
@@ -394,8 +397,13 @@ fn zola_site_works_without_any_optional_input() {
     // No publishers: the list says so, and so does the catalog's table of their plugins.
     for (prefix, none, plugins_none) in [
         ("", "Издателей пока нет", "Плагинов издателей пока нет"),
-        ("kk/", "Жариялаушылар әзірге жоқ", "Жариялаушылардың плагиндері әзірге жоқ"),
-        ("en/", "No publishers yet", "No publishers' plugins yet"),
+        (
+            "kk/",
+            "Жариялаушылар әзірге жоқ",
+            "Жариялаушылардың плагиндері әзірге жоқ",
+        ),
+        // `'` may be printed as an entity.
+        ("en/", "No publishers yet", "plugins yet."),
     ] {
         let list = read(&public, &format!("{prefix}publishers/index.html"));
         assert!(list.contains("class=\"nodata\""), "{prefix}");
@@ -411,6 +419,8 @@ fn zola_site_works_without_any_optional_input() {
 #[ignore = "downloads and runs Zola"]
 fn zola_site_lists_publishers() {
     let (_out, public) = built(&fixture_inputs());
+    // Tera may print `/` as `&#x2F;`, in links too.
+    let read = |page: &str| read(&public, page).replace("&#x2F;", "/");
     for (prefix, note, retired, revoked, page_revoked) in [
         (
             "",
@@ -434,47 +444,68 @@ fn zola_site_lists_publishers() {
             "The publisher was revoked on 2026-10-01",
         ),
     ] {
-        let list = read(&public, &format!("{prefix}publishers/index.html"));
+        let list = read(&format!("{prefix}publishers/index.html"));
         for name in ["acme", "olden", "gone"] {
-            assert!(list.contains(&format!("<tr id=\"{name}\">")), "{prefix}{name}");
+            assert!(
+                list.contains(&format!("<tr id=\"{name}\">")),
+                "{prefix}{name}"
+            );
             assert!(
                 list.contains(&format!("publishers/{name}/\"")),
                 "{prefix}{name}"
             );
         }
-        assert!(list.contains(&format!("<span class=\"badge\">{retired}</span>")), "{prefix}");
+        assert!(
+            list.contains(&format!("<span class=\"badge\">{retired}</span>")),
+            "{prefix}"
+        );
         assert!(
             list.contains(&format!("<span class=\"badge revoked\">{revoked}</span>")),
             "{prefix}"
         );
         assert!(list.contains("<code>kz.acme.</code>"), "{prefix}");
 
-        let acme = read(&public, &format!("{prefix}publishers/acme/index.html"));
+        let acme = read(&format!("{prefix}publishers/acme/index.html"));
         assert!(acme.contains(note), "{prefix}");
         assert!(acme.contains("id=\"plugin-kz.acme.market\""), "{prefix}");
         assert!(acme.contains("id=\"plugin-kz.acme.sign\""), "{prefix}");
-        assert!(acme.contains(".src.tar.gz\">kz.acme.market-1.0.0.src.tar.gz</a> · Apache-2.0"), "{prefix}");
-        assert!(acme.contains("/BUILDINFO.json\">BUILDINFO.json</a>"), "{prefix}");
+        assert!(
+            acme.contains(".src.tar.gz\">kz.acme.market-1.0.0.src.tar.gz</a> · Apache-2.0"),
+            "{prefix}"
+        );
+        assert!(
+            acme.contains("/BUILDINFO.json\">BUILDINFO.json</a>"),
+            "{prefix}"
+        );
         assert!(acme.contains("oncl-plugin-builder@sha256:"), "{prefix}");
         assert!(!acme.contains("kz.acme.rogue"), "{prefix}");
         // The homepage and the stated repository are text, not links.
         assert!(!acme.contains("href=\"https://acme.example"), "{prefix}");
-        assert!(!acme.contains("href=\"https://git.acme.example"), "{prefix}");
+        assert!(
+            !acme.contains("href=\"https://git.acme.example"),
+            "{prefix}"
+        );
 
-        let olden = read(&public, &format!("{prefix}publishers/olden/index.html"));
+        let olden = read(&format!("{prefix}publishers/olden/index.html"));
         assert!(olden.contains("class=\"notice\""), "{prefix}");
         assert!(olden.contains(retired), "{prefix}");
         assert!(olden.contains("id=\"plugin-kz.olden.tool\""), "{prefix}");
 
-        let gone = read(&public, &format!("{prefix}publishers/gone/index.html"));
+        let gone = read(&format!("{prefix}publishers/gone/index.html"));
         assert!(gone.contains(page_revoked), "{prefix}");
         assert!(!gone.contains("kz.gone.thing"), "{prefix}");
         assert!(!gone.contains(note), "{prefix}");
 
-        let catalog = read(&public, &format!("{prefix}plugins/index.html"));
+        let catalog = read(&format!("{prefix}plugins/index.html"));
         assert!(catalog.contains("class=\"publisher-plugins\""), "{prefix}");
-        assert!(catalog.contains("publishers/acme/#plugin-kz.acme.market"), "{prefix}");
-        assert!(catalog.contains("publishers/olden/#plugin-kz.olden.tool"), "{prefix}");
+        assert!(
+            catalog.contains("publishers/acme/#plugin-kz.acme.market"),
+            "{prefix}"
+        );
+        assert!(
+            catalog.contains("publishers/olden/#plugin-kz.olden.tool"),
+            "{prefix}"
+        );
         assert!(!catalog.contains("kz.gone.thing"), "{prefix}");
         // The bundle a publisher's plugin replaces without a port: its row has the id, once.
         assert_eq!(
@@ -483,11 +514,18 @@ fn zola_site_lists_publishers() {
             "{prefix}"
         );
         let row = catalog.find("<tr id=\"kz.example.unported\">").unwrap();
-        assert!(catalog[row..].starts_with("<tr id=\"kz.example.unported\">\n<th scope=\"row\"><a href=\""), "{prefix}");
+        assert!(
+            catalog[row..]
+                .starts_with("<tr id=\"kz.example.unported\">\n<th scope=\"row\"><a href=\""),
+            "{prefix}"
+        );
         assert!(catalog[row..].contains("#plugin-kz.acme.sign"), "{prefix}");
 
-        let alpha = read(&public, &format!("{prefix}plugins/alpha/index.html"));
-        assert!(alpha.contains("publishers/acme/#plugin-kz.acme.market"), "{prefix}");
+        let alpha = read(&format!("{prefix}plugins/alpha/index.html"));
+        assert!(
+            alpha.contains("publishers/acme/#plugin-kz.acme.market"),
+            "{prefix}"
+        );
     }
     check(&public, &base_url()).unwrap();
 }
