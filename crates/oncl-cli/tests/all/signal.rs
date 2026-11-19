@@ -10,6 +10,9 @@ fn real_ctrl_break_reaches_the_owned_hash_child_as_exit_130_with_no_stdout() {
         os::windows::process::CommandExt,
         process::{Command, Stdio},
     };
+    if !oncl_testkit::console::ctrl_break_possible() {
+        return;
+    }
     // The blocking read is cooperative: after the signal latches, closing the
     // pipe lets the original control observe cancellation. No forced termination.
     let mut child = Command::new(env!("CARGO_BIN_EXE_oncl"))
