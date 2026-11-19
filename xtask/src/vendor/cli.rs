@@ -101,7 +101,8 @@ pub enum VendorCommand {
         contact: Option<String>,
     },
     /// Checks publishers/ of the checkout: each file, the rules between publishers, and
-    /// against --base no entry removed or renamed and builders.toml kept.
+    /// against --base no entry removed or renamed, builders.toml and sdk-revisions.toml kept
+    /// and each SDK revision's tag pointing to its commit.
     CheckOnboarding {
         /// The revision the registry must extend (main).
         #[arg(long)]
@@ -440,7 +441,7 @@ fn build_into(
     builder: Option<&builders::Builder>,
     archive: &Path,
     crate_path: &str,
-    allowed_git: &[String],
+    git_sources: &checks::GitSources,
     out: &Path,
     jobs: Option<u32>,
 ) -> anyhow::Result<Checks> {
@@ -452,7 +453,7 @@ fn build_into(
         image,
         archive,
         crate_path,
-        allowed_git,
+        git_sources,
         jobs,
         work.path(),
     )?;
@@ -660,13 +661,13 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
                     (b.image(), Some(b))
                 }
             };
-            let allowed = pr::allowed_git_in(&root.join(layout.deny))?;
+            let sources = pr::git_sources_in(&root, &layout)?;
             let checks = build_into(
                 &image,
                 listed.as_ref(),
                 &source,
                 &path,
-                &allowed,
+                &sources,
                 &out,
                 jobs,
             )?;
@@ -843,13 +844,13 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
             jobs,
         } => {
             let listed = listed_builder(&root, Some(&builder))?;
-            let allowed = pr::allowed_git_in(&root.join(layout.deny))?;
+            let sources = pr::git_sources_in(&root, &layout)?;
             let checks = build_into(
                 &listed.image(),
                 Some(&listed),
                 &archive,
                 &path,
-                &allowed,
+                &sources,
                 &out,
                 jobs,
             )?;

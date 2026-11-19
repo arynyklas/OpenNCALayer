@@ -8,8 +8,9 @@ name: Index check
 # `cargo xtask tuf check --no-timestamp` (the TUF repository `tuf/v1` verified with the
 # client's code from the trust anchor, its targets equal to the indexes, history unchanged
 # against the base) and `cargo xtask vendor check-onboarding` (the registry `publishers/`: each
-# `publisher.toml`, the rules between publishers, against the base no entry removed or renamed
-# and `builders.toml` only appended to) when it changes `tuf/`, `publishers/` or the anchor
+# `publisher.toml`, the rules between publishers, against the base no entry removed or renamed,
+# `builders.toml` and `sdk-revisions.toml` only appended to and each SDK revision's tag pointing
+# to its commit) when it changes `tuf/`, `publishers/` or the anchor
 # too. Without `tuf/` and the anchor (before the owner's ceremony) the TUF check says so and
 # passes. ci.yml calls it (job `index`) on every pull request and push to `main`, and it
 # decides in the job whether those changed,

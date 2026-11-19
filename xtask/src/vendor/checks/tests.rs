@@ -78,7 +78,20 @@ fn base(publishers: &[&Publisher]) -> Base {
         indexes: Vec::new(),
         roles: BTreeMap::new(),
         builtin_modules: vec!["kz.gov.Builtin".to_owned()],
-        allowed_git: vec!["https://github.com/arynyklas/slint".to_owned()],
+        git_sources: git_sources(),
+    }
+}
+
+/// The commit of the released SDK the fixtures list (`v0.1.2`).
+const SDK_COMMIT: &str = "cccfbb61274a8bdf715a3f72fcc65f3461218ef5";
+
+fn git_sources() -> GitSources {
+    GitSources {
+        allowed: vec!["https://github.com/arynyklas/slint".to_owned()],
+        sdk: SdkRevisions::parse(&format!(
+            "[[revision]]\ntag = \"v0.1.2\"\ncommit = \"{SDK_COMMIT}\"\n"
+        ))
+        .unwrap(),
     }
 }
 
@@ -887,9 +900,127 @@ fn check_16_refuses_cargo_configuration_on_the_way_to_the_crate() {
 }
 
 #[test]
+fn check_17_takes_the_sdk_from_this_repository_only_at_a_released_commit() {
+    let sources = git_sources();
+    let own = |query: &str, commit: &str| {
+        format!("git+https://github.com/arynyklas/OpenNCALayer{query}#{commit}")
+    };
+    let other = "0123456789abcdef0123456789abcdef01234567";
+    // A crate of the SDK by its tag or revision at a listed commit. Only the locked commit
+    // counts: the tag's name is the publisher's convenience, and a tag can move.
+    for (name, source) in [
+        ("oncl-pdk", own("?tag=v0.1.2", SDK_COMMIT)),
+        (
+            "oncl-protocol",
+            own(&format!("?rev={SDK_COMMIT}"), SDK_COMMIT),
+        ),
+        ("oncl-core", own("?rev=cccfbb6", SDK_COMMIT)),
+        ("oncl-pdk", own("?tag=v0.1.3", SDK_COMMIT)),
+    ] {
+        assert_eq!(source_finding(name, &source, &sources), None, "{source}");
+    }
+    for (name, source, why) in [
+        // A commit no release tag of the list points to, whatever the tag says.
+        (
+            "oncl-pdk",
+            own("?tag=v0.1.2", other),
+            "not the commit of a released SDK tag",
+        ),
+        (
+            "oncl-pdk",
+            own("?tag=v0.1.2", &SDK_COMMIT[..8]),
+            "not the commit",
+        ),
+        // A crate of this repository that is not the SDK's.
+        (
+            "oncl-desktop",
+            own("?tag=v0.1.2", SDK_COMMIT),
+            "not a crate of the SDK",
+        ),
+        (
+            "openncalayer",
+            own("?tag=v0.1.2", SDK_COMMIT),
+            "not a crate of the SDK",
+        ),
+        // A branch, the default branch, or more than one reference.
+        ("oncl-pdk", own("?branch=main", SDK_COMMIT), "not a branch"),
+        ("oncl-pdk", own("", SDK_COMMIT), "not a branch"),
+        ("oncl-pdk", own("?tag=", SDK_COMMIT), "not a branch"),
+        (
+            "oncl-pdk",
+            own("?tag=v0.1.2&branch=main", SDK_COMMIT),
+            "not a branch",
+        ),
+        // The address exactly.
+        (
+            "oncl-pdk",
+            format!("git+https://github.com/arynyklas/OpenNCALayer.git?tag=v0.1.2#{SDK_COMMIT}"),
+            "exactly",
+        ),
+        (
+            "oncl-pdk",
+            format!("git+https://github.com/ArynYklas/openncalayer?tag=v0.1.2#{SDK_COMMIT}"),
+            "exactly",
+        ),
+        // Another host or owner.
+        (
+            "oncl-pdk",
+            format!("git+https://gitlab.com/arynyklas/OpenNCALayer?tag=v0.1.2#{SDK_COMMIT}"),
+            "crates.io, the released SDK",
+        ),
+        (
+            "oncl-pdk",
+            format!("git+https://github.com/evil/OpenNCALayer?tag=v0.1.2#{SDK_COMMIT}"),
+            "crates.io, the released SDK",
+        ),
+        // A branch without a commit.
+        (
+            "oncl-pdk",
+            "git+https://github.com/arynyklas/OpenNCALayer?branch=main".to_owned(),
+            "crates.io, the released SDK",
+        ),
+    ] {
+        let found = source_finding(name, &source, &sources);
+        assert!(
+            found.as_deref().is_some_and(|f| f.contains(why)),
+            "{source}: {found:?}"
+        );
+    }
+    // Listing this repository in deny.toml does not lift the SDK's rule.
+    let mut listed = git_sources();
+    listed.allowed.push(OWN_REPOSITORY.to_owned());
+    assert!(source_finding("oncl-pdk", &own("?tag=v0.1.2", other), &listed).is_some());
+    assert!(source_finding("oncl-desktop", &own("?tag=v0.1.2", SDK_COMMIT), &listed).is_some());
+    // Without the list (no publishers/sdk-revisions.toml) nothing of this repository passes.
+    let none = GitSources::default();
+    assert!(source_finding("oncl-pdk", &own("?tag=v0.1.2", SDK_COMMIT), &none).is_some());
+    // The same in a lock file.
+    let path = tp(PATH);
+    let t = crate_tree();
+    let lock = |name: &str, source: &str| {
+        format!(
+            "version = 4\n[[package]]\nname = \"{name}\"\nversion = \"0.1.2\"\nsource = \"{source}\"\n"
+        )
+    };
+    let pinned = with(
+        &t,
+        "Cargo.lock",
+        lock("oncl-pdk", &own("?tag=v0.1.2", SDK_COMMIT)).as_bytes(),
+    );
+    assert!(lock_sources(&pinned, &sources, &path).is_empty());
+    for broken in [
+        lock("oncl-pdk", &own("?tag=v0.1.2", other)),
+        lock("oncl-desktop", &own("?tag=v0.1.2", SDK_COMMIT)),
+    ] {
+        let broken = with(&t, "Cargo.lock", broken.as_bytes());
+        assert_eq!(checks_of(&lock_sources(&broken, &sources, &path)), [17]);
+    }
+}
+
+#[test]
 fn check_17_wants_crates_io_and_listed_git_with_a_commit_and_paths_inside() {
     let path = tp(PATH);
-    let allowed = vec!["https://github.com/arynyklas/slint".to_owned()];
+    let allowed = git_sources();
     let t = crate_tree();
     assert!(lock_sources(&t, &allowed, &path).is_empty());
     let lock = |source: &str| {
@@ -913,10 +1044,10 @@ fn check_17_wants_crates_io_and_listed_git_with_a_commit_and_paths_inside() {
         let beside = with(&broken, "crates/p/Cargo.lock", b"version = 4\n");
         assert_eq!(checks_of(&lock_sources(&beside, &allowed, &path)), [17]);
     }
-    let own = lock(
-        "git+https://github.com/arynyklas/OpenNCALayer?rev=a#0123456789abcdef0123456789abcdef01234567",
+    let fork = lock(
+        "git+https://github.com/arynyklas/slint?rev=a#0123456789abcdef0123456789abcdef01234567",
     );
-    assert!(lock_sources(&with(&t, "Cargo.lock", own.as_bytes()), &allowed, &path).is_empty());
+    assert!(lock_sources(&with(&t, "Cargo.lock", fork.as_bytes()), &allowed, &path).is_empty());
     let outside = with(
         &t,
         "crates/p/Cargo.toml",

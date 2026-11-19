@@ -34,6 +34,7 @@ use super::{
     MIN_EXPIRY_DAYS, RELEASE_INTERVAL,
 };
 use crate::publishers::builders::Builders;
+use crate::publishers::sdk_revisions::SdkRevisions;
 use crate::publishers::{Publisher, Registry};
 
 /// One way the pull request breaks check [`Finding::check`].
@@ -77,12 +78,22 @@ pub struct Base {
     pub roles: BTreeMap<PublisherName, RoleAt>,
     /// The modules built into the core: no plugin serves them.
     pub builtin_modules: Vec<String>,
-    /// The git sources a lock file may name besides this repository (`deny.toml`,
-    /// `allow-git`).
-    pub allowed_git: Vec<String>,
+    /// The git sources a lock file may name (check 17).
+    pub git_sources: GitSources,
 }
 
-/// This repository: a lock file may name it as a git source (check 17).
+/// The git sources a lock file may name besides crates.io (check 17).
+#[derive(Clone, Debug, Default)]
+pub struct GitSources {
+    /// The repositories of `deny.toml` (`allow-git`), at any commit.
+    pub allowed: Vec<String>,
+    /// The released SDK commits of this repository (`publishers/sdk-revisions.toml`): only
+    /// the crates of the SDK, only at these commits.
+    pub sdk: SdkRevisions,
+}
+
+/// This repository: a lock file may name it as the git source of the SDK's crates, at a
+/// released commit (check 17, Р44).
 pub const OWN_REPOSITORY: &str = "https://github.com/arynyklas/OpenNCALayer";
 
 /// The registry sources a lock file may name: crates.io, as git index or sparse.
@@ -994,38 +1005,76 @@ pub fn cargo_config(tree: &Tree, crate_path: &str, path: &TargetPath) -> Vec<Fin
 }
 
 /// Why the crate `name` from `source` (a lock file's or `cargo metadata`'s) breaks check
-/// 17, if it does.
-pub fn source_finding(name: &str, source: &str, allowed_git: &[String]) -> Option<String> {
-    (!allowed_source(source, allowed_git)).then(|| {
-        format!(
-            "{name} comes from {source}: crates.io and the git repositories of deny.toml (with \
-             a commit) only"
-        )
-    })
-}
-
-/// Whether the lock file's `source` is allowed: crates.io, or `git+<allowed>[?…]#<commit>`.
-fn allowed_source(source: &str, allowed_git: &[String]) -> bool {
+/// 17, if it does. Allowed: crates.io; a crate of the SDK ([`crate::sdk_delivery::CHAIN`])
+/// from exactly `git+`[`OWN_REPOSITORY`]`?tag=…` or `?rev=…` at a commit of
+/// [`GitSources::sdk`] (only the locked commit counts: a tag can move); any crate from a
+/// repository of [`GitSources::allowed`] with its commit.
+pub fn source_finding(name: &str, source: &str, sources: &GitSources) -> Option<String> {
     if REGISTRIES.contains(&source) {
-        return true;
+        return None;
     }
-    let Some(rest) = source.strip_prefix("git+") else {
-        return false;
+    let refused = || {
+        format!(
+            "{name} comes from {source}: crates.io, the released SDK from {OWN_REPOSITORY} and \
+             the git repositories of deny.toml (with a commit) only"
+        )
     };
-    let Some((url, commit)) = rest.rsplit_once('#') else {
-        return false;
+    let Some((url, commit)) = source
+        .strip_prefix("git+")
+        .and_then(|rest| rest.rsplit_once('#'))
+    else {
+        return Some(refused());
     };
-    let url = url.split('?').next().unwrap_or(url);
-    let url = url.strip_suffix(".git").unwrap_or(url);
+    let (url, query) = url.split_once('?').unwrap_or((url, ""));
+    let bare = url.strip_suffix(".git").unwrap_or(url);
+    if bare.eq_ignore_ascii_case(OWN_REPOSITORY) {
+        return sdk_finding(name, source, url, query, commit, &sources.sdk);
+    }
     let commit_ok = (commit.len() == 40 || commit.len() == 64)
         && commit
             .bytes()
             .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
-    commit_ok
-        && (url.eq_ignore_ascii_case(OWN_REPOSITORY)
-            || allowed_git
-                .iter()
-                .any(|a| url.eq_ignore_ascii_case(a.strip_suffix(".git").unwrap_or(a))))
+    let listed = sources
+        .allowed
+        .iter()
+        .any(|a| bare.eq_ignore_ascii_case(a.strip_suffix(".git").unwrap_or(a)));
+    (!(commit_ok && listed)).then(refused)
+}
+
+/// Check 17 for a crate from this repository: `name` is a crate of the SDK, `url` is exactly
+/// [`OWN_REPOSITORY`], the reference a tag or a revision (a branch moves) and `commit` one of
+/// `sdk`.
+fn sdk_finding(
+    name: &str,
+    source: &str,
+    url: &str,
+    query: &str,
+    commit: &str,
+    sdk: &SdkRevisions,
+) -> Option<String> {
+    let why = if !crate::sdk_delivery::CHAIN.contains(&name) {
+        format!(
+            "{name} is not a crate of the SDK ({})",
+            crate::sdk_delivery::CHAIN.join(", ")
+        )
+    } else if url != OWN_REPOSITORY {
+        format!("the SDK's address is exactly {OWN_REPOSITORY}")
+    } else if !query
+        .split_once('=')
+        .is_some_and(|(key, value)| matches!(key, "tag" | "rev") && !value.is_empty())
+        || query.contains('&')
+    {
+        "the SDK is named by its release tag (`tag = \"v<version>\"`) or `rev`, not a branch"
+            .to_owned()
+    } else if sdk.by_commit(commit).is_none() {
+        format!(
+            "{commit} is not the commit of a released SDK tag (publishers/sdk-revisions.toml on \
+             main)"
+        )
+    } else {
+        return None;
+    };
+    Some(format!("{name} comes from {source}: {why}"))
 }
 
 /// `dir` and the relative `path` joined and normalized, `None` if it leaves `src/`.
@@ -1101,9 +1150,9 @@ fn manifest_paths(manifest: &toml::Value) -> Vec<String> {
 }
 
 /// Check 17: every `Cargo.lock` of the archive (the one Cargo uses may be any of them)
-/// names crates.io and the allowed git repositories only, each git source with its commit;
-/// every `Cargo.toml` reads, and every `path` in it stays inside `src/`.
-pub fn lock_sources(tree: &Tree, allowed_git: &[String], path: &TargetPath) -> Vec<Finding> {
+/// names only the sources [`source_finding`] allows; every `Cargo.toml` reads, and every
+/// `path` in it stays inside `src/`.
+pub fn lock_sources(tree: &Tree, sources: &GitSources, path: &TargetPath) -> Vec<Finding> {
     let at = |message: String| finding(17, format!("{path}: {message}"));
     let mut findings = Vec::new();
     for (lock, _) in tree.files() {
@@ -1126,8 +1175,7 @@ pub fn lock_sources(tree: &Tree, allowed_git: &[String], path: &TargetPath) -> V
                 .unwrap_or("?");
             if let Some(source) = package.get("source").and_then(toml::Value::as_str) {
                 findings.extend(
-                    source_finding(name, source, allowed_git)
-                        .map(|m| at(format!("src/{lock}: {m}"))),
+                    source_finding(name, source, sources).map(|m| at(format!("src/{lock}: {m}"))),
                 );
             }
         }

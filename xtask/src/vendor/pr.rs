@@ -27,7 +27,7 @@ use oncl_update::tuf::{Envelope, Profile, RoleName, TargetPath, Targets, layout}
 use serde_json::Value;
 use time::OffsetDateTime;
 
-use super::checks::{self, Base, Finding, RoleAt};
+use super::checks::{self, Base, Finding, GitSources, RoleAt};
 use super::fetch::ArchiveFetcher;
 use super::git::Git;
 use super::verdict::{
@@ -36,6 +36,7 @@ use super::verdict::{
 use super::{Layout, MAX_ROLE_FILE};
 use crate::publishers::Registry;
 use crate::publishers::builders::{self, Builders};
+use crate::publishers::sdk_revisions::SdkRevisions;
 use crate::tuf::check::{self, Expiry, Outcome, Stage};
 use crate::tuf::repo::{self, Listing};
 
@@ -144,12 +145,7 @@ pub fn load_base(
         let bytes = repo::read(&tuf, &layout::delegated_path(version, &role))?;
         roles.insert(role.publisher(), RoleAt { version, bytes });
     }
-    let deny = dir.join(layout.deny);
-    let allowed_git = if deny.is_file() {
-        allowed_git(&fs::read(&deny)?)?
-    } else {
-        Vec::new()
-    };
+    let git_sources = git_sources_in(dir, layout)?;
     Ok(Base {
         registry,
         builders,
@@ -157,7 +153,7 @@ pub fn load_base(
         indexes,
         roles,
         builtin_modules,
-        allowed_git,
+        git_sources,
     })
 }
 
@@ -397,7 +393,7 @@ pub fn check_pr(options: &Options) -> anyhow::Result<PrVerdict> {
                     fetcher,
                     path,
                     &source,
-                    &base.allowed_git,
+                    &base.git_sources,
                     &publisher.binary_files,
                     options.out,
                 )?;
@@ -428,7 +424,7 @@ fn archive_checks(
     fetcher: &dyn ArchiveFetcher,
     path: &TargetPath,
     source: &ReleaseSource,
-    allowed_git: &[String],
+    git_sources: &GitSources,
     binary_files: &[String],
     out: Option<&Path>,
 ) -> anyhow::Result<Vec<Finding>> {
@@ -453,7 +449,7 @@ fn archive_checks(
     };
     findings.extend(checks::crate_files(&tree, source, path));
     findings.extend(checks::cargo_config(&tree, &source.path, path));
-    findings.extend(checks::lock_sources(&tree, allowed_git, path));
+    findings.extend(checks::lock_sources(&tree, git_sources, path));
     findings.extend(checks::binaries(&tree, binary_files, path));
     Ok(findings)
 }
@@ -884,17 +880,22 @@ pub struct RebuildReport {
     pub checks: Vec<super::verdict::CheckResult>,
 }
 
-/// `allow-git` of the `deny.toml` at `path` (none without the file).
+/// What check 17 allows besides crates.io in the checkout `root`: `allow-git` of its
+/// `deny.toml` and its `publishers/sdk-revisions.toml` (none without the files).
 ///
 /// # Errors
 ///
-/// The file does not read.
-pub fn allowed_git_in(path: &Path) -> anyhow::Result<Vec<String>> {
-    if path.is_file() {
-        allowed_git(&fs::read(path)?)
-    } else {
-        Ok(Vec::new())
-    }
+/// A file does not read.
+pub fn git_sources_in(root: &Path, layout: &Layout) -> anyhow::Result<GitSources> {
+    let deny = root.join(layout.deny);
+    Ok(GitSources {
+        allowed: if deny.is_file() {
+            allowed_git(&fs::read(&deny)?)?
+        } else {
+            Vec::new()
+        },
+        sdk: SdkRevisions::in_dir(&root.join(layout.publishers))?,
+    })
 }
 
 /// The archives `publisher-check` handed over, by the `source.fetch` the role signs: what
