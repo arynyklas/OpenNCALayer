@@ -8,6 +8,9 @@
 //!   unpacked sources only, and runs it: a real CMS sign and verify without display, daemon,
 //!   collector or listener.
 //! - `licenses`: the licence inventory of the third-party crates of the SDK closure.
+//! - `revision add`: a step of the release: the new tag's commit appended to
+//!   `publishers/sdk-revisions.toml`, the released SDK commits a publisher's plugin may depend
+//!   on as a git dependency (the SDK is not on crates.io).
 //!
 //! Nothing here contacts a registry or publishes anything.
 
@@ -102,6 +105,23 @@ pub enum SdkCommand {
         #[arg(long)]
         check: bool,
     },
+    /// The released SDK commits a publisher's plugin may depend on
+    /// (publishers/sdk-revisions.toml).
+    Revision {
+        #[command(subcommand)]
+        command: RevisionCommand,
+    },
+}
+
+/// `cargo xtask sdk revision …`.
+#[derive(Subcommand, Debug)]
+pub enum RevisionCommand {
+    /// Appends the commit of the release tag (`v<version>`, a tag of this clone whose
+    /// workspace version is `<version>`) to publishers/sdk-revisions.toml.
+    Add {
+        /// The release tag, `v0.1.3`.
+        tag: String,
+    },
 }
 
 /// Runs one `sdk` subcommand at the workspace root `root`.
@@ -131,7 +151,43 @@ pub fn run(root: &Path, command: SdkCommand) -> anyhow::Result<()> {
             println!("{LICENSES_OUTPUT} is up to date");
             Ok(())
         }
+        SdkCommand::Revision {
+            command: RevisionCommand::Add { tag },
+        } => add_revision(root, &tag),
     }
+}
+
+/// `sdk revision add`: the commit of `tag` in the repository at `root`, its workspace version
+/// checked against the tag, appended to `publishers/sdk-revisions.toml`.
+fn add_revision(root: &Path, tag: &str) -> anyhow::Result<()> {
+    use crate::publishers::sdk_revisions::{self, SdkRevisions};
+    if !sdk_revisions::is_release_tag(tag) {
+        bail!("{tag:?} is not a release tag (v<version>)");
+    }
+    let git = crate::vendor::git::Git::new(root);
+    let commit = git.commit(&format!("refs/tags/{tag}"))?;
+    let manifest = git
+        .blob(&commit, "Cargo.toml", 1 << 20)?
+        .with_context(|| format!("{tag} has no Cargo.toml"))?;
+    let manifest: toml::Value = toml::from_str(
+        std::str::from_utf8(&manifest).with_context(|| format!("Cargo.toml of {tag}"))?,
+    )
+    .with_context(|| format!("reading Cargo.toml of {tag}"))?;
+    let version = manifest
+        .get("workspace")
+        .and_then(|w| w.get("package"))
+        .and_then(|p| p.get("version"))
+        .and_then(toml::Value::as_str)
+        .with_context(|| format!("Cargo.toml of {tag} has no workspace.package.version"))?;
+    if tag.strip_prefix('v') != Some(version) {
+        bail!("{tag} holds the workspace version {version}, not the tag's");
+    }
+    let file = root
+        .join(crate::publishers::PUBLISHERS_DIR)
+        .join(sdk_revisions::FILE_NAME);
+    SdkRevisions::append(&file, tag, &commit)?;
+    println!("{}: {tag} = {commit}", file.display());
+    Ok(())
 }
 
 fn cargo_bin() -> OsString {

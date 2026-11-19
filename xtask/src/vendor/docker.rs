@@ -27,6 +27,7 @@ use anyhow::{Context, bail};
 use oncl_pack::source::Tree;
 use serde_json::Value;
 
+use super::checks::GitSources;
 use super::licenses::{self, WasmCrate};
 use super::verdict::Checks;
 
@@ -693,13 +694,13 @@ fn stage(archive: &Path, work: &Path) -> anyhow::Result<PathBuf> {
 
 /// The fetch and the metadata of `archive`'s crate in `image`: the Cargo volume to build
 /// with, and the crates of the module (or why not, check 20). Every package `cargo metadata`
-/// resolves comes from crates.io or `allowed_git` (check 17 again, on what Cargo itself read).
+/// resolves comes from crates.io or `git_sources` (check 17 again, on what Cargo itself read).
 fn prepare<'e>(
     engine: &'e Engine,
     image: &str,
     input: &Path,
     crate_path: &str,
-    allowed_git: &[String],
+    git_sources: &GitSources,
     checks: &mut Checks,
 ) -> anyhow::Result<(Volume<'e>, Option<Vec<WasmCrate>>)> {
     let cargo = Volume::new(engine, unique("cargo"))?;
@@ -752,7 +753,7 @@ fn prepare<'e>(
     for package in metadata["packages"].as_array().into_iter().flatten() {
         if let Some(source) = package["source"].as_str() {
             let name = package["name"].as_str().unwrap_or("?");
-            if let Some(why) = super::checks::source_finding(name, source, allowed_git) {
+            if let Some(why) = super::checks::source_finding(name, source, git_sources) {
                 checks.fail(17, format!("cargo metadata: {why}"));
             }
         }
@@ -783,7 +784,7 @@ pub fn rebuild(
     image: &str,
     archive: &Path,
     crate_path: &str,
-    allowed_git: &[String],
+    git_sources: &GitSources,
     jobs: Option<u32>,
     work: &Path,
 ) -> anyhow::Result<Rebuilt> {
@@ -794,7 +795,7 @@ pub fn rebuild(
         image,
         &input,
         crate_path,
-        allowed_git,
+        git_sources,
         &mut out.checks,
     )?;
     out.crates = crates.unwrap_or_default();
@@ -892,7 +893,14 @@ pub fn verify(
     let input = stage(archive, work)?;
     let mut checks = Checks::new();
     // Anyone checks a published release: its sources were judged when it was taken in.
-    let (cargo, _) = prepare(engine, image, &input, crate_path, &[], &mut checks)?;
+    let (cargo, _) = prepare(
+        engine,
+        image,
+        &input,
+        crate_path,
+        &GitSources::default(),
+        &mut checks,
+    )?;
     if checks.failed(19) {
         bail!("{:?}", checks.to_vec());
     }

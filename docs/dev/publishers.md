@@ -70,6 +70,30 @@ cargo xtask vendor check --name ecc            # с --offline без скачи�
 
 `check` делает те же проверки, что CI (`vendor check-pr`), кроме проверки автора (2), против `origin/main`. Затем PR с одним этим файлом от аккаунта из `github`. Бот пересобирает пакет, копирует его и архив в выпуск `pub-ecc-<sha256>` и сливает PR сам; не чаще раза в час.
 
+## SDK плагина
+
+`oncl-pdk` и остальные крейты SDK в crates.io не публикуются (решение владельца, Р44 в [`publishers.md`](../design/publishers.md#решения-владельца)). Плагин берёт их из нашего репозитория как git-зависимость с тегом выпуска:
+
+```toml
+[dependencies]
+oncl-pdk = { git = "https://github.com/arynyklas/OpenNCALayer", tag = "v0.1.3" }
+```
+
+`cargo generate-lockfile` или `cargo update -p oncl-pdk` закрепляет в `Cargo.lock` коммит тега:
+
+```toml
+[[package]]
+name = "oncl-pdk"
+version = "0.1.3"
+source = "git+https://github.com/arynyklas/OpenNCALayer?tag=v0.1.3#<40 hex коммита>"
+```
+
+Проверка 17 судит только этот коммит, тег в `Cargo.toml` нужен для удобства. Коммит должен быть в [`publishers/sdk-revisions.toml`](../../publishers/sdk-revisions.toml) на `main`: туда владелец при каждом выпуске дописывает коммит нового тега. Ещё два условия: адрес ровно `https://github.com/arynyklas/OpenNCALayer` (без `.git`, в том же регистре) и ссылка `tag` или `rev`. Ветка не подходит. Из нашего репозитория так можно взять только крейты SDK (`oncl-gost`, `oncl-registry`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows`, `oncl-update`, `oncl-plugin`, `oncl-core`), остальные крейты OpenNCALayer проверка 17 отвергает.
+
+Копии SDK в архиве исходников не нужны, а без них архив меньше: у тестового плагина `echo` он уменьшился с 83 до 8 КБ. Крейты SDK наследуют поля из `[workspace]` нашего корневого `Cargo.toml`, Cargo читает его из того же коммита. `[patch]` нашего workspace на ваш плагин не действует; сторонние зависимости SDK берутся из crates.io.
+
+`cargo fetch` клонирует репозиторий OpenNCALayer в `/cargo/git` целиком: на `v0.1.2` это около 43 МБ (17,6 МБ истории и 25 МБ рабочего дерева). `oncl-pack fetch` не принимает больше 256 МиБ прироста `/cargo/git`. Сборка после этого идёт без сети и с `--frozen`: Cargo берёт SDK из `/cargo/git`.
+
 ## Сборка в эталонном сборщике
 
 Пакет `.onclp`, который вы подписываете в своей роли, CI OpenNCALayer собирает заново из вашего архива исходников в эталонном сборщике и сравнивает побайтно (проверки 19 и 21 в [`publishers.md`](../design/publishers.md#проверки-pr-издателя-дополняют-111)). Совпадение обещано только внутри сборщика: это образ `ghcr.io/arynyklas/oncl-plugin-builder` с конкретным digest из [`publishers/builders.toml`](../../publishers/builders.toml). Этот digest вы пишете в `source.builder`. Сборка тем же `cargo` на своей машине годится для разработки, но её байты могут не совпасть.
@@ -86,7 +110,7 @@ cargo xtask vendor check --name ecc            # с --offline без скачи�
 ### Что нужно
 
 - Docker или Podman (в командах ниже `docker` можно заменить на `podman`). На Windows и macOS подойдёт Docker Desktop. Команды написаны для bash; в PowerShell замените `$PWD` на `${PWD}` и переносы строк `\` на `` ` ``.
-- Крейт плагина: один `cdylib`, рядом `plugin.toml`, версия в нём равна версии крейта. `Cargo.lock` рабочего пространства лежит в архиве. Зависимости берутся только из crates.io и из git с закреплённым `rev`.
+- Крейт плагина: один `cdylib`, рядом `plugin.toml`, версия в нём равна версии крейта. `Cargo.lock` рабочего пространства лежит в архиве. Зависимости берутся из crates.io, SDK — из репозитория OpenNCALayer по тегу выпуска (раздел «SDK плагина» ниже), другие git-источники — только форки из `deny.toml` с закреплённым `rev`.
 - В архиве нет `.cargo/config` и `.cargo/config.toml` ни в корне, ни по пути к крейту: такой файл мог бы подменить источники зависимостей или ход сборки, поэтому сборщик отказывается его читать.
 
 Ниже `IMAGE` — образ по digest, например:

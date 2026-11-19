@@ -25,9 +25,11 @@
 //! stays a function of the files.
 //!
 //! The same directory holds [`builders::FILE_NAME`], the builder images a publisher's
-//! release may be built with.
+//! release may be built with, and [`sdk_revisions::FILE_NAME`], the released SDK commits its
+//! sources may depend on.
 
 pub mod builders;
+pub mod sdk_revisions;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -537,7 +539,8 @@ impl Registry {
     /// # Errors
     ///
     /// If a directory cannot be read, an entry is neither a publisher's directory,
-    /// `README.md` nor [`builders::FILE_NAME`], a publisher's file is missing or breaks a rule,
+    /// `README.md`, [`builders::FILE_NAME`] nor [`sdk_revisions::FILE_NAME`], a publisher's
+    /// file is missing or breaks a rule,
     /// or the publishers break a rule between them ([`Registry::new`]).
     pub fn read(dir: &Path) -> anyhow::Result<Registry> {
         let entries = match fs::read_dir(dir) {
@@ -555,18 +558,18 @@ impl Registry {
         paths.sort();
         for path in paths {
             if !path.is_dir() {
-                if path
-                    .file_name()
-                    .is_some_and(|n| n == "README.md" || n == builders::FILE_NAME)
-                    && path.is_file()
+                if path.file_name().is_some_and(|n| {
+                    n == "README.md" || n == builders::FILE_NAME || n == sdk_revisions::FILE_NAME
+                }) && path.is_file()
                 {
                     continue;
                 }
                 bail!(
-                    "{} is not a publisher's directory: {} holds only those, README.md and {}",
+                    "{} is not a publisher's directory: {} holds only those, README.md, {} and {}",
                     path.display(),
                     dir.display(),
-                    builders::FILE_NAME
+                    builders::FILE_NAME,
+                    sdk_revisions::FILE_NAME
                 );
             }
             let dir_name = path

@@ -89,6 +89,8 @@ fn git_at(dir: &Path, args: &[&str], when: Option<OffsetDateTime>) -> String {
         "-c",
         "commit.gpgsign=false",
         "-c",
+        "tag.gpgsign=false",
+        "-c",
         "core.autocrlf=false",
     ]);
     if let Some(when) = when {
@@ -1151,6 +1153,39 @@ fn check_onboarding_keeps_builders_and_entries_against_the_base() {
     fs::write(&file, toml.replace("kz.zeta.", "kz.zeta2.")).unwrap();
     let err = onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap_err();
     assert!(format!("{err:#}").contains("Р28"), "{err:#}");
+    fs::write(&file, toml).unwrap();
+    // The SDK revisions: listed on the base, each tag pointing to its commit.
+    let entry =
+        |tag: &str, commit: &str| format!("[[revision]]\ntag = \"{tag}\"\ncommit = \"{commit}\"\n");
+    let first = git_at(&root, &["rev-parse", "HEAD"], None);
+    git_at(&root, &["tag", "v0.1.0"], None);
+    let sdk = r.w.publishers().join("sdk-revisions.toml");
+    fs::write(&sdk, entry("v0.1.0", &first)).unwrap();
+    git_at(&root, &["add", "-A"], None);
+    git_at(&root, &["commit", "-q", "-m", "sdk"], Some(t_base()));
+    onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap();
+    // An entry of the base changed.
+    fs::write(&sdk, entry("v0.1.0", &"0".repeat(40))).unwrap();
+    let err = onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("changed, moved or removed"),
+        "{err:#}"
+    );
+    // A new entry whose tag is missing, then points to another commit.
+    let appended = entry("v0.1.0", &first) + "\n" + &entry("v0.1.1", &first);
+    fs::write(&sdk, &appended).unwrap();
+    let err = onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap_err();
+    assert!(format!("{err:#}").contains("lists v0.1.1"), "{err:#}");
+    git_at(&root, &["tag", "v0.1.1"], None);
+    let err = onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap_err();
+    assert!(format!("{err:#}").contains("the tag points to"), "{err:#}");
+    let second = git_at(&root, &["rev-parse", "v0.1.1^{commit}"], None);
+    fs::write(
+        &sdk,
+        entry("v0.1.0", &first) + "\n" + &entry("v0.1.1", &second),
+    )
+    .unwrap();
+    onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap();
 }
 
 #[test]

@@ -5,7 +5,8 @@
 //!    checked (its `Cargo.toml` and `plugin.toml` are there, no `.cargo/config*` on the way to
 //!    it) and the archive unpacked into `<work>/src`;
 //! 2. [`fetch`], with the network: `cargo fetch --locked` into the Cargo home, which runs no
-//!    code of the sources;
+//!    code of the sources; a git dependency (the SDK from OpenNCALayer's repository) is cloned
+//!    whole into `$CARGO_HOME/git`, at most [`MAX_GIT_FETCH`] bytes;
 //! 3. [`build`], only without the network (on Linux it refuses to start while any interface
 //!    but `lo` exists): `--frozen`, the environment cleared but for [`KEPT_VARS`] (`env -i`),
 //!    `SOURCE_DATE_EPOCH` fixed, the profile forced ([`pack::FORCED_PROFILE`]), the paths of
@@ -53,6 +54,11 @@ pub const KEPT_VARS: &[&str] = &[
     #[cfg(windows)]
     "TMP",
 ];
+
+/// The most bytes one [`fetch`] may add under `$CARGO_HOME/git`, the repositories and
+/// checkouts of the git dependencies. OpenNCALayer's repository at `v0.1.2`, the SDK's
+/// source, takes about 43 MB there (17.6 MB of history, 25 MB of checkout).
+pub const MAX_GIT_FETCH: u64 = 256 << 20;
 
 /// The names of the Cargo configuration files Cargo would read from the sources.
 const CARGO_CONFIGS: [&str; 2] = [".cargo/config", ".cargo/config.toml"];
@@ -173,11 +179,19 @@ fn check_crate(tree: &Tree, crate_path: &str) -> anyhow::Result<()> {
 ///
 /// # Errors
 ///
-/// No `CARGO_HOME`, or Cargo fails (a lock file that is missing or out of date, no network).
+/// No `CARGO_HOME`, Cargo fails (a lock file that is missing or out of date, no network),
+/// or the git dependencies took more than [`MAX_GIT_FETCH`] bytes.
 pub fn fetch(prepared: &Prepared) -> anyhow::Result<()> {
+    let env = prepared.env("tmp-fetch")?;
+    let git = env
+        .iter()
+        .find(|(key, _)| key == "CARGO_HOME")
+        .map(|(_, home)| Path::new(home).join("git"))
+        .context("CARGO_HOME is not set")?;
+    let before = tree_size(&git)?;
     let status = std::process::Command::new("cargo")
         .env_clear()
-        .envs(prepared.env("tmp-fetch")?)
+        .envs(env)
         .args(["fetch", "--locked", "--manifest-path"])
         .arg(prepared.crate_dir.join("Cargo.toml"))
         .status()
@@ -185,7 +199,40 @@ pub fn fetch(prepared: &Prepared) -> anyhow::Result<()> {
     if !status.success() {
         bail!("cargo fetch failed ({status})");
     }
+    let added = tree_size(&git)?.saturating_sub(before);
+    if added > MAX_GIT_FETCH {
+        bail!(
+            "the git dependencies take {added} bytes in {}, more than {MAX_GIT_FETCH}",
+            git.display()
+        );
+    }
     Ok(())
+}
+
+/// The bytes of the regular files under `dir`, links not followed; 0 if it does not exist.
+fn tree_size(dir: &Path) -> anyhow::Result<u64> {
+    let mut total = 0u64;
+    let mut dirs = vec![dir.to_owned()];
+    while let Some(dir) = dirs.pop() {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).with_context(|| format!("reading {}", dir.display())),
+        };
+        for entry in entries {
+            let entry = entry.with_context(|| format!("reading {}", dir.display()))?;
+            // `DirEntry::metadata` does not follow a link.
+            let meta = entry
+                .metadata()
+                .with_context(|| format!("reading {}", entry.path().display()))?;
+            if meta.is_dir() {
+                dirs.push(entry.path());
+            } else if meta.is_file() {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Ok(total)
 }
 
 /// One reference build in `<work>/<target>` with its temporary files in `<work>/tmp-<target>`,
@@ -293,4 +340,21 @@ pub fn verify(
         );
     }
     Ok(packed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tree_size_counts_the_files_below_and_nothing_for_no_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(tree_size(&dir.path().join("git")).unwrap(), 0);
+        let git = dir.path().join("git");
+        fs::create_dir_all(git.join("db/a")).unwrap();
+        fs::create_dir_all(git.join("checkouts/a/0123456")).unwrap();
+        fs::write(git.join("db/a/pack"), [0; 1000]).unwrap();
+        fs::write(git.join("checkouts/a/0123456/Cargo.toml"), [0; 24]).unwrap();
+        assert_eq!(tree_size(&git).unwrap(), 1024);
+    }
 }

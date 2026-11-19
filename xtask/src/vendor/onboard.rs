@@ -3,8 +3,10 @@
 //! check-onboarding` (CI on every pull request) checks the registry as it is in the checkout:
 //! each file by its schema and the rules between publishers, no key of a root, no plugin of the
 //! owner's indexes under a prefix, and, against the base, no entry of `publishers/` removed or
-//! renamed (Р28) and every entry of `publishers/builders.toml` kept unchanged in its place
-//! ([`Builders::check_kept`]).
+//! renamed (Р28), every entry of `publishers/builders.toml` and `publishers/sdk-revisions.toml`
+//! kept unchanged in its place ([`Builders::check_kept`], [`SdkRevisions::check_kept`]) and
+//! each SDK revision's tag pointing to its commit ([`SdkRevisions::check_tags`]: CI's clone has
+//! the tags).
 
 use std::fmt::Write as _;
 use std::fs;
@@ -17,6 +19,7 @@ use oncl_update::tuf::{PublicKey, PublisherName};
 use super::Layout;
 use super::git::Git;
 use crate::publishers::builders::{self, Builders};
+use crate::publishers::sdk_revisions::{self, SdkRevisions};
 use crate::publishers::{self, Registry};
 
 /// What `vendor onboard` writes.
@@ -162,6 +165,8 @@ pub fn check_onboarding(
         Builders::default()
     };
     notes.push(format!("{} builder images", builders.iter().count()));
+    let sdk = SdkRevisions::in_dir(&dir)?;
+    notes.push(format!("{} SDK revisions", sdk.iter().count()));
     if let Some(base) = base {
         let git = Git::new(root);
         let commit = git.commit(base)?;
@@ -171,6 +176,12 @@ pub fn check_onboarding(
             let text = std::str::from_utf8(text).context("builders.toml on the base")?;
             builders.check_kept(&Builders::parse(text)?)?;
         }
+        let sdk_path = format!("{}/{}", layout.publishers, sdk_revisions::FILE_NAME);
+        if let Some(text) = files.get(&sdk_path) {
+            let text = std::str::from_utf8(text).context("sdk-revisions.toml on the base")?;
+            sdk.check_kept(&SdkRevisions::parse(text)?)?;
+        }
+        sdk.check_tags(root)?;
         let mut gone = Vec::new();
         for (path, bytes) in &files {
             if !path.ends_with(&format!("/{}", publishers::FILE_NAME)) {
