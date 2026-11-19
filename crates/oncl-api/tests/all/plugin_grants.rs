@@ -1,10 +1,9 @@
-#![cfg(feature = "server")]
 //! The grant matrix of a plugin operation over HTTP (docs/design/manual-plugins.md 4.7/4.8,
 //! R14): a declared operation may use a key only under `plugin_bytes = true`, under the
 //! declared options and once; an undeclared operation is skipped at start-up; a plugin
 //! without declarations is unchanged. Every refusal is typed (`subcode`) and happens before
 //! the audit journal and the key are touched.
-mod private_support;
+use crate::private_support;
 use oncl_pdk::abi::{self, Import};
 use oncl_server::{
     audit::RecordKind,

@@ -1,7 +1,6 @@
 //! Real-socket harness for private operations: a loopback OCSP/CRL responder
 //! backed by signed synthetic mocks, operator trust configuration, a strict
 //! Engine, and independent OpenSSL oracles. No request-controlled authority.
-#![allow(dead_code)]
 use der::Encode;
 use oncl_pki::{
     crl::MockCrl,
