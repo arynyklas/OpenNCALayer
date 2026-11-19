@@ -14,6 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use oncl_desktop::UpdateSettings;
 use oncl_plugin::{Capabilities, Store};
 use oncl_update::tuf::{RoleName, Target, TargetPath, VerifiedRole};
 use oncl_update::{Channel, Index, PublisherPolicy};
@@ -40,15 +41,24 @@ pub enum Apply {
 }
 
 impl Apply {
-    /// What the settings allow: everything with updates on, the revocations alone with
-    /// them off. The setting «Проверять отзывы плагинов» is not there yet: it is on, as by
-    /// default.
+    /// What an application asked for by the user («Проверить сейчас») or of a catalog read
+    /// on demand may do: everything with updates on, the revocations alone with them off
+    /// (Р38), whatever «Проверять отзывы плагинов».
     pub fn with_updates(enabled: bool) -> Apply {
         if enabled {
             Apply::Full
         } else {
             Apply::RevocationsOnly
         }
+    }
+
+    /// What the schedule checks the catalog for («Когда клиент проверяет каталог»):
+    /// everything with updates on, the revocations alone with them off and
+    /// [`UpdateSettings::check_revocations`] on, and `None` with both off: the schedule
+    /// does not contact the repository at all then.
+    pub fn scheduled(settings: &UpdateSettings) -> Option<Apply> {
+        (settings.enabled || settings.check_revocations)
+            .then(|| Apply::with_updates(settings.enabled))
     }
 }
 

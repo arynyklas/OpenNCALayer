@@ -1,7 +1,8 @@
 // The settings window: language, the size of the windows and their text, our autostart,
-// hardware tokens, the proxy and the updates (saved together), «Check now» for updates, and,
-// kept under «Advanced», the original NCALayer's autostart and the browser extension's
-// registration (acted on at once). The states and messages are composed in Rust.
+// hardware tokens, the proxy, the updates and the plugins' revocations (saved together),
+// «Check now» for updates, and, kept under «Advanced», the original NCALayer's autostart and
+// the browser extension's registration (acted on at once). The states and messages are
+// composed in Rust.
 
 import { Button, CheckBox, ComboBox, GroupBox } from "std-widgets.slint";
 import { ActionBar, BusyRow, DialogScroll, Disclosure, EscapeScope, FieldLabel, Hint, Metrics, StatusArea, TextField } from "common.slint";
@@ -22,6 +23,8 @@ export component SettingsWindow inherits Window {
     in-out property <bool> updates-enabled;
     // 0: stable, 1: beta.
     in-out property <int> update-channel;
+    // «Check plugin revocations» as saved; shown ticked and inactive while updates are on.
+    in-out property <bool> check-revocations: true;
     // Hardware tokens and ID cards (experimental).
     in-out property <bool> tokens-enabled;
     // What the updater can do and found last.
@@ -145,6 +148,26 @@ export component SettingsWindow inherits Window {
                             text: @tr("Update automatically");
                             enabled: !root.busy;
                             checked <=> root.updates-enabled;
+                        }
+
+                        if root.updates-enabled: CheckBox {
+                            text: @tr("Check plugin revocations");
+                            enabled: false;
+                            checked: true;
+                        }
+
+                        if root.updates-enabled: Hint {
+                            text: @tr("Included in automatic updates");
+                        }
+
+                        if !root.updates-enabled: CheckBox {
+                            text: @tr("Check plugin revocations");
+                            enabled: !root.busy;
+                            checked <=> root.check-revocations;
+                        }
+
+                        Hint {
+                            text: @tr("Every few hours OpenNCALayer contacts arynyklas.github.io and turns off the plugins their publisher or OpenNCALayer revoked. No new versions are installed by it.");
                         }
 
                         FieldLabel {

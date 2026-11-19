@@ -27,6 +27,7 @@ const URL: &str = "url";
 const UPDATES: &str = "updates";
 const ENABLED: &str = "enabled";
 const CHANNEL: &str = "channel";
+const CHECK_REVOCATIONS: &str = "check_revocations";
 const TOKENS: &str = "tokens";
 const UI: &str = "ui";
 const SCALE: &str = "scale";
@@ -43,7 +44,8 @@ pub struct Settings {
     /// "manual", "url": …}`); none (direct connections) by default, as before the setting
     /// existed.
     pub proxy: ProxySetting,
-    /// The self-update (`{"enabled": true, "channel": "stable" | "beta"}`).
+    /// The self-update and the plugins' revocations
+    /// (`{"enabled": true, "channel": "stable" | "beta", "check_revocations": true}`).
     pub updates: UpdateSettings,
     /// Hardware tokens and ID cards (`{"enabled": false}`): experimental, off by default.
     pub tokens: TokenSettings,
@@ -112,7 +114,8 @@ pub struct TokenSettings {
     pub enabled: bool,
 }
 
-/// Whether OpenNCALayer updates itself, and from which channel.
+/// Whether OpenNCALayer updates itself, and from which channel; whether the plugins'
+/// revocations are checked with updates off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UpdateSettings {
     /// New versions are looked for, downloaded and installed by themselves; on by default.
@@ -120,6 +123,10 @@ pub struct UpdateSettings {
     /// The channel of the update index; by default the one of this build's version
     /// ([`UpdateSettings::default_for`]). A channel saved in the settings stays.
     pub channel: Channel,
+    /// «Проверять отзывы плагинов» (`docs/design/publishers.md`, Р27): with updates off the
+    /// plugin catalog is still checked on schedule and its revocations applied; on by
+    /// default, and missing from older settings files means on. Updates on include it.
+    pub check_revocations: bool,
 }
 
 impl UpdateSettings {
@@ -129,6 +136,7 @@ impl UpdateSettings {
         UpdateSettings {
             enabled: true,
             channel: Channel::default_for(version),
+            check_revocations: true,
         }
     }
 }
@@ -276,6 +284,10 @@ impl Settings {
                 CHANNEL.to_owned(),
                 Value::String(self.updates.channel.as_str().to_owned()),
             );
+            updates.insert(
+                CHECK_REVOCATIONS.to_owned(),
+                Value::Bool(self.updates.check_revocations),
+            );
         }
         if self.tokens.enabled || object.contains_key(TOKENS) {
             let tokens = object
@@ -334,7 +346,15 @@ fn updates_of(v: &Value) -> Option<UpdateSettings> {
             Channel::ALL.into_iter().find(|c| c.as_str() == name)?
         }
     };
-    Some(UpdateSettings { enabled, channel })
+    let check_revocations = match v.get(CHECK_REVOCATIONS) {
+        None => defaults.check_revocations,
+        Some(on) => on.as_bool()?,
+    };
+    Some(UpdateSettings {
+        enabled,
+        channel,
+        check_revocations,
+    })
 }
 
 /// The token settings of a `tokens` object: `enabled` missing keeps its default; `None` if it
@@ -739,6 +759,7 @@ mod tests {
                 updates: UpdateSettings {
                     enabled: false,
                     channel: Channel::Beta,
+                    check_revocations: true,
                 },
                 tokens: TokenSettings::default(),
                 ui: UiSettings::default(),
@@ -761,7 +782,8 @@ mod tests {
                 "autostart": false,
                 // The manual URL, and a password in it, goes with the manual mode.
                 "proxy": {"mode": "system", "extra": 1},
-                "updates": {"enabled": true, "channel": default_channel(), "later": "x"},
+                "updates": {"enabled": true, "channel": default_channel(),
+                            "check_revocations": true, "later": "x"},
             })
         );
         assert_eq!(Settings::load(&f).unwrap(), s);
@@ -883,6 +905,7 @@ mod tests {
                 UpdateSettings {
                     enabled: true,
                     channel,
+                    check_revocations: true,
                 },
                 "{version}"
             );
@@ -908,6 +931,30 @@ mod tests {
     }
 
     #[test]
+    fn check_revocations_is_on_by_default_and_kept() {
+        // A settings file of a version without the setting: on.
+        let (_d, f) = file_with(r#"{"updates": {"enabled": false, "channel": "beta"}}"#);
+        let mut s = Settings::load(&f).unwrap();
+        assert!(s.updates.check_revocations);
+        s.save(&f).unwrap();
+        assert_eq!(on_disk(&f)["updates"]["check_revocations"], json!(true));
+        // Off is written and read back.
+        s.updates.check_revocations = false;
+        s.save(&f).unwrap();
+        assert_eq!(
+            on_disk(&f)["updates"],
+            json!({"enabled": false, "channel": "beta", "check_revocations": false})
+        );
+        assert!(!Settings::load(&f).unwrap().updates.check_revocations);
+        // Not a boolean: the whole `updates` is not understood, as for the other members.
+        let (_d, f) = file_with(r#"{"updates": {"check_revocations": "no"}}"#);
+        assert_eq!(
+            Settings::load(&f).unwrap().updates,
+            UpdateSettings::default()
+        );
+    }
+
+    #[test]
     fn missing_file_and_keys_are_defaults() {
         let d = tempfile::tempdir().unwrap();
         let f = d.path().join("sub").join("settings.json");
@@ -919,6 +966,7 @@ mod tests {
             UpdateSettings {
                 enabled: true,
                 channel: Channel::default_for(&build),
+                check_revocations: true,
             }
         );
 
@@ -934,7 +982,8 @@ mod tests {
             on_disk(&f),
             json!({"locale": "en", "autostart": true,
                    "proxy": {"mode": "manual", "url": "http://u:p@h:1"},
-                   "updates": {"enabled": true, "channel": default_channel()}})
+                   "updates": {"enabled": true, "channel": default_channel(),
+                               "check_revocations": true}})
         );
     }
 
@@ -993,6 +1042,7 @@ mod tests {
             UpdateSettings {
                 enabled: true,
                 channel: Channel::Beta,
+                check_revocations: true,
             }
         );
         // A `proxy` or `updates` that is not an object is replaced on save.
@@ -1001,7 +1051,7 @@ mod tests {
         assert_eq!(on_disk(&f)["proxy"], json!({"mode": "none"}));
         assert_eq!(
             on_disk(&f)["updates"],
-            json!({"enabled": true, "channel": default_channel()})
+            json!({"enabled": true, "channel": default_channel(), "check_revocations": true})
         );
     }
 

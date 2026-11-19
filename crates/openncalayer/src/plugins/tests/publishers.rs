@@ -468,6 +468,53 @@ fn with_updates_off_check_now_turns_off_a_revoked_publishers_plugins() {
 }
 
 #[test]
+fn with_updates_and_revocations_off_the_schedule_contacts_nothing() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    acme_installed(&sandbox, &service);
+    std::fs::write(
+        sandbox.dir.path().join("settings.json"),
+        r#"{"updates": {"enabled": false, "channel": "stable", "check_revocations": false}}"#,
+    )
+    .unwrap();
+    publish(&sandbox, 2, Some(&policy(vec![entry("revoked")])), None);
+    let asked = sandbox.transport.asked().len();
+    let wait = service.scheduled_check();
+    assert!(PUBLISHER_CHECK_EVERY.0 <= wait && wait <= PUBLISHER_CHECK_EVERY.1);
+    assert_eq!(sandbox.transport.asked().len(), asked, "no request");
+    assert!(sandbox.notices().is_empty());
+    assert!(!installed(&sandbox).withdrawn);
+
+    // «Проверить сейчас» still applies the revocations (Р38).
+    service.check_now();
+    assert!(sandbox.transport.asked().len() > asked);
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::PublisherRevoked {
+            name: name(),
+            publisher: acme_display(),
+        }]
+    );
+    assert!(installed(&sandbox).withdrawn);
+}
+
+#[test]
+fn the_schedule_follows_the_settings() {
+    let settings = |enabled, check_revocations| UpdateSettings {
+        enabled,
+        check_revocations,
+        ..UpdateSettings::default()
+    };
+    assert_eq!(Apply::scheduled(&settings(true, true)), Some(Apply::Full));
+    assert_eq!(Apply::scheduled(&settings(true, false)), Some(Apply::Full));
+    assert_eq!(
+        Apply::scheduled(&settings(false, true)),
+        Some(Apply::RevocationsOnly)
+    );
+    assert_eq!(Apply::scheduled(&settings(false, false)), None);
+}
+
+#[test]
 fn the_catalog_is_checked_every_few_hours_while_a_publishers_plugin_is_installed() {
     let within = |wait: Duration, (low, high): (Duration, Duration)| low <= wait && wait <= high;
     assert_eq!(catalog::check_every(true), PUBLISHER_CHECK_EVERY);

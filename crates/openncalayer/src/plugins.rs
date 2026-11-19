@@ -19,7 +19,8 @@
 //!   that fails any of it is marked bad and the old one stays. A version revoked with nothing
 //!   to move to, or a plugin of a revoked publisher, is unloaded and marked withdrawn.
 //!   Plugins installed from a file are never touched. With updates off (`updates.enabled` of
-//!   the settings) only the revocations are applied ([`catalog::Apply::RevocationsOnly`]).
+//!   the settings) only the revocations are applied ([`catalog::Apply::RevocationsOnly`]),
+//!   on schedule only while «Проверять отзывы плагинов» (`updates.check_revocations`) is on.
 //! - An install asks the user ([`InstallUi`]) with the capabilities the package declares.
 //! - A request for a module nothing serves that a plugin of the catalog would serve is told
 //!   ([`PluginNotice::Needed`]) and listed in the plugin window.
@@ -446,9 +447,12 @@ impl PluginService {
 
     /// One turn of the schedule: the catalog checked and, if the repository published
     /// since it was last applied, read and applied (with updates off only its revocations).
-    /// How long until the next: [`catalog::check_every`].
+    /// With updates and «Проверять отзывы плагинов» both off nothing is checked: the turn
+    /// only waits ([`Apply::scheduled`]). How long until the next: [`catalog::check_every`].
     pub fn scheduled_check(&self) -> Duration {
-        let apply = Apply::with_updates(self.update_settings().enabled);
+        let Some(apply) = Apply::scheduled(&self.update_settings()) else {
+            return jitter(self.check_every());
+        };
         match self.refresh(INDEX_TIMEOUT, Some(apply)) {
             Ok(Fresh::Read) => {
                 self.apply_catalog(apply);
