@@ -3,7 +3,9 @@
 //! the list is read again; the daemon also has it read again when its plugins change
 //! ([`refresh_plugins_window`]). Removing a plugin is asked about first; an update that may
 //! do more than the installed version waits for «Разрешить обновление», its new
-//! capabilities listed. The rows' texts are composed here.
+//! capabilities listed; a port whose replacement by a publisher's plugin the user declined
+//! says «Доступна замена от издателя …» and offers it again («Заменить…»). The rows' texts
+//! are composed here.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -60,6 +62,16 @@ pub trait PluginsServices: Send + Sync {
     /// None waits, another package waits than `expected_sha256`, the one the user was shown
     /// ([`PendingUpdate::package_sha256`]), or what failed.
     fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError>;
+    /// Asks again whether the publisher's plugin that replaces the installed port `port`
+    /// ([`InstalledPlugin::replacement`]) may replace it: downloaded, then asked in a window
+    /// of its own. Blocks for the download.
+    ///
+    /// # Errors
+    ///
+    /// Why the user is not asked: updates are off, the port is not installed, no
+    /// replacement is offered, the catalog or the package failed, or it is being asked
+    /// already.
+    fn replace_port(&self, port: &str) -> Result<(), PluginActionError>;
     /// Downloads the catalog again. Blocks for the download.
     fn refresh(&self);
 }
@@ -131,6 +143,9 @@ pub struct InstalledPlugin {
     pub state: PluginStatus,
     /// An update that may do more than this version, waiting for the user.
     pub pending_update: Option<PendingUpdate>,
+    /// A port a publisher's plugin replaces, the replacement declined once: the publisher's
+    /// display name («Доступна замена от издателя …», «Заменить…»).
+    pub replacement: Option<LocalizedText>,
 }
 
 /// An update waiting for the user: its version and what it may do that the installed
@@ -415,6 +430,7 @@ fn create(desktop: &Rc<Desktop>) -> Result<(), PlatformError> {
     ui.on_remove(move |row| with(id, |open: &Open| ask_remove(open, row)));
     ui.on_confirm_remove(move |row| with(id, |open: &Open| remove(open, row)));
     ui.on_confirm_update(move |row| with(id, |open: &Open| confirm_update(open, row)));
+    ui.on_replace(move |row| with(id, |open: &Open| replace(open, row)));
     ui.on_install(move |row| with(id, |open: &Open| install(open, row)));
     ui.on_install_file(move || with(id, pick_file));
     ui.on_open_installed_source(move |row| {
@@ -460,6 +476,7 @@ enum Action {
     Toggle,
     Remove,
     Update,
+    Replace,
 }
 
 /// Runs `action` on a worker thread, then reads the plugins and shows them with the
@@ -501,6 +518,7 @@ fn action_error_text(e: &PluginActionError, kind: Action, l: Locale) -> String {
         Action::Toggle => t.toggle_failed,
         Action::Remove => t.remove_failed,
         Action::Update => t.plugin_update_failed,
+        Action::Replace => t.replace_failed,
     };
     let why = match e {
         PluginActionError::InstalledAlready => t.installed_already.to_owned(),
@@ -676,7 +694,7 @@ fn update_request(
             .cloned()
             .collect(),
         operations: update.operations.clone(),
-        update: true,
+        kind: crate::install_plugin::RequestKind::Update,
         window: None,
         origin_kind: update.origin.clone(),
         decide,
@@ -693,6 +711,22 @@ fn install_update(open: &Open, plugin_id: String, expected_sha256: String) {
         open,
         move |services| services.confirm_update(&plugin_id, &expected_sha256),
         Action::Update,
+        None,
+    );
+}
+
+/// «Заменить…» of a port whose replacement the user declined: the publisher's plugin is
+/// downloaded, then the user is asked again in the replacement window.
+fn replace(open: &Open, row: i32) {
+    let Some(plugin) = installed_at(open, row).filter(|p| p.replacement.is_some()) else {
+        return;
+    };
+    let l = open.desktop.locale.get();
+    show_message(&open.ui, Texts::of(l).downloading_replacement, false);
+    run_action(
+        open,
+        move |services| services.replace_port(&plugin.id),
+        Action::Replace,
         None,
     );
 }
@@ -895,6 +929,14 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
                 .replace("{0}", &added.join("; "))
         })
         .unwrap_or_default();
+    let replacement = plugin
+        .replacement
+        .as_ref()
+        .map(|publisher| {
+            t.replacement
+                .replace("{0}", &publisher_name(publisher, l))
+        })
+        .unwrap_or_default();
     InstalledRow {
         title: title(&plugin.name, &plugin.version, l).into(),
         details: details.join(" · ").into(),
@@ -903,6 +945,7 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
         can_toggle: plugin.state != PluginStatus::Withdrawn,
         enabled: plugin.state != PluginStatus::Disabled,
         update: update.into(),
+        replacement: replacement.into(),
         publisher: origin.publisher.into(),
         note: origin.note.into(),
         source: origin.source.into(),
@@ -996,6 +1039,11 @@ struct Texts {
     /// `{0}`: the version.
     needs_core: &'static str,
     not_installed: &'static str,
+    /// `{0}`: the publisher. The Kazakh ones are drafts for the translator.
+    replacement: &'static str,
+    downloading_replacement: &'static str,
+    /// `{0}`: why.
+    replace_failed: &'static str,
 }
 
 impl Texts {
@@ -1039,6 +1087,9 @@ impl Texts {
                 not_offered: "каталог оны ұсынбайды",
                 needs_core: "OpenNCALayer {0} немесе жаңарақ нұсқасы қажет",
                 not_installed: "ол орнатылмаған",
+                replacement: "{0} жариялаушысынан алмастыру қолжетімді",
+                downloading_replacement: "Алмастыратын плагин жүктелуде…",
+                replace_failed: "Портты алмастыру мүмкін болмады: {0}",
             },
             Locale::Ru => &Texts {
                 unavailable: "Каталог плагинов недоступен в этой сборке",
@@ -1078,6 +1129,9 @@ impl Texts {
                 not_offered: "каталог его не предлагает",
                 needs_core: "нужен OpenNCALayer {0} или новее",
                 not_installed: "он не установлен",
+                replacement: "Доступна замена от издателя {0}",
+                downloading_replacement: "Плагин на замену загружается…",
+                replace_failed: "Не удалось заменить порт: {0}",
             },
             Locale::En => &Texts {
                 unavailable: "The plugin catalog is unavailable in this build",
@@ -1117,6 +1171,9 @@ impl Texts {
                 not_offered: "the catalog does not offer it",
                 needs_core: "it needs OpenNCALayer {0} or newer",
                 not_installed: "it is not installed",
+                replacement: "A replacement from the publisher {0} is available",
+                downloading_replacement: "Downloading the replacement plugin…",
+                replace_failed: "Cannot replace the port: {0}",
             },
         }
     }
@@ -1137,6 +1194,7 @@ pub(crate) mod fakes {
         SetEnabled(String, bool),
         Remove(String),
         ConfirmUpdate(String),
+        ReplacePort(String),
         Refresh,
     }
 
@@ -1190,6 +1248,11 @@ pub(crate) mod fakes {
 
         fn confirm_update(&self, id: &str, _expected: &str) -> Result<(), PluginActionError> {
             self.log(Call::ConfirmUpdate(id.to_owned()));
+            self.outcome()
+        }
+
+        fn replace_port(&self, port: &str) -> Result<(), PluginActionError> {
+            self.log(Call::ReplacePort(port.to_owned()));
             self.outcome()
         }
 
@@ -1248,6 +1311,7 @@ mod tests {
                         package_sha256: "ab".repeat(32),
                         origin: PluginOrigin::Project,
                     }),
+                    replacement: None,
                 },
                 InstalledPlugin {
                     id: "kz.example.two".to_owned(),
@@ -1257,6 +1321,7 @@ mod tests {
                     origin: PluginOrigin::LocalFile,
                     state: PluginStatus::Disabled,
                     pending_update: None,
+                    replacement: None,
                 },
                 InstalledPlugin {
                     id: "kz.example.three".to_owned(),
@@ -1266,6 +1331,7 @@ mod tests {
                     origin: PluginOrigin::Project,
                     state: PluginStatus::Withdrawn,
                     pending_update: None,
+                    replacement: None,
                 },
             ],
             available: vec![AvailablePlugin {
@@ -1360,7 +1426,10 @@ mod tests {
                 .unwrap(),
             Box::new(|_| {}),
         );
-        assert!(request.update && request.origin_kind == PluginOrigin::Project);
+        assert!(
+            request.kind == crate::install_plugin::RequestKind::Update
+                && request.origin_kind == PluginOrigin::Project
+        );
         assert_eq!(request.version, "1.1.0");
         assert_eq!(request.replacing.as_ref().unwrap().version, "1.0.0");
         assert_eq!(request.operations.len(), 1);
@@ -1531,6 +1600,53 @@ mod tests {
         assert_eq!(row_source_url(&shown, 1, true), None);
         assert_eq!(row_source_url(&shown, 7, true), None);
         assert_eq!(row_source_url(&shown, -1, false), None);
+    }
+
+    /// Р11: a port whose replacement the user declined says so in its row, with
+    /// «Заменить…» asking again; the other rows say nothing of it; a failure is told.
+    #[test]
+    fn a_declined_replacement_is_offered_again_from_the_row() {
+        let mut shown = view();
+        shown.installed[0].replacement = Some(LocalizedText {
+            ru: "ТОО «Акме»\u{200B}".to_owned(),
+            kk: "«Акме» ЖШС".to_owned(),
+            en: "Acme LLP".to_owned(),
+        });
+        let o = opened_with(Locale::Ru, shown.clone());
+        let ui = &o.open.ui;
+        let rows: Vec<InstalledRow> = ui.get_installed().iter().collect();
+        assert_eq!(rows[0].replacement, "Доступна замена от издателя ТОО «Акме»");
+        assert_eq!(
+            (rows[1].replacement.as_str(), rows[2].replacement.as_str()),
+            ("", "")
+        );
+        taken(&o.calls);
+        // Only a row with a replacement asks.
+        ui.invoke_replace(1);
+        worker::manual::run_all();
+        assert_eq!(taken(&o.calls), []);
+        ui.invoke_replace(0);
+        assert_eq!(ui.get_message(), "Плагин на замену загружается…");
+        worker::manual::run_all();
+        assert_eq!(
+            taken(&o.calls),
+            [Call::ReplacePort("kz.example.one".to_owned()), Call::View]
+        );
+        assert_eq!(ui.get_message(), "");
+        *o.fail.lock().unwrap() = Some(PluginActionError::UpdatesOff);
+        ui.invoke_replace(0);
+        worker::manual::run_all();
+        assert_eq!(
+            ui.get_message(),
+            "Не удалось заменить порт: обновления выключены: включите их в настройках"
+        );
+        assert!(ui.get_message_is_error());
+        for (l, line) in [
+            (Locale::En, "A replacement from the publisher Acme LLP is available"),
+            (Locale::Kk, "«Акме» ЖШС жариялаушысынан алмастыру қолжетімді"),
+        ] {
+            assert_eq!(installed_row(&shown.installed[0], l).replacement, line);
+        }
     }
 
     #[test]

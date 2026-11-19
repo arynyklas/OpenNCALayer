@@ -359,6 +359,9 @@ msgstr "Сайттар қосылған тасымалдағыштарды жә�
 msgid "Allow the update"
 msgstr "Жаңартуға рұқсат беру"
 
+msgid "Replace…"
+msgstr "Алмастыру…"
+
 msgid "OpenNCALayer tools"
 msgstr "OpenNCALayer құралдары"
 

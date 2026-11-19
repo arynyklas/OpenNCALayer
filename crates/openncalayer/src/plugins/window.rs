@@ -12,6 +12,7 @@ use oncl_ui::plugins_view::{
 };
 use oncl_ui::{
     InstallPluginRequest, InstalledVersion, PluginActionError, PluginsServices, PluginsView,
+    RequestKind,
 };
 
 use super::{
@@ -43,7 +44,13 @@ pub fn install_request(
         }),
         capabilities: request.capabilities.lines(),
         operations: request.operations,
-        update: false,
+        kind: match request.replaces_port {
+            Some((port, version)) => RequestKind::ReplacePort {
+                port: text(&port),
+                version: version.to_string(),
+            },
+            None => RequestKind::Install,
+        },
         window: None,
         origin_kind: origin(request.origin_kind),
         decide,
@@ -84,6 +91,10 @@ impl PluginsServices for WindowServices {
 
     fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError> {
         self.service()?.confirm_update(id, expected_sha256)
+    }
+
+    fn replace_port(&self, port: &str) -> Result<(), PluginActionError> {
+        self.service()?.replace_port(port)
     }
 
     fn refresh(&self) {
@@ -143,6 +154,7 @@ pub fn plugins_view(view: ServiceView) -> PluginsView {
                     package_sha256: update.package_sha256,
                     origin: origin(update.origin),
                 }),
+                replacement: p.replacement.as_ref().map(text),
                 id: p.id,
             })
             .collect(),
@@ -267,6 +279,7 @@ mod tests {
             },
             operations: Vec::new(),
             origin_kind: ReleaseOrigin::LocalFile,
+            replaces_port: None,
         };
         let shown = install_request(request, Box::new(|_| {}));
         assert_eq!(shown.origin.as_deref(), Some("https://shop.kz"));
@@ -298,6 +311,44 @@ mod tests {
             ]
         );
         assert_eq!(shown.origin_kind, PluginOrigin::LocalFile);
+        assert_eq!(shown.kind, RequestKind::Install);
+    }
+
+    /// Р11: a publisher's plugin replacing a port is asked as one, the port named.
+    #[test]
+    fn a_port_replacement_is_asked_as_one() {
+        let request = InstallRequest {
+            origin: None,
+            name: name(),
+            version: Version::new(2, 0, 0),
+            replaces: None,
+            replacing: None,
+            capabilities: Capabilities::default(),
+            operations: Vec::new(),
+            origin_kind: acme(),
+            replaces_port: Some((
+                Localized {
+                    ru: "Порт".to_owned(),
+                    kk: "Порт".to_owned(),
+                    en: "Port".to_owned(),
+                },
+                Version::new(1, 0, 0),
+            )),
+        };
+        let shown = install_request(request, Box::new(|_| {}));
+        assert_eq!(
+            shown.kind,
+            RequestKind::ReplacePort {
+                port: LocalizedText {
+                    ru: "Порт".to_owned(),
+                    kk: "Порт".to_owned(),
+                    en: "Port".to_owned(),
+                },
+                version: "1.0.0".to_owned(),
+            }
+        );
+        assert_eq!(shown.origin_kind, acme_shown());
+        assert_eq!(shown.replacing, None);
     }
 
     #[test]
@@ -319,6 +370,7 @@ mod tests {
                     origin: ReleaseOrigin::LocalFile,
                     state: PluginState::Error("broken".to_owned()),
                     pending_update: None,
+                    replacement: Some(name()),
                 },
                 InstalledView {
                     id: "kz.b".to_owned(),
@@ -340,6 +392,7 @@ mod tests {
                         package_sha256: "ab".repeat(32),
                         origin: ReleaseOrigin::Project,
                     }),
+                    replacement: None,
                 },
             ],
             available: vec![
@@ -380,6 +433,8 @@ mod tests {
         assert_eq!(shown.available[1].origin, PluginOrigin::Project);
         assert_eq!(shown.installed[1].state, PluginStatus::Withdrawn);
         assert_eq!(shown.installed[0].pending_update, None);
+        assert_eq!(shown.installed[0].replacement, Some(text(&name())));
+        assert_eq!(shown.installed[1].replacement, None);
         assert_eq!(
             shown.installed[1].pending_update,
             Some(PendingUpdate {
@@ -400,6 +455,10 @@ mod tests {
         );
         assert_eq!(
             off.remove("kz.a"),
+            Err(PluginActionError::Failed("access denied".to_owned()))
+        );
+        assert_eq!(
+            off.replace_port("kz.a"),
             Err(PluginActionError::Failed("access denied".to_owned()))
         );
     }

@@ -39,7 +39,7 @@ mod workspace;
 
 pub use about_view::AboutInfo;
 pub use install_plugin::{
-    INSTALL_DELAY, InstallPluginRequest, InstalledVersion, ask_install_plugin,
+    INSTALL_DELAY, InstallPluginRequest, InstalledVersion, RequestKind, ask_install_plugin,
 };
 pub use plugins_view::{PluginActionError, PluginsServices, PluginsView, refresh_plugins_window};
 pub use prompter::{SlintPrompter, quit, run_event_loop, run_on_event_loop, when_event_loop_runs};

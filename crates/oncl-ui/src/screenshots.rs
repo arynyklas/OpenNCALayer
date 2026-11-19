@@ -237,6 +237,8 @@ fn key_dialog_screenshots() {
 
 /// The install window and the «Плагины» window of a publisher's plugin: its publisher, the
 /// note that its code was not reviewed, and its source link; beside it a port and a file.
+/// Then the publisher's plugin replacing a port (Р11): its window, and the port's row once
+/// the replacement was declined.
 #[test]
 #[ignore = "writes screenshots to target/screenshots"]
 fn publisher_screenshots() {
@@ -280,7 +282,7 @@ fn publisher_screenshots() {
                 CapabilityLine::Http(vec!["https://api.acme.kz/".to_owned()]),
             ],
             operations: Vec::new(),
-            update: false,
+            kind: install_plugin::RequestKind::Install,
             window: None,
             origin_kind: acme.clone(),
             decide: Box::new(|_| {}),
@@ -307,6 +309,7 @@ fn publisher_screenshots() {
                     origin: acme.clone(),
                     state: PluginStatus::Enabled,
                     pending_update: None,
+                    replacement: None,
                 },
                 InstalledPlugin {
                     id: "kz.example.file".to_owned(),
@@ -316,6 +319,7 @@ fn publisher_screenshots() {
                     origin: PluginOrigin::LocalFile,
                     state: PluginStatus::Disabled,
                     pending_update: None,
+                    replacement: None,
                 },
             ],
             available: vec![AvailablePlugin {
@@ -333,6 +337,58 @@ fn publisher_screenshots() {
         plugins_view::fill(&ui, &view, locale);
         ui.show().unwrap();
         save(&last, 640, 560, &format!("plugins-publisher-{code}"));
+        ui.hide().unwrap();
+
+        let port = text("Маркет (порт)", "Маркет (порт)", "Market (port)");
+        let request = InstallPluginRequest {
+            origin: None,
+            name: market.clone(),
+            version: "1.2.0".to_owned(),
+            replaces: None,
+            replacing: None,
+            capabilities: vec![
+                CapabilityLine::Keys,
+                CapabilityLine::Http(vec!["https://api.acme.kz/".to_owned()]),
+            ],
+            operations: Vec::new(),
+            kind: install_plugin::RequestKind::ReplacePort {
+                port: port.clone(),
+                version: "1.0.0".to_owned(),
+            },
+            window: None,
+            origin_kind: acme.clone(),
+            decide: Box::new(|_| {}),
+        };
+        let ui = InstallPluginWindow::new().unwrap();
+        select_language(locale);
+        install_plugin::fill(&ui, &request, locale);
+        ui.show().unwrap();
+        save(&last, 560, 560, &format!("replace-port-{code}"));
+        ui.hide().unwrap();
+
+        let view = PluginsView {
+            catalog: CatalogLine::Ready {
+                channel: "stable".to_owned(),
+                generated: datetime!(2026-11-19 09:00 UTC),
+                error: None,
+            },
+            installed: vec![InstalledPlugin {
+                id: "io.github.arynyklas.openncalayer.port.market".to_owned(),
+                name: port.clone(),
+                version: "1.0.0".to_owned(),
+                replaces: None,
+                origin: PluginOrigin::Project,
+                state: PluginStatus::Enabled,
+                pending_update: None,
+                replacement: Some(text("ТОО «Акме»", "«Акме» ЖШС", "Acme LLP")),
+            }],
+            available: Vec::new(),
+        };
+        let ui = PluginsWindow::new().unwrap();
+        select_language(locale);
+        plugins_view::fill(&ui, &view, locale);
+        ui.show().unwrap();
+        save(&last, 640, 420, &format!("plugins-replacement-{code}"));
         ui.hide().unwrap();
     }
 }

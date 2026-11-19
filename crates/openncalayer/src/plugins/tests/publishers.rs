@@ -2,7 +2,8 @@
 //! the sandbox's repository with its delegation, its role and `publishers.json`: its plugin
 //! offered, installed with its publisher and updated; kept, withdrawn or turned off by the
 //! states of `publishers.json` and of its role; with updates off only revocations; how often
-//! the catalog is checked; and the kept catalog checked again offline.
+//! the catalog is checked; and the kept catalog checked again offline. A port acme replaces:
+//! [`replacement`].
 
 use oncl_update::PublisherPolicy;
 use oncl_update::catalog::MIRROR_BASE;
@@ -11,6 +12,8 @@ use serde_json::{Map, Value};
 
 use super::*;
 use crate::plugins::catalog::PUBLISHER_CHECK_EVERY;
+
+mod replacement;
 
 const ACME_ID: &str = "kz.acme.example";
 const ACME_MODULE: &str = "kz.acme.Example";
@@ -147,6 +150,17 @@ fn publish(
     policy: Option<&Value>,
     role: Option<(u64, Map<String, Value>)>,
 ) {
+    publish_with(sandbox, seq, Vec::new(), policy, role);
+}
+
+/// [`publish`] with `ports` in the owner's index.
+fn publish_with(
+    sandbox: &Sandbox,
+    seq: u64,
+    ports: Vec<PluginRelease>,
+    policy: Option<&Value>,
+    role: Option<(u64, Map<String, Value>)>,
+) {
     {
         let mut repo = sandbox.server.repo();
         match policy {
@@ -167,7 +181,7 @@ fn publish(
             None => repo.delegations = None,
         }
     }
-    sandbox.publish(seq, Vec::new());
+    sandbox.publish(seq, ports);
 }
 
 fn installed(sandbox: &Sandbox) -> Installed {

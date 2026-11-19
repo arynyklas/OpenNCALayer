@@ -359,6 +359,9 @@ msgstr "Сайты смогут видеть подключённые носит
 msgid "Allow the update"
 msgstr "Разрешить обновление"
 
+msgid "Replace…"
+msgstr "Заменить…"
+
 msgid "OpenNCALayer tools"
 msgstr "Инструменты OpenNCALayer"
 

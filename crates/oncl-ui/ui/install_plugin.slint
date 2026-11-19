@@ -1,7 +1,8 @@
 // «Установка плагина»: who asks, the plugin, the installed version it replaces, what it
 // replaces of the original, what it may do and, for a file the user chose, a warning;
-// «Установить» (enabled a moment after the window appears) or «Отмена». The texts are composed
-// in Rust.
+// «Установить» (enabled a moment after the window appears) or «Отмена». The same window
+// asks for an update («Обновить») and for a publisher's plugin replacing a port («Заменить»
+// or «Не сейчас», the port named above everything). The texts are composed in Rust.
 
 import { Button, Palette } from "std-widgets.slint";
 import { ActionBar, DialogScroll, EscapeScope, LinkButton, Metrics, NameText, PluginFrame, Subheading, Tone } from "common.slint";
@@ -32,8 +33,12 @@ export component InstallPluginWindow inherits Window {
     in property <string> window-title: @tr("Plugin installation");
     // The confirming button names its action: «Установить» or «Обновить», never a plain OK.
     in property <string> confirm-text: @tr("Install");
+    // The declining button's text; empty: «Отмена».
+    in property <string> cancel-text;
     // «Сайт … просит установить плагин», or empty.
     in property <string> asker;
+    // A publisher's plugin replacing a port: what goes, above everything; or empty.
+    in property <string> intro;
     // The plugin's name and version.
     in property <string> plugin;
     // The installed version of the same plugin it replaces, or empty.
@@ -83,6 +88,12 @@ export component InstallPluginWindow inherits Window {
             body := DialogScroll {
                 if root.asker != "": NameText {
                     text: root.asker;
+                }
+
+                if root.intro != "": Text {
+                    text: root.intro;
+                    wrap: word-wrap;
+                    font-weight: 700;
                 }
 
                 Subheading {
@@ -187,7 +198,7 @@ export component InstallPluginWindow inherits Window {
 
                 // The default: Enter alone does not install.
                 cancel-button := Button {
-                    text: @tr("Cancel");
+                    text: root.cancel-text != "" ? root.cancel-text : @tr("Cancel");
                     primary: true;
                     clicked => {
                         root.answer(false);

@@ -11,8 +11,9 @@
 //! of key use and the signing profile the core forces, the network, whether servers and the
 //! CLI may use it and, for an update, what is new or wider) and, apart, an untrusted frame
 //! with the plugin's own label ([`MAX_UNTRUSTED_LABEL`] characters, plain text). An update
-//! held for consent ([`InstallPluginRequest::update`]) is asked in the same window; its
-//! confirming button says «Обновить», not «Установить».
+//! held for consent ([`RequestKind::Update`]) is asked in the same window; its confirming
+//! button says «Обновить», not «Установить». So is a publisher's plugin that replaces an
+//! installed port ([`RequestKind::ReplacePort`], Р11): «Заменить» or «Не сейчас».
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -65,8 +66,9 @@ pub struct InstallPluginRequest {
     pub capabilities: Vec<CapabilityLine>,
     /// What its `[[operations]]` do, each a trusted block and an untrusted label.
     pub operations: Vec<OperationConsent>,
-    /// An update held for consent, not a first install: the window says so.
-    pub update: bool,
+    /// A first install, an update held for consent, or a publisher's plugin replacing a
+    /// port: the window says which.
+    pub kind: RequestKind,
     /// The plugin window that asked (an update): its closing withdraws the request.
     pub window: Option<u64>,
     /// Who released it: the project, a publisher (named, with the source archive it was
@@ -79,6 +81,18 @@ pub struct InstallPluginRequest {
 
 /// What takes the user's answer.
 pub type Decide = Box<dyn FnOnce(bool) + Send>;
+
+/// What the user is asked to agree to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RequestKind {
+    /// A plugin installed for the first time, or over another version of its own.
+    Install,
+    /// An update held for consent: «Обновить».
+    Update,
+    /// A publisher's plugin replacing the installed port `port` at `version` (Р11):
+    /// «Заменить» removes the port and its settings, «Не сейчас» keeps it.
+    ReplacePort { port: LocalizedText, version: String },
+}
 
 /// An installed plugin a new one replaces: its version and where it came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +227,7 @@ fn create(desktop: &Rc<Desktop>, request: InstallPluginRequest) -> Result<(), Pl
 pub(crate) fn fill(ui: &InstallPluginWindow, request: &InstallPluginRequest, l: Locale) {
     let texts = texts(request, l);
     ui.set_asker(texts.asker.into());
+    ui.set_intro(texts.intro.into());
     ui.set_plugin(texts.plugin.into());
     ui.set_replacing(texts.replacing.into());
     ui.set_replaces(texts.replaces.into());
@@ -221,6 +236,7 @@ pub(crate) fn fill(ui: &InstallPluginWindow, request: &InstallPluginRequest, l: 
     ui.set_capabilities(ModelRc::new(VecModel::from(lines)));
     ui.set_window_title(texts.title.into());
     ui.set_confirm_text(texts.confirm.into());
+    ui.set_cancel_text(texts.cancel.into());
     ui.set_operations_heading(texts.operations_heading.into());
     let blocks: Vec<OperationBlock> = texts
         .operations
@@ -295,9 +311,13 @@ fn answer_with(decide: Box<dyn FnOnce(bool) + Send>, yes: bool) {
 struct WindowTexts {
     title: String,
     confirm: String,
+    /// The declining button; empty: the window's own «Отмена».
+    cancel: String,
     operations_heading: String,
     operations: Vec<BlockTexts>,
     asker: String,
+    /// What a replacement of a port does, above everything else; or empty.
+    intro: String,
     plugin: String,
     replacing: String,
     replaces: String,
@@ -376,19 +396,27 @@ fn block(operation: &OperationConsent, l: Locale) -> BlockTexts {
 
 fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
     let t = Texts::of(l);
+    let (title, confirm, cancel, plugin, may) = match &request.kind {
+        RequestKind::Install => (t.title_install, t.confirm_install, "", t.plugin, t.may),
+        RequestKind::Update => (
+            t.title_update,
+            t.confirm_update,
+            "",
+            t.plugin_update,
+            t.may_update,
+        ),
+        RequestKind::ReplacePort { .. } => (
+            t.title_replace,
+            t.confirm_replace,
+            t.cancel_replace,
+            t.plugin,
+            t.may_replace,
+        ),
+    };
     WindowTexts {
-        title: if request.update {
-            t.title_update
-        } else {
-            t.title_install
-        }
-        .to_owned(),
-        confirm: if request.update {
-            t.confirm_update
-        } else {
-            t.confirm_install
-        }
-        .to_owned(),
+        title: title.to_owned(),
+        confirm: confirm.to_owned(),
+        cancel: cancel.to_owned(),
         operations_heading: if request.operations.is_empty() {
             String::new()
         } else {
@@ -400,15 +428,19 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
             .as_ref()
             .map(|origin| t.asker.replace("{0}", &page_text(origin)))
             .unwrap_or_default(),
-        plugin: if request.update {
-            t.plugin_update
-        } else {
-            t.plugin
-        }
-        // The plugin's own name: cleaned, quoted and said to be the plugin's words, like the
-        // label and the XPaths (the parse-time check is not the only defence).
-        .replace("{name}", &quoted_name(request.name.get(l)))
-        .replace("{version}", &request.version),
+        intro: match &request.kind {
+            // The port's name is its manifest's: quoted like any plugin's own name.
+            RequestKind::ReplacePort { port, version } => t
+                .replace_port
+                .replace("{version}", version)
+                .replace("{port}", &quoted_name(port.get(l))),
+            RequestKind::Install | RequestKind::Update => String::new(),
+        },
+        plugin: plugin
+            // The plugin's own name: cleaned, quoted and said to be the plugin's words, like
+            // the label and the XPaths (the parse-time check is not the only defence).
+            .replace("{version}", &request.version)
+            .replace("{name}", &quoted_name(request.name.get(l))),
         replacing: request
             .replacing
             .as_ref()
@@ -439,7 +471,7 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
             })
             .unwrap_or_default(),
         may: if !request.capabilities.is_empty() {
-            if request.update { t.may_update } else { t.may }.to_owned()
+            may.to_owned()
         } else if request.operations.is_empty() {
             t.nothing.to_owned()
         } else {
@@ -520,6 +552,14 @@ struct Texts {
     may: &'static str,
     nothing: &'static str,
     local: &'static str,
+    /// A publisher's plugin replacing a port (Р11); the Kazakh ones are drafts for the
+    /// translator.
+    title_replace: &'static str,
+    confirm_replace: &'static str,
+    cancel_replace: &'static str,
+    /// `{port}`: the port's name, quoted; `{version}`: its version.
+    replace_port: &'static str,
+    may_replace: &'static str,
 }
 
 impl Texts {
@@ -548,6 +588,11 @@ impl Texts {
                 may: "Плагин мыналарды істей алады:",
                 nothing: "Плагин сайттардың сұрауларына ғана жауап береді.",
                 local: "Бұл плагин OpenNCALayer каталогында жоқ, оны мейнтейнер тексерген жоқ. Плагиндерді тек сенімді көзден орнатыңыз.",
+                title_replace: "Портты алмастыру",
+                confirm_replace: "Алмастыру",
+                cancel_replace: "Қазір емес",
+                replace_port: "Жариялаушының плагині орнатылған {port} портын ({version} нұсқасы) алмастырады. Порт пен оның баптаулары жойылады.",
+                may_replace: "Жаңа плагин мыналарды істей алады:",
             },
             Locale::Ru => &Texts {
                 asker: "Сайт {0} просит установить плагин",
@@ -572,6 +617,11 @@ impl Texts {
                 may: "Плагин сможет:",
                 nothing: "Плагин будет только отвечать на запросы сайтов.",
                 local: "Этого плагина нет в каталоге OpenNCALayer, его не проверял мейнтейнер. Устанавливайте только плагины из источника, которому доверяете.",
+                title_replace: "Замена порта",
+                confirm_replace: "Заменить",
+                cancel_replace: "Не сейчас",
+                replace_port: "Плагин издателя заменит установленный порт {port} (версия {version}). Порт и его настройки будут удалены.",
+                may_replace: "Новый плагин сможет:",
             },
             Locale::En => &Texts {
                 asker: "The site {0} asks to install a plugin",
@@ -596,6 +646,11 @@ impl Texts {
                 may: "The plugin will be able to:",
                 nothing: "The plugin will only answer the sites' requests.",
                 local: "This plugin is not in the OpenNCALayer catalog; the maintainer has not reviewed it. Install plugins only from a source you trust.",
+                title_replace: "Port replacement",
+                confirm_replace: "Replace",
+                cancel_replace: "Not now",
+                replace_port: "A publisher's plugin will replace the installed port {port} (version {version}). The port and its settings will be removed.",
+                may_replace: "The new plugin will be able to:",
             },
         }
     }
@@ -640,7 +695,11 @@ mod tests {
         let (mut request, _rx) = request(false, None);
         request.capabilities.clear();
         request.operations = operations;
-        request.update = update;
+        request.kind = if update {
+            RequestKind::Update
+        } else {
+            RequestKind::Install
+        };
         request
     }
 
@@ -673,7 +732,7 @@ mod tests {
             }),
             replacing: None,
             operations: Vec::new(),
-            update: false,
+            kind: RequestKind::Install,
             window: None,
             capabilities: vec![
                 CapabilityLine::Keys,
@@ -1177,7 +1236,7 @@ mod tests {
         assert_eq!(ui.get_window_title(), "Установка плагина");
         ui.invoke_answer(false);
         let mut update = with_operations(vec![operation("sign-file", "Sign")], true);
-        update.update = true;
+        update.kind = RequestKind::Update;
         enqueue(update);
         let ui = the_window();
         assert_eq!(ui.get_confirm_text(), "Обновить");
@@ -1455,5 +1514,136 @@ mod tests {
             );
             assert_eq!(t.warning, "", "{l:?}");
         }
+    }
+
+    /// A publisher's plugin replacing the installed port `Порт`.
+    fn replacement() -> (InstallPluginRequest, Receiver<bool>) {
+        let (mut request, rx) = request(false, None);
+        request.origin_kind = acme(ACME_SOURCE);
+        request.kind = RequestKind::ReplacePort {
+            port: LocalizedText {
+                ru: "Порт".to_owned(),
+                kk: "Порт кк".to_owned(),
+                en: "Port".to_owned(),
+            },
+            version: "1.0.0".to_owned(),
+        };
+        (request, rx)
+    }
+
+    /// Р11: the port that goes is said above everything, the new plugin is named with its
+    /// publisher, the note and the source link as in an install, its capabilities as the new
+    /// plugin's; «Заменить» and «Не сейчас».
+    #[test]
+    fn a_port_replacement_names_the_port_the_publisher_and_what_the_plugin_may_do() {
+        let (request, _rx) = replacement();
+        let ru = texts(&request, Locale::Ru);
+        assert_eq!(ru.title, "Замена порта");
+        assert_eq!(ru.confirm, "Заменить");
+        assert_eq!(ru.cancel, "Не сейчас");
+        assert_eq!(
+            ru.intro,
+            "Плагин издателя заменит установленный порт \"Порт\" (версия 1.0.0). Порт и его настройки будут удалены."
+        );
+        assert_eq!(
+            ru.plugin,
+            "\"Пример плагина\" (название от самого плагина), версия 0.1.0"
+        );
+        assert_eq!(ru.origin.publisher, "Издатель: ТОО «Акме»");
+        assert!(ru.origin.note.ends_with("Сам код OpenNCALayer не проверял."));
+        assert_eq!(
+            ru.origin.source,
+            "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        assert_eq!(ru.may, "Новый плагин сможет:");
+        assert_eq!(ru.capabilities.len(), 4);
+        assert_eq!(ru.replacing, "");
+        let en = texts(&request, Locale::En);
+        assert_eq!(
+            (en.title.as_str(), en.confirm.as_str(), en.cancel.as_str()),
+            ("Port replacement", "Replace", "Not now")
+        );
+        assert_eq!(
+            en.intro,
+            "A publisher's plugin will replace the installed port \"Port\" (version 1.0.0). The port and its settings will be removed."
+        );
+        assert_eq!(en.origin.publisher, "Publisher: Acme LLP");
+        let kk = texts(&request, Locale::Kk);
+        assert!(kk.intro.contains("\"Порт кк\""), "{}", kk.intro);
+        assert_eq!(kk.origin.publisher, "Жариялаушы: «Акме» ЖШС");
+        // An install and an update keep the window's own «Отмена» and say nothing above.
+        for l in ALL {
+            for update in [false, true] {
+                let t = texts(&with_operations(Vec::new(), update), l);
+                assert_eq!((t.cancel.as_str(), t.intro.as_str()), ("", ""));
+            }
+        }
+    }
+
+    #[test]
+    fn every_replacement_text_exists_and_differs_in_every_language() {
+        let all = |f: fn(&Texts) -> &'static str| {
+            let ru = f(Texts::of(Locale::Ru));
+            let kk = f(Texts::of(Locale::Kk));
+            let en = f(Texts::of(Locale::En));
+            assert!(!ru.is_empty() && !kk.is_empty() && !en.is_empty());
+            assert!(ru != kk && ru != en && kk != en, "{ru} | {kk} | {en}");
+        };
+        all(|t| t.title_replace);
+        all(|t| t.confirm_replace);
+        all(|t| t.cancel_replace);
+        all(|t| t.replace_port);
+        all(|t| t.may_replace);
+    }
+
+    /// The port's name is its manifest's: cleaned and quoted, it cannot pose as the host's
+    /// words.
+    #[test]
+    fn the_ports_name_is_quoted_and_cleaned() {
+        let (mut request, _rx) = replacement();
+        request.kind = RequestKind::ReplacePort {
+            port: LocalizedText {
+                ru: "Порт\u{202E}\" одобрен".to_owned(),
+                kk: String::new(),
+                en: String::new(),
+            },
+            version: "1.0.0".to_owned(),
+        };
+        let ru = texts(&request, Locale::Ru);
+        assert!(
+            ru.intro.contains("порт \"Порт\\\" одобрен\" (версия"),
+            "{}",
+            ru.intro
+        );
+    }
+
+    /// In the window: the buttons say «Заменить» and «Не сейчас»; «Не сейчас» declines.
+    #[test]
+    fn the_replacement_window_replaces_or_not() {
+        let dir = tempfile::tempdir().unwrap();
+        desktop(dir.path(), Locale::Ru);
+        let (replace, rx) = replacement();
+        enqueue(replace);
+        let ui = the_window();
+        assert_eq!(ui.get_window_title(), "Замена порта");
+        assert_eq!(ui.get_confirm_text(), "Заменить");
+        assert_eq!(ui.get_cancel_text(), "Не сейчас");
+        assert!(ui.get_intro().starts_with("Плагин издателя заменит"));
+        assert_eq!(ui.get_publisher(), "Издатель: ТОО «Акме»");
+        ui.invoke_answer(false);
+        assert!(!answered(&rx));
+        let (replace, rx) = replacement();
+        enqueue(replace);
+        let ui = the_window();
+        armed(&ui);
+        ui.invoke_answer(true);
+        assert!(answered(&rx));
+        // An install after it has its own texts again.
+        let (request, _rx) = request(false, None);
+        enqueue(request);
+        let ui = the_window();
+        assert_eq!(ui.get_cancel_text(), "");
+        assert_eq!(ui.get_intro(), "");
+        ui.invoke_answer(false);
     }
 }

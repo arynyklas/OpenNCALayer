@@ -247,8 +247,8 @@ impl Store {
         Ok(())
     }
 
-    /// Uninstalls `id`: the state, then its settings file (a failure only logged), then its
-    /// package file.
+    /// Uninstalls `id`: the state (with the replacement the user declined for it, if it is a
+    /// port), then its settings file (a failure only logged), then its package file.
     ///
     /// # Errors
     ///
@@ -261,6 +261,7 @@ impl Store {
         let Some(removed) = next.plugins.remove(id) else {
             return Err(not_installed(id));
         };
+        next.declined_replacements.remove(id);
         self.save(&next)?;
         *state = next;
         remove_file(&self.settings_path(id));
@@ -268,6 +269,76 @@ impl Store {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         }
+    }
+
+    /// Replaces the installed port `port` by `package`, a publisher's plugin of the catalog
+    /// whose file is `bytes`, released by `publisher` (Р11). The package file is written,
+    /// then one save records the plugin (on or off as the port was, not withdrawn) and
+    /// forgets the port and the replacement declined for it; the port's settings and
+    /// package files go after that (a failure only logged).
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::NotFound`] if `port` is not installed; [`io::ErrorKind::InvalidInput`]
+    /// if `bytes` is not `package`'s file or `package` is `port`; any I/O error writing the
+    /// package or the state (nothing changes then).
+    pub fn replace(
+        &self,
+        port: &str,
+        package: &Package,
+        bytes: &[u8],
+        publisher: Option<&PublisherName>,
+    ) -> io::Result<()> {
+        let sha256 = Sha256::of(bytes);
+        if sha256.0 != package.sha256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the bytes are not the package's file",
+            ));
+        }
+        let id = &package.manifest.id;
+        if id == port {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a plugin does not replace itself",
+            ));
+        }
+        let version = &package.manifest.version;
+        let mut state = lock(&self.state);
+        let mut next = state.clone();
+        let Some(removed) = next.plugins.remove(port) else {
+            return Err(not_installed(port));
+        };
+        next.declined_replacements.remove(port);
+        let before = next.plugins.insert(
+            id.clone(),
+            Installed {
+                version: version.clone(),
+                sha256,
+                source: Source::Catalog,
+                enabled: removed.enabled,
+                withdrawn: false,
+                publisher: publisher.cloned(),
+            },
+        );
+        let file = self.package_path(id, version);
+        std::fs::create_dir_all(self.dir.join("packages"))?;
+        write_atomically(&file, bytes, Access::Default)?;
+        if let Err(e) = self.save(&next) {
+            if before.as_ref().is_none_or(|b| b.version != *version) {
+                remove_file(&file);
+            }
+            return Err(e);
+        }
+        *state = next;
+        if let Some(before) = before
+            && before.version != *version
+        {
+            remove_file(&self.package_path(id, &before.version));
+        }
+        remove_file(&self.settings_path(port));
+        remove_file(&self.package_path(port, &removed.version));
+        Ok(())
     }
 
     /// Turns `id` on or off.

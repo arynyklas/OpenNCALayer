@@ -461,6 +461,67 @@ fn state_of_0_1_1_reads_with_empty_declined() {
     assert!(!text.contains("declined_replacements"), "{text}");
 }
 
+/// A port replaced by a publisher's plugin (Р11): one save records the plugin, on or off as
+/// the port was, and forgets the port, its settings, its package and its declined offer.
+#[test]
+fn a_port_is_replaced_by_a_publishers_plugin() {
+    const MARKET: &str = "kz.acme.market";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (port, port_bytes) = example();
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    store.set_enabled(ID, false).unwrap();
+    store.set_declined_replacement(ID, Some(MARKET)).unwrap();
+    std::fs::create_dir_all(store.settings_dir()).unwrap();
+    std::fs::write(store.settings_path(ID), b"{}").unwrap();
+    let bytes = example_package_with(|m| m.replace(ID, MARKET));
+    let market = Package::read(&bytes).unwrap();
+    let acme = oncl_update::tuf::PublisherName::parse("acme").unwrap();
+
+    // Not the package's file, the port itself, or no port: nothing changes.
+    let short = &bytes[..bytes.len() - 1];
+    let err = store.replace(ID, &market, short, Some(&acme)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let err = store
+        .replace(ID, &port, &port_bytes, Some(&acme))
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let err = store
+        .replace("kz.none", &market, &bytes, Some(&acme))
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(store.state().plugins.contains_key(ID));
+
+    store.replace(ID, &market, &bytes, Some(&acme)).unwrap();
+    let state = Store::open(dir.path()).unwrap().state();
+    assert!(!state.plugins.contains_key(ID));
+    assert!(state.declined_replacements.is_empty());
+    let installed = &state.plugins[MARKET];
+    assert_eq!(installed.source, Source::Catalog);
+    assert_eq!(installed.publisher.as_ref(), Some(&acme));
+    assert!(!installed.enabled && !installed.withdrawn);
+    assert!(store.load_package(MARKET).is_ok());
+    assert!(!package_file(dir.path(), "0.1.0").exists());
+    assert!(!store.settings_path(ID).exists());
+}
+
+#[test]
+fn removing_a_port_forgets_its_declined_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
+    store
+        .set_declined_replacement(ID, Some("kz.acme.market"))
+        .unwrap();
+    store.remove(ID).unwrap();
+    assert!(store.state().declined_replacements.is_empty());
+}
+
 /// The state as 0.1.1 reads it: its structs, frozen, without the fields of later versions.
 mod v0_1_1 {
     use std::collections::{BTreeMap, BTreeSet};

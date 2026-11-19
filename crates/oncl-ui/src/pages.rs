@@ -305,6 +305,9 @@ fn install_plugin_window_installs_only_on_a_deliberate_press() {
     offscreen::install();
     let ui = InstallPluginWindow::new().unwrap();
     ui.set_asker(long_name().into());
+    // A port's replacement: the line above everything and a declining button of its own.
+    ui.set_intro(long_error().into());
+    ui.set_cancel_text("Қазір емес".into());
     ui.set_plugin(long_name().into());
     ui.set_replacing(long_error().into());
     ui.set_warning(long_error().into());
@@ -425,6 +428,8 @@ fn plugins_window_escape_closes_a_question_before_the_window() {
         can_toggle: true,
         enabled: true,
         update: long_error().into(),
+        // A declined replacement of a port: its line and «Заменить…».
+        replacement: long_error().into(),
         publisher: long_name().into(),
         note: long_error().into(),
         source: long_name().into(),
