@@ -40,7 +40,9 @@ name: Publisher PR
 # timestamp).
 on:
   pull_request_target:
-    # `edited`: a pull request moved to another base cancels the run of the old one.
+    # `edited` (title, body or base changed) starts a new run that cancels the old one; one
+    # moved to another base than main never starts a run (`branches`), so its old run goes on
+    # and `merge` refuses it: the base is checked again there.
     types: [opened, edited, synchronize, reopened, ready_for_review]
     branches: [main]
     paths:
@@ -620,7 +622,7 @@ jobs:
             '.baseRefName == "main" and .headRefOid == $head and .state == "OPEN" and .isDraft == false' <<< "$pr" > /dev/null \
             || fail "the pull request changed since the checks ($pr): push again"
           # main is still the commit every check ran against.
-          main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          main="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
           [ "$main" = "$GITHUB_SHA" ] || fail "main moved from $GITHUB_SHA to $main since the checks: push again to check against the new main"
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$HEAD_SHA" \
             --subject "publisher $PUBLISHER: role version $ROLE_VERSION" \

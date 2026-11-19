@@ -32,6 +32,6 @@
 </ul>
 <h2>{{ trans(key="download_verify", lang=lang) }}</h2>
 <p>{{ trans(key="download_verify_sums", lang=lang) }}</p>
-<pre><code>gh attestation verify &lt;file&gt; --repo arynyklas/OpenNCALayer</code></pre>
+<pre><code>gh attestation verify &lt;file&gt; --repo arynyklas/OpenNCALayer --signer-workflow arynyklas/OpenNCALayer/.github/workflows/release.yml</code></pre>
 {% include "parts/channels.html" %}
 {% endblock main %}
