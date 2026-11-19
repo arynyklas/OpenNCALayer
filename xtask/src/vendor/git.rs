@@ -59,6 +59,12 @@ impl Git {
             .args(["-c", "core.quotepath=false"])
             // Nothing of the user's or the runner's configuration turns a byte into another.
             .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                if cfg!(windows) { "NUL" } else { "/dev/null" },
+            )
+            // The objects as stored: a replace ref must not change what a commit holds.
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE");
         command
@@ -99,14 +105,64 @@ impl Git {
         Ok(String::from_utf8_lossy(&out).trim().to_owned())
     }
 
-    /// The best common ancestor of `a` and `b`.
+    /// What merging `head` into `base` changes, as GitHub's squash merge computes it
+    /// (merge-ort, `git merge-tree --write-tree`): the paths of `base` against the merged
+    /// tree. Refused (`Ok(Err(why))`) unless `base` and `head` have exactly one merge base,
+    /// no merge commit lies between it and `head`, and the merge has no conflict: otherwise
+    /// the diff of the pull request is not what lands.
     ///
     /// # Errors
     ///
-    /// They have none, or git fails.
-    pub fn merge_base(&self, a: &str, b: &str) -> anyhow::Result<String> {
-        let out = self.output(&["merge-base", a, b])?;
-        Ok(String::from_utf8_lossy(&out).trim().to_owned())
+    /// Git fails.
+    pub fn merged_changes(
+        &self,
+        base: &str,
+        head: &str,
+    ) -> anyhow::Result<Result<Vec<Change>, String>> {
+        let bases = self.output(&["merge-base", "--all", "--end-of-options", base, head]);
+        let bases = match bases {
+            Ok(out) => String::from_utf8_lossy(&out).trim().to_owned(),
+            Err(_) => return Ok(Err("the head has no common history with main".to_owned())),
+        };
+        let bases: Vec<&str> = bases.lines().collect();
+        let [fork] = bases.as_slice() else {
+            return Ok(Err(format!(
+                "the head and main have {} merge bases, not one",
+                bases.len()
+            )));
+        };
+        let merges = self.output(&[
+            "rev-list",
+            "--min-parents=2",
+            "--end-of-options",
+            &format!("{fork}..{head}"),
+        ])?;
+        if !String::from_utf8_lossy(&merges).trim().is_empty() {
+            return Ok(Err(
+                "the pull request has a merge commit: rebase it on main".to_owned(),
+            ));
+        }
+        let merged = self
+            .command()
+            .args(["merge-tree", "--write-tree", "--no-messages", base, head])
+            .output()
+            .context("running git merge-tree")?;
+        let tree = String::from_utf8_lossy(&merged.stdout)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+        match merged.status.code() {
+            Some(0) if !tree.is_empty() => Ok(Ok(self.changes(base, &tree)?)),
+            Some(1) => Ok(Err(
+                "the pull request does not merge into main cleanly".to_owned()
+            )),
+            _ => bail!(
+                "git merge-tree failed: {}",
+                String::from_utf8_lossy(&merged.stderr).trim()
+            ),
+        }
     }
 
     /// What changes from `from` to `to`, every path (no rename detection, no pathspec).

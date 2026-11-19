@@ -548,6 +548,14 @@ fn check_12_wants_the_source_table_a_listed_builder_and_an_osi_licence() {
             source(&|t| t["custom"]["oncl"]["source"]["path"] = json!("../x")),
         ),
         (
+            "a path with shell characters",
+            source(&|t| t["custom"]["oncl"]["source"]["path"] = json!("crates/m;$(id)")),
+        ),
+        (
+            "a path starting with -",
+            source(&|t| t["custom"]["oncl"]["source"]["path"] = json!("-x")),
+        ),
+        (
             "an archive over 64 MiB",
             source(&|t| t["custom"]["oncl"]["source"]["archive_length"] = json!(65 << 20)),
         ),
@@ -883,7 +891,7 @@ fn check_17_wants_crates_io_and_listed_git_with_a_commit_and_paths_inside() {
     let path = tp(PATH);
     let allowed = vec!["https://github.com/arynyklas/slint".to_owned()];
     let t = crate_tree();
-    assert!(lock_sources(&t, "crates/p", &allowed, &path).is_empty());
+    assert!(lock_sources(&t, &allowed, &path).is_empty());
     let lock = |source: &str| {
         format!(
             "version = 4\n[[package]]\nname = \"x\"\nversion = \"1.0.0\"\nsource = \"{source}\"\n"
@@ -897,32 +905,26 @@ fn check_17_wants_crates_io_and_listed_git_with_a_commit_and_paths_inside() {
     ] {
         let broken = with(&t, "Cargo.lock", lock(source).as_bytes());
         assert_eq!(
-            checks_of(&lock_sources(&broken, "crates/p", &allowed, &path)),
+            checks_of(&lock_sources(&broken, &allowed, &path)),
             [17],
             "{source}"
         );
+        // A clean lock beside the crate does not hide a bad one elsewhere: every lock counts.
+        let beside = with(&broken, "crates/p/Cargo.lock", b"version = 4\n");
+        assert_eq!(checks_of(&lock_sources(&beside, &allowed, &path)), [17]);
     }
     let own = lock(
         "git+https://github.com/arynyklas/OpenNCALayer?rev=a#0123456789abcdef0123456789abcdef01234567",
     );
-    assert!(
-        lock_sources(
-            &with(&t, "Cargo.lock", own.as_bytes()),
-            "crates/p",
-            &allowed,
-            &path
-        )
-        .is_empty()
-    );
+    assert!(lock_sources(&with(&t, "Cargo.lock", own.as_bytes()), &allowed, &path).is_empty());
     let outside = with(
         &t,
         "crates/p/Cargo.toml",
         b"[package]\nname = \"p\"\nlicense = \"MIT\"\n[dependencies]\nx = { path = \"../../../outside\" }\n",
     );
-    assert_eq!(
-        checks_of(&lock_sources(&outside, "crates/p", &allowed, &path)),
-        [17]
-    );
+    assert_eq!(checks_of(&lock_sources(&outside, &allowed, &path)), [17]);
+    let unreadable = with(&t, "crates/q/Cargo.toml", b"[package\n");
+    assert_eq!(checks_of(&lock_sources(&unreadable, &allowed, &path)), [17]);
 }
 
 #[test]

@@ -217,8 +217,7 @@ pub fn check_pr(options: &Options) -> anyhow::Result<PrVerdict> {
     let git = Git::new(options.repo);
     let base_commit = git.commit(options.base)?;
     let head_commit = git.commit(options.head)?;
-    let fork = git.merge_base(&base_commit, &head_commit)?;
-    let changes = git.changes(&fork, &head_commit)?;
+    let changes = git.merged_changes(&base_commit, &head_commit)?;
     let mut checks = Checks::new();
     let mut all: Vec<u8> = STATIC_CHECKS.to_vec();
     all.extend(ARCHIVE_CHECKS);
@@ -246,11 +245,15 @@ pub fn check_pr(options: &Options) -> anyhow::Result<PrVerdict> {
         verdict
     };
 
-    // Check 1, the paths: nothing else is read before it.
-    let role = match checks::role_path(&changes, &options.layout) {
-        Ok(role) => role,
-        Err(findings) => {
+    // Check 1, the paths of what the merge lands: nothing else is read before it.
+    let role = match changes.map(|c| checks::role_path(&c, &options.layout)) {
+        Ok(Ok(role)) => role,
+        Ok(Err(findings)) => {
             apply(&mut checks, &[], findings);
+            return Ok(finish(checks, verdict, &all));
+        }
+        Err(why) => {
+            checks.fail(1, why);
             return Ok(finish(checks, verdict, &all));
         }
     };
@@ -450,7 +453,7 @@ fn archive_checks(
     };
     findings.extend(checks::crate_files(&tree, source, path));
     findings.extend(checks::cargo_config(&tree, &source.path, path));
-    findings.extend(checks::lock_sources(&tree, &source.path, allowed_git, path));
+    findings.extend(checks::lock_sources(&tree, allowed_git, path));
     findings.extend(checks::binaries(&tree, binary_files, path));
     Ok(findings)
 }
@@ -548,15 +551,17 @@ pub fn load_pr(
     let git = Git::new(repo);
     let base_commit = git.commit(base)?;
     let head_commit = git.commit(head)?;
-    let fork = git.merge_base(&base_commit, &head_commit)?;
     let messages = |f: Vec<Finding>| {
         f.into_iter()
             .map(|f| format!("check {}: {}", f.check, f.message))
             .collect::<Vec<_>>()
             .join("; ")
     };
-    let role = checks::role_path(&git.changes(&fork, &head_commit)?, layout)
-        .map_err(|f| anyhow::anyhow!("{}", messages(f)))?;
+    let changes = git
+        .merged_changes(&base_commit, &head_commit)?
+        .map_err(|why| anyhow::anyhow!("check 1: {why}"))?;
+    let role =
+        checks::role_path(&changes, layout).map_err(|f| anyhow::anyhow!("{}", messages(f)))?;
     let scratch = tempfile::tempdir()?;
     let base_dir = scratch.path().join("base");
     materialize(
@@ -737,17 +742,46 @@ pub fn verdict_job(pr: &PrRole, inputs: &VerdictInputs, out: &Path) -> anyhow::R
             checks.fail(21, format!("{path}: no rebuilt {package_name}"));
             continue;
         };
+        // The rebuild's own report beside the package: 17 (what Cargo resolved), 19, 20.
+        let report = package_file
+            .parent()
+            .map(|dir| dir.join(REBUILD_REPORT))
+            .filter(|file| file.is_file())
+            .map(|file| -> anyhow::Result<RebuildReport> {
+                Ok(serde_json::from_slice(&fs::read(file)?)?)
+            })
+            .transpose();
+        let mut target_failed = false;
+        match report {
+            Ok(Some(report)) => {
+                let rebuilt = Checks::from_results(&report.checks);
+                for id in [17, 19, 20] {
+                    if rebuilt.status(id) != Some(super::verdict::Status::Pass) {
+                        target_failed = true;
+                        checks.fail(id, format!("{path}: the rebuild did not pass check {id}"));
+                    }
+                }
+                checks.merge(&rebuilt);
+            }
+            Ok(None) => {
+                target_failed = true;
+                checks.fail(
+                    19,
+                    format!("{path}: no {REBUILD_REPORT} beside the package"),
+                );
+            }
+            Err(e) => {
+                target_failed = true;
+                checks.fail(19, format!("{path}: {REBUILD_REPORT}: {e:#}"));
+            }
+        }
         let package = oncl_pack::read_limited(&package_file, oncl_plugin::MAX_PACKAGE)?;
-        apply(
-            &mut checks,
-            &[21],
-            super::mirror::rebuilt_bytes(&package, target, path),
-        );
-        apply(
-            &mut checks,
-            &[22],
-            super::mirror::rebuilt_package(&package, &release, &tree, &source.path, path),
-        );
+        let bytes = super::mirror::rebuilt_bytes(&package, target, path);
+        let contents =
+            super::mirror::rebuilt_package(&package, &release, &tree, &source.path, path);
+        target_failed |= !bytes.is_empty() || !contents.is_empty();
+        apply(&mut checks, &[21], bytes);
+        apply(&mut checks, &[22], contents);
         let vcs = match (&source.vcs, inputs.provenance) {
             (None, _) => None,
             (Some(vcs), report) => {
@@ -812,15 +846,151 @@ pub fn verdict_job(pr: &PrRole, inputs: &VerdictInputs, out: &Path) -> anyhow::R
             vcs,
             checks: Vec::new(),
         };
-        let dir = out.join(&stem);
-        fs::create_dir_all(&dir)?;
-        fs::write(dir.join(super::mirror::FILE_NAME), info.to_json()?)?;
+        // Nothing goes to the mirror of a target that failed.
+        if !target_failed {
+            let dir = out.join(&stem);
+            fs::create_dir_all(&dir)?;
+            fs::write(dir.join(super::mirror::FILE_NAME), info.to_json()?)?;
+        }
     }
-    for id in super::verdict::VERDICT_CHECKS {
+    for id in [17, 19, 20, 21, 22] {
         checks.pass(id);
     }
     if pr.new.is_empty() || checks.status(25).is_none() {
         checks.skip(25, "no new target names a revision");
     }
     Ok(checks)
+}
+
+/// The rebuild job's report beside its package (`vendor rebuild --out`).
+pub const REBUILD_REPORT: &str = "rebuild.json";
+
+/// `rebuild.json`: checks 17 (on what `cargo metadata` resolved), 19 and 20.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RebuildReport {
+    /// [`SCHEMA`].
+    pub schema: u32,
+    /// The checks.
+    pub checks: Vec<super::verdict::CheckResult>,
+}
+
+/// `allow-git` of the `deny.toml` at `path` (none without the file).
+///
+/// # Errors
+///
+/// The file does not read.
+pub fn allowed_git_in(path: &Path) -> anyhow::Result<Vec<String>> {
+    if path.is_file() {
+        allowed_git(&fs::read(path)?)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// The archives `publisher-check` handed over, by the `source.fetch` the role signs: what
+/// checks 13–18 read again in the verdict job (hashed again by check 13).
+struct HandedOver(BTreeMap<String, Vec<u8>>);
+
+impl ArchiveFetcher for HandedOver {
+    fn fetch(&self, url: &str, limit: u64) -> Result<Vec<u8>, String> {
+        match self.0.get(url) {
+            Some(bytes) if bytes.len() as u64 <= limit => Ok(bytes.clone()),
+            Some(_) => Err(format!(
+                "{url}: the handed-over archive is over {limit} bytes"
+            )),
+            None => Err(format!("{url}: the archive was not handed over")),
+        }
+    }
+}
+
+/// What [`whole_verdict`] checks.
+pub struct WholeOptions<'a> {
+    /// The git repository.
+    pub repo: &'a Path,
+    /// The base revision (`main`).
+    pub base: &'a str,
+    /// The pull request's head revision.
+    pub head: &'a str,
+    /// The pull request's author.
+    pub author: &'a str,
+    /// The time of the check.
+    pub now: OffsetDateTime,
+    /// Where the files are.
+    pub layout: Layout,
+    /// The modules built into the core; `None` reads them from this checkout.
+    pub builtin_modules: Option<Vec<String>>,
+}
+
+/// The whole verdict of the pull request, in one job: [`check_pr`] again (its archives the
+/// handed-over ones, hashed again), every rebuild report and [`verdict_job`]. `ok` only if
+/// no check failed and every one of 1–9, 11–24 passed; `BUILDINFO.json` of each new package
+/// that passed goes into `out`.
+///
+/// # Errors
+///
+/// The revisions or the base cannot be read, or a file cannot be read or written.
+pub fn whole_verdict(
+    options: &WholeOptions,
+    inputs: &VerdictInputs,
+    out: &Path,
+) -> anyhow::Result<PrVerdict> {
+    let pr = load_pr(
+        options.repo,
+        options.base,
+        options.head,
+        &options.layout,
+        options.now,
+    );
+    let mut handed = BTreeMap::new();
+    if let Ok(pr) = &pr {
+        for path in &pr.new {
+            let (Some(target), Some(place)) =
+                (pr.targets.targets.get(path), PublisherTarget::parse(path))
+            else {
+                continue;
+            };
+            let source = target
+                .custom
+                .as_ref()
+                .and_then(|c| c.get("oncl"))
+                .and_then(|o| o.get("source"));
+            let Ok(source) = ReleaseSource::parse(source) else {
+                continue;
+            };
+            let name = format!("{}-{}.src.tar.gz", place.id, place.version);
+            if let Some(file) = find_file(inputs.archives, &name)? {
+                handed.insert(
+                    source.fetch.clone(),
+                    oncl_pack::read_limited(&file, source.archive_length)?,
+                );
+            }
+        }
+    }
+    let fetcher = HandedOver(handed);
+    let mut verdict = check_pr(&Options {
+        repo: options.repo,
+        base: options.base,
+        head: options.head,
+        author: Some(options.author),
+        now: options.now,
+        layout: options.layout,
+        fetcher: Some(&fetcher),
+        out: None,
+        builtin_modules: options.builtin_modules.clone(),
+    })?;
+    let mut checks = Checks::from_results(&verdict.checks);
+    match &pr {
+        Ok(pr) if verdict.ok => checks.merge(&verdict_job(pr, inputs, out)?),
+        _ => checks.skip_rest(
+            [19, 20, 21, 22, super::verdict::PROVENANCE_CHECK],
+            "the checks of the pull request failed",
+        ),
+    }
+    let mut required: Vec<u8> = STATIC_CHECKS.to_vec();
+    required.extend(ARCHIVE_CHECKS);
+    required.extend([19, 20, 21, 22]);
+    verdict.ok = checks.all_pass(required);
+    verdict.checks = checks.into_vec();
+    Ok(verdict)
 }

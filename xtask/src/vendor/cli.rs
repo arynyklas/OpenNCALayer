@@ -260,13 +260,10 @@ pub enum VendorCommand {
         head: String,
         /// The pull request's author (check 2).
         #[arg(long)]
-        author: Option<String>,
+        author: String,
         /// Where verdict.json and the archives go.
         #[arg(long)]
         out: Option<PathBuf>,
-        /// Do not download the source archives (checks 13 to 18 are skipped).
-        #[arg(long)]
-        offline: bool,
         /// The git repository (the workspace by default).
         #[arg(long)]
         repo: Option<PathBuf>,
@@ -308,8 +305,10 @@ pub enum VendorCommand {
         #[arg(long)]
         out: PathBuf,
     },
-    /// CI: checks 21, 22 (and 25 from the report) by hashes computed here; BUILDINFO.json of
-    /// each new package into --out/<id>-<version>/, and verdict.json.
+    /// CI: the whole verdict: checks 1–9 and 11–18, 23, 24 again (the archives handed over,
+    /// hashed again), 17, 19 and 20 from every rebuild report, 21 and 22 by hashes computed
+    /// here, 25 from the report; BUILDINFO.json of each new package into
+    /// --out/<id>-<version>/, and verdict.json.
     Verdict {
         /// The base revision.
         #[arg(long)]
@@ -317,6 +316,9 @@ pub enum VendorCommand {
         /// The head revision.
         #[arg(long)]
         head: String,
+        /// The pull request's author (check 2).
+        #[arg(long)]
+        author: String,
         /// The archives of `check-pr --out`.
         #[arg(long)]
         archives: PathBuf,
@@ -424,12 +426,14 @@ fn listed_builder(root: &Path, digest: Option<&str>) -> anyhow::Result<builders:
 }
 
 /// Builds `archive` in `image` into `out`: the package, `THIRD-PARTY.txt` and
-/// `BUILDINFO.json`; checks 19 and 20.
+/// `BUILDINFO.json`, only if checks 17 (on what `cargo metadata` resolved), 19 and 20 pass;
+/// the checks.
 fn build_into(
     image: &str,
     builder: Option<&builders::Builder>,
     archive: &Path,
     crate_path: &str,
+    allowed_git: &[String],
     out: &Path,
     jobs: Option<u32>,
 ) -> anyhow::Result<Checks> {
@@ -441,17 +445,23 @@ fn build_into(
         image,
         archive,
         crate_path,
+        allowed_git,
         jobs,
         work.path(),
     )?;
     fs::create_dir_all(out)?;
-    let Some((name, package)) = &rebuilt.package else {
+    let Some((_, package)) = &rebuilt.package else {
         return Ok(rebuilt.checks);
     };
+    if !rebuilt.checks.failures().is_empty() {
+        return Ok(rebuilt.checks);
+    }
     let read = oncl_plugin::Package::read(package).context("the rebuilt package")?;
     let id = &read.manifest.id;
     let version = read.manifest.version.to_string();
-    fs::write(out.join(name), package)?;
+    // Named here, not by the container.
+    let name = format!("{id}-{version}.onclp");
+    fs::write(out.join(&name), package)?;
     fs::write(
         out.join("THIRD-PARTY.txt"),
         licenses::third_party(id, &version, &rebuilt.crates),
@@ -643,7 +653,16 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
                     (b.image(), Some(b))
                 }
             };
-            let checks = build_into(&image, listed.as_ref(), &source, &path, &out, jobs)?;
+            let allowed = pr::allowed_git_in(&root.join(layout.deny))?;
+            let checks = build_into(
+                &image,
+                listed.as_ref(),
+                &source,
+                &path,
+                &allowed,
+                &out,
+                jobs,
+            )?;
             print_checks(&checks.to_vec());
             fail_on(&checks.to_vec())?;
             println!("wrote {}", out.display());
@@ -785,7 +804,6 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
             head,
             author,
             out,
-            offline,
             repo,
             now: at,
         } => {
@@ -795,10 +813,10 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
                 repo: &repo,
                 base: &base,
                 head: &head,
-                author: author.as_deref(),
+                author: Some(&author),
                 now: now(at.as_deref())?,
                 layout,
-                fetcher: (!offline).then_some(&https as &dyn ArchiveFetcher),
+                fetcher: Some(&https as &dyn ArchiveFetcher),
                 out: out.as_deref(),
                 builtin_modules: None,
             })?;
@@ -818,9 +836,21 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
             jobs,
         } => {
             let listed = listed_builder(&root, Some(&builder))?;
-            let checks = build_into(&listed.image(), Some(&listed), &archive, &path, &out, jobs)?;
+            let allowed = pr::allowed_git_in(&root.join(layout.deny))?;
+            let checks = build_into(
+                &listed.image(),
+                Some(&listed),
+                &archive,
+                &path,
+                &allowed,
+                &out,
+                jobs,
+            )?;
             let results = checks.to_vec();
-            let report = serde_json::json!({"schema": SCHEMA, "checks": results});
+            let report = pr::RebuildReport {
+                schema: SCHEMA,
+                checks: results.clone(),
+            };
             fs::write(
                 out.join("rebuild.json"),
                 serde_json::to_string_pretty(&report)?,
@@ -843,19 +873,27 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
         VendorCommand::Verdict {
             base,
             head,
+            author,
             archives,
             rebuilt,
             provenance,
             out,
         } => {
-            let loaded = pr::load_pr(&root, &base, &head, &layout, OffsetDateTime::now_utc())?;
             let report = match provenance {
                 Some(file) => Some(serde_json::from_slice(&fs::read(&file)?)?),
                 None => None,
             };
             fs::create_dir_all(&out)?;
-            let checks = pr::verdict_job(
-                &loaded,
+            let verdict = pr::whole_verdict(
+                &pr::WholeOptions {
+                    repo: &root,
+                    base: &base,
+                    head: &head,
+                    author: &author,
+                    now: OffsetDateTime::now_utc(),
+                    layout,
+                    builtin_modules: None,
+                },
                 &VerdictInputs {
                     archives: &archives,
                     rebuilt: &rebuilt,
@@ -863,20 +901,17 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
                 },
                 &out,
             )?;
-            let results = checks.to_vec();
-            let verdict = serde_json::json!({
-                "schema": SCHEMA,
-                "ok": checks.failures().is_empty(),
-                "base": loaded.base_commit,
-                "head": loaded.head_commit,
-                "checks": results,
-            });
             fs::write(
                 out.join("verdict.json"),
                 serde_json::to_string_pretty(&verdict)?,
             )?;
             print_json(&verdict)?;
-            fail_on(&results)
+            fail_on(&verdict.checks)?;
+            if verdict.ok {
+                Ok(())
+            } else {
+                bail!("a required check did not pass")
+            }
         }
         VendorCommand::SrcDiff {
             old,

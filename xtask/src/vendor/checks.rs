@@ -592,6 +592,18 @@ pub fn source_rules(
     {
         findings.push(at(format!("source is not of the format: {e}")));
     }
+    // The path reaches command lines of the rebuild: letters, digits, `.`, `_` and `-` only.
+    let plain = parsed.path.split('/').all(|segment| {
+        segment
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    });
+    if !plain || parsed.path.starts_with('-') {
+        findings.push(at(format!(
+            "source.path {:?} has a character other than A-Z a-z 0-9 . _ - in a segment",
+            parsed.path
+        )));
+    }
     let builder = format!("sha256:{}", hex(&parsed.builder.0));
     if builders.get(&builder).is_none() {
         findings.push(at(format!(
@@ -981,6 +993,17 @@ pub fn cargo_config(tree: &Tree, crate_path: &str, path: &TargetPath) -> Vec<Fin
         .collect()
 }
 
+/// Why the crate `name` from `source` (a lock file's or `cargo metadata`'s) breaks check
+/// 17, if it does.
+pub fn source_finding(name: &str, source: &str, allowed_git: &[String]) -> Option<String> {
+    (!allowed_source(source, allowed_git)).then(|| {
+        format!(
+            "{name} comes from {source}: crates.io and the git repositories of deny.toml (with \
+             a commit) only"
+        )
+    })
+}
+
 /// Whether the lock file's `source` is allowed: crates.io, or `git+<allowed>[?…]#<commit>`.
 fn allowed_source(source: &str, allowed_git: &[String]) -> bool {
     if REGISTRIES.contains(&source) {
@@ -1077,41 +1100,35 @@ fn manifest_paths(manifest: &toml::Value) -> Vec<String> {
     out
 }
 
-/// Check 17: the workspace's `Cargo.lock` names crates.io and the allowed git repositories
-/// only, each git source with its commit; every `path` of every `Cargo.toml` of the archive
-/// stays inside `src/`.
-pub fn lock_sources(
-    tree: &Tree,
-    crate_path: &str,
-    allowed_git: &[String],
-    path: &TargetPath,
-) -> Vec<Finding> {
+/// Check 17: every `Cargo.lock` of the archive (the one Cargo uses may be any of them)
+/// names crates.io and the allowed git repositories only, each git source with its commit;
+/// every `Cargo.toml` reads, and every `path` in it stays inside `src/`.
+pub fn lock_sources(tree: &Tree, allowed_git: &[String], path: &TargetPath) -> Vec<Finding> {
     let at = |message: String| finding(17, format!("{path}: {message}"));
     let mut findings = Vec::new();
-    if let Some(dir) = workspace_dir(tree, crate_path) {
-        let lock = join(&dir, "Cargo.lock");
-        match toml_of(tree, &lock) {
-            None => findings.push(at(format!("src/{lock} is not a lock file"))),
-            Some(lock_file) => {
-                for package in lock_file
-                    .get("package")
-                    .and_then(toml::Value::as_array)
-                    .into_iter()
-                    .flatten()
-                {
-                    let name = package
-                        .get("name")
-                        .and_then(toml::Value::as_str)
-                        .unwrap_or("?");
-                    if let Some(source) = package.get("source").and_then(toml::Value::as_str)
-                        && !allowed_source(source, allowed_git)
-                    {
-                        findings.push(at(format!(
-                            "the lock file takes {name} from {source}: crates.io and the git \
-                             repositories of deny.toml (with a commit) only"
-                        )));
-                    }
-                }
+    for (lock, _) in tree.files() {
+        if !(lock == "Cargo.lock" || lock.ends_with("/Cargo.lock")) {
+            continue;
+        }
+        let Some(lock_file) = toml_of(tree, lock) else {
+            findings.push(at(format!("src/{lock} is not a lock file")));
+            continue;
+        };
+        for package in lock_file
+            .get("package")
+            .and_then(toml::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let name = package
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .unwrap_or("?");
+            if let Some(source) = package.get("source").and_then(toml::Value::as_str) {
+                findings.extend(
+                    source_finding(name, source, allowed_git)
+                        .map(|m| at(format!("src/{lock}: {m}"))),
+                );
             }
         }
     }
@@ -1121,6 +1138,7 @@ pub fn lock_sources(
         }
         let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
         let Some(manifest) = toml_of(tree, file) else {
+            findings.push(at(format!("src/{file} does not read as TOML")));
             continue;
         };
         for dep in manifest_paths(&manifest) {

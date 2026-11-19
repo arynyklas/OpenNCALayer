@@ -231,13 +231,15 @@ docker volume rm oncl-verify-cargo
 
 | Команда | Job | Проверки | Выход |
 |---|---|---|---|
-| `vendor check-pr --base <main> --head <голова PR> --author <логин> --out <каталог>` | `publisher-check` | 1–9, 11–18, 23, 24 (сначала 1 и 2; при их провале остальные `skip`) | JSON на stdout и `verdict.json`; архивы `<id>-<версия>.src.tar.gz` в `--out` |
+| `vendor check-pr --base <main> --head <голова PR> --author <логин> --out <каталог>` | `publisher-check` | 1–9, 11–18, 23, 24 (сначала 1 и 2; при их провале остальные `skip`); `--author` обязателен, архивы скачиваются всегда | JSON на stdout и `verdict.json`; архивы `<id>-<версия>.src.tar.gz` в `--out` |
 | `vendor provenance --base … --head … --archives <каталог> --out <файл>` | `provenance` | 25 | отчёт JSON по каждой новой цели с `vcs`: `confirmed`, `unverified`, `mismatch` |
-| `vendor rebuild --archive <файл> --path <крейт> --builder sha256:… --out <каталог>` | `rebuild` (matrix) | 19, 20 | пакет, `THIRD-PARTY.txt`, `rebuild.json` |
-| `vendor verdict --base … --head … --archives … --rebuilt … --provenance … --out <каталог>` | `verdict` | 21, 22, итог 25 | `verdict.json`, `<id>-<версия>/BUILDINFO.json` |
+| `vendor rebuild --archive <файл> --path <крейт> --builder sha256:… --out <каталог>` | `rebuild` (matrix) | 17 (по выводу `cargo metadata`), 19, 20 | `rebuild.json`; пакет и `THIRD-PARTY.txt` только если все три прошли |
+| `vendor verdict --base … --head … --author … --archives … --rebuilt … --provenance … --out <каталог>` | `verdict` | весь вердикт: заново 1–9, 11–18, 23, 24 (над переданными архивами), 17, 19, 20 из каждого `rebuild.json`, 21, 22, 25 | `verdict.json`, `<id>-<версия>/BUILDINFO.json` прошедших пакетов |
 | `vendor src-diff [--old <архив> --old-sha256 <hex>] --new <архив> --out <файл>` | `mirror` | — | `<id>-<версия>.src.diff` |
 
-`provenance` и `verdict` заново читают файл роли из git и сверяют архивы и пакеты с подписанными хешами сами: выходам предыдущих jobs они не верят. Код выхода не 0, если проверка не прошла.
+`provenance` и `verdict` заново читают файл роли из git и сверяют архивы и пакеты с подписанными хешами сами: выходам предыдущих jobs они не верят. Решение о слиянии принимается только по `ok` вердикта job `verdict`: он один сводит все проверки, и пакет без `rebuild.json` с пройденными 17, 19 и 20 рядом с ним не проходит. Код выхода не 0, если проверка не прошла.
+
+Проверка 1 судит не diff ветки, а то, что даст слияние: у головы PR и `main` ровно одна база слияния, между ней и головой нет коммитов слияния, а дерево `git merge-tree --write-tree main <голова>` (тот же merge-ort, что у squash-слияния GitHub) отличается от `main` ровно одним новым файлом роли. Проверка 17 читает каждый `Cargo.lock` архива, а при пересборке — каждый `source` из вывода `cargo metadata`. `source.path` состоит из сегментов `[A-Za-z0-9._-]` и не начинается с `-` (проверка 12). Workflow всё равно передаёт любое значение из PR (`path`, `id`, версию, теги) в `run:` только через `env:`, никогда через `${{ … }}` внутри команды. Проверка 18 — эвристика: она узнаёт сигнатуры wasm, ELF, PE, Mach-O, `ar`, zip и gzip, но не zstd, xz, bzip2, 7z или текст в base64; от подложенного готового кода защищает сравнение пересборки (19, 21).
 
 Вердикт `check-pr` (`schema` 1):
 

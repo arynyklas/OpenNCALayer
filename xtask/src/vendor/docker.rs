@@ -341,6 +341,14 @@ fn unique(step: &str) -> String {
 ///
 /// Anything else in `dir`.
 pub fn collect_package(dir: &Path) -> anyhow::Result<(String, Vec<u8>)> {
+    // The container may have made `out` a link to anywhere on the host.
+    if !fs::symlink_metadata(dir)
+        .with_context(|| format!("reading {}", dir.display()))?
+        .file_type()
+        .is_dir()
+    {
+        bail!("{} is not a directory", dir.display());
+    }
     let mut entries: Vec<PathBuf> = fs::read_dir(dir)
         .with_context(|| format!("reading {}", dir.display()))?
         .map(|e| e.map(|e| e.path()))
@@ -394,12 +402,14 @@ fn stage(archive: &Path, work: &Path) -> anyhow::Result<PathBuf> {
 }
 
 /// The fetch and the metadata of `archive`'s crate in `image`: the Cargo volume to build
-/// with, and the crates of the module (or why not, check 20).
+/// with, and the crates of the module (or why not, check 20). Every package `cargo metadata`
+/// resolves comes from crates.io or `allowed_git` (check 17 again, on what Cargo itself read).
 fn prepare<'e>(
     engine: &'e Engine,
     image: &str,
     input: &Path,
     crate_path: &str,
+    allowed_git: &[String],
     checks: &mut Checks,
 ) -> anyhow::Result<(Volume<'e>, Option<Vec<WasmCrate>>)> {
     let cargo = Volume::new(engine, unique("cargo"))?;
@@ -442,10 +452,25 @@ fn prepare<'e>(
         checks.fail(20, format!("cargo metadata failed:\n{}", tail(&ran.stderr)));
         return Ok((cargo, None));
     }
-    let crates = serde_json::from_slice::<Value>(&ran.stdout)
-        .context("cargo metadata printed no JSON")
-        .and_then(|m| licenses::wasm_crates(&m, &manifest_path(crate_path)));
-    match crates {
+    let metadata = match serde_json::from_slice::<Value>(&ran.stdout) {
+        Ok(metadata) => metadata,
+        Err(e) => {
+            checks.fail(20, format!("cargo metadata printed no JSON: {e}"));
+            return Ok((cargo, None));
+        }
+    };
+    for package in metadata["packages"].as_array().into_iter().flatten() {
+        if let Some(source) = package["source"].as_str() {
+            let name = package["name"].as_str().unwrap_or("?");
+            if let Some(why) = super::checks::source_finding(name, source, allowed_git) {
+                checks.fail(17, format!("cargo metadata: {why}"));
+            }
+        }
+    }
+    if !checks.failed(17) {
+        checks.pass(17);
+    }
+    match licenses::wasm_crates(&metadata, &manifest_path(crate_path)) {
         Ok(crates) => {
             checks.record(20, licenses::check_crates(&crates));
             Ok((cargo, Some(crates)))
@@ -468,14 +493,24 @@ pub fn rebuild(
     image: &str,
     archive: &Path,
     crate_path: &str,
+    allowed_git: &[String],
     jobs: Option<u32>,
     work: &Path,
 ) -> anyhow::Result<Rebuilt> {
     let mut out = Rebuilt::default();
     let input = stage(archive, work)?;
-    let (cargo, crates) = prepare(engine, image, &input, crate_path, &mut out.checks)?;
+    let (cargo, crates) = prepare(
+        engine,
+        image,
+        &input,
+        crate_path,
+        allowed_git,
+        &mut out.checks,
+    )?;
     out.crates = crates.unwrap_or_default();
-    if out.checks.failed(19) {
+    if !out.checks.failures().is_empty() {
+        out.checks
+            .skip(19, "the sources or their licences failed a check");
         return Ok(out);
     }
     let job = Job {
@@ -553,7 +588,8 @@ pub fn verify(
 ) -> anyhow::Result<()> {
     let input = stage(archive, work)?;
     let mut checks = Checks::new();
-    let (cargo, _) = prepare(engine, image, &input, crate_path, &mut checks)?;
+    // Anyone checks a published release: its sources were judged when it was taken in.
+    let (cargo, _) = prepare(engine, image, &input, crate_path, &[], &mut checks)?;
     if checks.failed(19) {
         bail!("{:?}", checks.to_vec());
     }

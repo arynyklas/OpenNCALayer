@@ -29,6 +29,31 @@ use xtask::vendor::{Layout, checks, diff, keys};
 use super::delegations::{online_world, t1};
 use super::{PASSPHRASE, World, has_git};
 
+/// What `vendor rebuild --out` leaves: the package and `rebuild.json`, checks 17, 19 and 20
+/// passed but for `failed`.
+fn rebuilt_into(dir: &Path, package: &[u8], failed: &[u8]) {
+    use xtask::vendor::verdict::Checks;
+    fs::create_dir_all(dir).unwrap();
+    fs::write(dir.join("kz.zeta.market-1.0.0.onclp"), package).unwrap();
+    let mut checks = Checks::new();
+    for id in [17, 19, 20] {
+        if failed.contains(&id) {
+            checks.fail(id, "failed");
+        } else {
+            checks.pass(id);
+        }
+    }
+    let report = pr::RebuildReport {
+        schema: 1,
+        checks: checks.into_vec(),
+    };
+    fs::write(
+        dir.join(pr::REBUILD_REPORT),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+}
+
 /// The world's layout: `repo` is `tuf/v1`.
 const LAYOUT: Layout = Layout {
     tuf: "repo",
@@ -490,7 +515,7 @@ fn a_synthetic_publisher_releases_and_the_pull_request_passes_every_check() {
     let rebuilt = tempfile::tempdir().unwrap();
     let matrix = rebuilt.path().join("rebuild-0");
     fs::create_dir_all(&matrix).unwrap();
-    fs::write(matrix.join("kz.zeta.market-1.0.0.onclp"), &r.package).unwrap();
+    rebuilt_into(&matrix, &r.package, &[]);
     let loaded = pr::load_pr(&r.w.p(""), "main", "pr", &LAYOUT, t_check()).unwrap();
     let final_dir = tempfile::tempdir().unwrap();
     let checks = pr::verdict_job(
@@ -529,6 +554,37 @@ fn a_synthetic_publisher_releases_and_the_pull_request_passes_every_check() {
         first.contains("new file") && first.contains("+++ b/src/crates/p/plugin.toml"),
         "{first}"
     );
+    // The whole verdict in one job: check-pr again over the handed-over archive, the rebuild
+    // report, 21 and 22.
+    let whole = |rebuilt: &Path| {
+        pr::whole_verdict(
+            &pr::WholeOptions {
+                repo: &r.w.p(""),
+                base: "main",
+                head: "pr",
+                author: "zeta-release",
+                now: t_check(),
+                layout: LAYOUT,
+                builtin_modules: Some(Vec::new()),
+            },
+            &VerdictInputs {
+                archives: out.path(),
+                rebuilt,
+                provenance: None,
+            },
+            final_dir.path(),
+        )
+        .unwrap()
+    };
+    let verdict = whole(rebuilt.path());
+    assert!(verdict.ok, "{:#?}", verdict.checks);
+    // A rebuild whose licences failed (check 20) fails the whole verdict, the package there
+    // or not.
+    let refused = tempfile::tempdir().unwrap();
+    rebuilt_into(&refused.path().join("rebuild-0"), &r.package, &[20]);
+    let verdict = whole(refused.path());
+    assert_eq!(failed(&verdict), [20], "{:#?}", verdict.checks);
+    assert!(!verdict.ok);
     // A tampered rebuild is check 21.
     fs::write(
         matrix.join("kz.zeta.market-1.0.0.onclp"),
@@ -549,6 +605,82 @@ fn a_synthetic_publisher_releases_and_the_pull_request_passes_every_check() {
         checks.failures().iter().map(|c| c.0).collect::<Vec<_>>(),
         [21, 22]
     );
+}
+
+#[test]
+fn a_head_whose_merge_is_not_its_diff_fails_check_1() {
+    if !has_git() {
+        return;
+    }
+    let r = released();
+    let root = r.w.p("");
+    let at = t_check() - Duration::minutes(30);
+    // main moves on after a fork point F: an owner's change P.
+    git_at(&root, &["checkout", "-q", "-b", "side", "main"], None);
+    fs::write(root.join("side.txt"), "side\n").unwrap();
+    git_at(&root, &["add", "-A"], None);
+    git_at(&root, &["commit", "-q", "-m", "side"], Some(at));
+    git_at(&root, &["checkout", "-q", "main"], None);
+    fs::write(root.join("owner.txt"), "the owner's change\n").unwrap();
+    git_at(&root, &["add", "-A"], None);
+    git_at(&root, &["commit", "-q", "-m", "owner"], Some(at));
+    git_at(
+        &root,
+        &["merge", "-q", "--no-ff", "-m", "merge side", "side"],
+        Some(at),
+    );
+    // A head with two parents, the merge's own, whose tree lacks the owner's change: its
+    // diff from `git merge-base` is the role file alone, but the squash would revert.
+    let parents: Vec<String> = git_at(&root, &["rev-parse", "main^1", "main^2"], None)
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    git_at(&root, &["checkout", "-q", "-B", "crafted", "side"], None);
+    fs::create_dir_all(root.join("repo/metadata")).unwrap();
+    fs::write(root.join(role_path(1)), &r.role).unwrap();
+    git_at(&root, &["add", "-A"], None);
+    let tree = git_at(&root, &["write-tree"], None);
+    let commit = git_at(
+        &root,
+        &[
+            "commit-tree",
+            &tree,
+            "-p",
+            &parents[0],
+            "-p",
+            &parents[1],
+            "-m",
+            "crafted",
+        ],
+        Some(at),
+    );
+    git_at(&root, &["checkout", "-q", "main"], None);
+    let verdict = check(
+        &r,
+        "main",
+        &commit,
+        "zeta-release",
+        &table(&[(FETCH, &r.archive)]),
+        t_check(),
+    );
+    assert_eq!(failed(&verdict), [1], "{:#?}", verdict.checks);
+    // Rebased onto main, the same file passes check 1.
+    branch(
+        &r.w,
+        "rebased",
+        "main",
+        &[(role_path(1), r.role.clone())],
+        t_check() - Duration::minutes(5),
+    );
+    let verdict = check(
+        &r,
+        "main",
+        "rebased",
+        "zeta-release",
+        &table(&[(FETCH, &r.archive)]),
+        t_check(),
+    );
+    assert!(verdict.ok, "{:#?}", verdict.checks);
 }
 
 #[test]
@@ -902,7 +1034,7 @@ fn the_verdict_job_holds_the_capabilities_and_the_named_revision_to_the_release(
     fs::create_dir_all(&archives).unwrap();
     fs::create_dir_all(&rebuilt).unwrap();
     fs::write(archives.join("kz.zeta.market-1.0.0.src.tar.gz"), &archive).unwrap();
-    fs::write(rebuilt.join("kz.zeta.market-1.0.0.onclp"), &pkg).unwrap();
+    rebuilt_into(&rebuilt, &pkg, &[]);
     let loaded = pr::load_pr(&w.p(""), "main", "caps", &LAYOUT, t_check()).unwrap();
     let inputs = VerdictInputs {
         archives: &archives,
@@ -933,7 +1065,7 @@ fn the_verdict_job_holds_the_capabilities_and_the_named_revision_to_the_release(
         at,
     );
     fs::write(archives.join("kz.zeta.market-1.0.0.src.tar.gz"), &r.archive).unwrap();
-    fs::write(rebuilt.join("kz.zeta.market-1.0.0.onclp"), &r.package).unwrap();
+    rebuilt_into(&rebuilt, &r.package, &[]);
     let loaded = pr::load_pr(&w.p(""), "main", "vcs", &LAYOUT, t_check()).unwrap();
     let report = |found: Provenance| ProvenanceReport {
         schema: 1,
