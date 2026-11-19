@@ -1,7 +1,7 @@
 //! Local synthetic-only acceptance harness; never reads operator private keys.
-#[path = "../tests/support/batch.rs"]
+#[path = "../tests/all/support/batch.rs"]
 mod batch_support;
-#[path = "../tests/support/mod.rs"]
+#[path = "../tests/all/support/mod.rs"]
 mod support;
 use oncl_core::keys::AppliedState;
 use oncl_server::audit::{AuditConfig, AuditHealth, DurableAuditGuard, FaultPoint, RecordKind};

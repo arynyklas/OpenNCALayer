@@ -1,8 +1,7 @@
 //! A request the server does not finish (its deadline runs out, or the client goes away)
 //! must leave one line in the server's own log: the client sees a typed refusal it may
 //! never read, or nothing. Real `oncl-server` binary, real socket, real stderr.
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 use std::{
     collections::BTreeMap,

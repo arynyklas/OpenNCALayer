@@ -1,8 +1,7 @@
 //! A response stream the server aborts after it started (a first-fatal resource failure:
 //! the client sees only a lost response) must still leave the typed cause in the server's
 //! own log. Real `oncl-server` binary, real socket, real stderr.
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 use std::{
     io::{Read, Write},

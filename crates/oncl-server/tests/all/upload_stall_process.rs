@@ -2,8 +2,7 @@
 //! capacity of other clients until the whole operation deadline. The body is captured in its
 //! own phase with its own limit (`max_uploads`). Real `oncl-server` process, real sockets,
 //! scaled timings.
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 use std::{
     io::{Read, Write},

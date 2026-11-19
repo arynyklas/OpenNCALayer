@@ -1,6 +1,4 @@
-#[path = "support/batch.rs"]
-mod batch_support;
-mod support;
+use crate::{batch_support, support};
 use oncl_core::keys::{
     AppliedState, KeyId, KeyUseEvent, KeyUseGuard, KeyUseOutcome, KeyUseReceipt,
 };
