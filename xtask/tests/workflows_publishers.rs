@@ -171,7 +171,15 @@ fn check_publisher_pr(text: &str) -> Vec<String> {
             event["paths"]
         ));
     }
-    if event["types"] != json!(["opened", "synchronize", "reopened", "ready_for_review"]) {
+    if event["types"]
+        != json!([
+            "opened",
+            "edited",
+            "synchronize",
+            "reopened",
+            "ready_for_review"
+        ])
+    {
         bad.push(format!(
             "unexpected types of pull_request_target: {}",
             event["types"]
@@ -408,6 +416,8 @@ fn check_publisher_pr(text: &str) -> Vec<String> {
             && run.contains("DOCKER-USER")
             && run.contains("ip6tables -I DOCKER-USER -i oncl-vcs -j DROP")
             && run.contains("iptables -I INPUT -i oncl-vcs -j DROP")
+            && run.contains("168.63.129.16/32")
+            && run.contains("{{.Server.Version}}")
     });
     let check25 = step_where(provenance, run_has("vendor provenance"));
     match (network, check25) {
@@ -482,6 +492,11 @@ fn check_publisher_pr(text: &str) -> Vec<String> {
             str_of(mirror, "if")
         ));
     }
+    if mirror["concurrency"]["group"] != "publisher-mirror"
+        || mirror["concurrency"]["cancel-in-progress"] != "false"
+    {
+        bad.push("mirror may run beside another mirror".to_owned());
+    }
     let create = step_where(mirror, run_has("gh release create"));
     let attest = step_where(mirror, uses_starts("actions/attest-build-provenance@"));
     let publish = step_where(mirror, run_has("--draft=false"));
@@ -494,6 +509,22 @@ fn check_publisher_pr(text: &str) -> Vec<String> {
             }
             if !in_order(drafts, "sha256sum", "gh release create") {
                 bad.push("mirror does not hash the files before the release".to_owned());
+            }
+            for bound in [
+                "!= \"$third_party_sha256\"",
+                "!= \"$buildinfo_sha256\"",
+                "!= \"$diff_sha256\"",
+            ] {
+                if !in_order(drafts, bound, "gh release create") {
+                    bad.push(format!(
+                        "mirror does not compare {bound} before the release"
+                    ));
+                }
+            }
+            if !in_order(drafts, "'.isImmutable == true'", "published already") {
+                bad.push(
+                    "mirror keeps a published release without checking it is immutable".to_owned(),
+                );
             }
             let check = str_of(&steps(mirror)[p], "run");
             if !in_order(check, "gh release download", "--draft=false")
@@ -529,6 +560,12 @@ fn check_publisher_pr(text: &str) -> Vec<String> {
             && run.contains("--squash")
             && run.contains("--match-head-commit \"$HEAD_SHA\"")
             && str_of(&s["env"], "HEAD_SHA") == HEAD
+            && in_order(
+                run,
+                ".baseRefName == \"main\" and .headRefOid == $head and .state == \"OPEN\" and .isDraft == false",
+                "gh pr merge",
+            )
+            && in_order(run, "[ \"$main\" = \"$GITHUB_SHA\" ]", "gh pr merge")
     });
     let pages = step_where(merge, run_has("gh workflow run pages.yml"));
     if !matches!((wait, merged, pages), (Some(w), Some(m), Some(p)) if w < m && m < p) {
@@ -1016,6 +1053,46 @@ fn a_merge_without_its_guards_is_found() {
             "        run: echo no pages\n",
         ),
         "then start Pages",
+    );
+    assert_found(
+        &mutated(
+            FILE,
+            "          [ \"$main\" = \"$GITHUB_SHA\" ] || fail",
+            "          true || fail",
+        ),
+        "merge the checked head",
+    );
+    assert_found(
+        &mutated(FILE, ".baseRefName == \"main\" and ", ""),
+        "merge the checked head",
+    );
+    assert_found(
+        &mutated(FILE, "[opened, edited, synchronize", "[opened, synchronize"),
+        "unexpected types",
+    );
+    assert_found(
+        &mutated(
+            FILE,
+            "      group: publisher-mirror\n",
+            "      group: mirror-${{ github.run_id }}\n",
+        ),
+        "mirror may run beside another mirror",
+    );
+    assert_found(
+        &mutated(
+            FILE,
+            " || [ \"$(hex \"$dir/BUILDINFO.json\")\" != \"$buildinfo_sha256\" ]",
+            "",
+        ),
+        "does not compare != \"$buildinfo_sha256\"",
+    );
+    assert_found(
+        &mutated(
+            FILE,
+            " 168.63.129.16/32; do\n            sudo iptables -I",
+            "; do\n            sudo iptables -I",
+        ),
+        "firewalled bridge before check 25",
     );
 }
 

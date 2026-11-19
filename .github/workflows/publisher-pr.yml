@@ -40,15 +40,16 @@ name: Publisher PR
 # timestamp).
 on:
   pull_request_target:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited`: a pull request moved to another base cancels the run of the old one.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
     branches: [main]
     paths:
       - "tuf/v1/metadata/*.pub-*.json"
 
 permissions: {}
 
-# One run per pull request: a new push cancels the run of the old head. A draft release left
-# by a cancelled `mirror` is deleted and made again by the next run.
+# One run per pull request: a new push or a new base cancels the run of the old one. A draft
+# release left by a cancelled `mirror` is deleted and made again by the next run.
 concurrency:
   group: publisher-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -163,11 +164,21 @@ jobs:
           path: ${{ runner.temp }}/archives
       - name: The network of git, the internet only
         run: |
+          # Docker 28 and later dial every upstream resolver of the host from the host's own
+          # namespace, so the container still resolves names through 127.0.0.11 with the
+          # Azure host address 168.63.129.16 dropped below; older Docker would dial it from
+          # the container and lose DNS.
+          major="$(docker version --format '{{.Server.Version}}' | cut -d. -f1)"
+          if ! [[ "$major" =~ ^[0-9]+$ ]] || [ "$major" -lt 28 ]; then
+            echo "::error::Docker $major is older than 28: check 25 needs Docker's resolver on the host side"
+            exit 1
+          fi
           docker network create --driver bridge --opt com.docker.network.bridge.name=oncl-vcs \
             --subnet 172.31.250.0/24 oncl-vcs
-          # Only new outgoing connections to the public internet; nothing to the runner and its networks.
+          # Only new outgoing connections to the public internet; nothing to the runner and its
+          # networks, and not the Azure host (WireServer) either.
           for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 \
-                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4; do
+                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4 168.63.129.16/32; do
             sudo iptables -I DOCKER-USER -i oncl-vcs -d "$net" -j DROP
           done
           sudo iptables -I INPUT -i oncl-vcs -j DROP
@@ -193,7 +204,7 @@ jobs:
           sudo iptables -D INPUT -i oncl-vcs -j DROP || true
           sudo ip6tables -D DOCKER-USER -i oncl-vcs -j DROP || true
           for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 \
-                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4; do
+                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4 168.63.129.16/32; do
             sudo iptables -D DOCKER-USER -i oncl-vcs -d "$net" -j DROP || true
           done
           docker network rm oncl-vcs || true
@@ -235,8 +246,10 @@ jobs:
           CRATE_PATH: ${{ matrix.target.path }}
           BUILDER: ${{ matrix.target.builder }}
         run: |
-          if ! [[ "$ARCHIVE" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.src\.tar\.gz$ && "$BUILDER" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::unexpected archive $ARCHIVE or builder $BUILDER"
+          segment='[A-Za-z0-9._][A-Za-z0-9._-]*'
+          if ! [[ "$ARCHIVE" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.src\.tar\.gz$ && "$BUILDER" =~ ^sha256:[0-9a-f]{64}$ \
+            && ( -z "$CRATE_PATH" || "$CRATE_PATH" =~ ^$segment(/$segment)*$ ) && "/$CRATE_PATH/" != */../* ]]; then
+            echo "::error::unexpected archive $ARCHIVE, crate path $CRATE_PATH or builder $BUILDER"
             exit 1
           fi
           target/debug/xtask vendor rebuild --archive "$RUNNER_TEMP/archives/$ARCHIVE" \
@@ -346,15 +359,45 @@ jobs:
             target/debug/xtask vendor src-diff --old "$previous" --old-sha256 "$sha256" \
               --new "$RUNNER_TEMP/in/archives/$stem.src.tar.gz" --out "$out/$stem/$stem.src.diff"
           done 3< <(jq -r '.new_targets[] | [.id, .version, (.previous.archive_url // ""), (.previous.archive_sha256 // "")] | @tsv' "$out/verdict.json")
+      # Every file `mirror` puts into a release is bound here by its sha256: THIRD-PARTY.txt of
+      # the rebuild beside the rebuilt package, BUILDINFO.json and .src.diff of this job.
       - name: The outputs of the verdict
         id: derived
         run: |
           verdict="$RUNNER_TEMP/verdict/verdict.json"
+          publisher="$(jq -r '.publisher' "$verdict")"
+          role_version="$(jq -r '.role_version' "$verdict")"
+          if ! [[ "$publisher" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && "$role_version" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::unexpected publisher $publisher or role version $role_version"
+            exit 1
+          fi
+          hex() { sha256sum "$1" | cut -d' ' -f1; }
+          targets='[]'
+          while IFS= read -r -u 3 target; do
+            stem="$(jq -r '.id + "-" + .version' <<< "$target")"
+            if ! [[ "$stem" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+              echo "::error::unexpected package $stem"
+              exit 1
+            fi
+            mapfile -t found < <(find "$RUNNER_TEMP/in/rebuilt" -type f -name "$stem.onclp")
+            if [ "${#found[@]}" -ne 1 ]; then
+              echo "::error::${#found[@]} rebuilt files $stem.onclp"
+              exit 1
+            fi
+            third_party="$(hex "$(dirname "${found[0]}")/THIRD-PARTY.txt")"
+            buildinfo="$(hex "$RUNNER_TEMP/verdict/$stem/BUILDINFO.json")"
+            diff=""
+            if [ -f "$RUNNER_TEMP/verdict/$stem/$stem.src.diff" ]; then
+              diff="$(hex "$RUNNER_TEMP/verdict/$stem/$stem.src.diff")"
+            fi
+            targets="$(jq -c --argjson t "$target" --arg tp "$third_party" --arg bi "$buildinfo" --arg d "$diff" \
+              '. + [$t + {third_party_sha256: $tp, buildinfo_sha256: $bi, diff_sha256: $d}]' <<< "$targets")"
+          done 3< <(jq -c '.new_targets[] | {id, version, length, sha256, tag, package, archive, archive_sha256: .source.archive_sha256, archive_length: .source.archive_length, diff: (.previous != null)}' "$verdict")
           {
             echo "ok=$(jq -c '.ok' "$verdict")"
-            echo "publisher=$(jq -r '.publisher' "$verdict")"
-            echo "role_version=$(jq -r '.role_version' "$verdict")"
-            echo "targets=$(jq -c '[.new_targets[] | {id, version, length, sha256, tag, package, archive, archive_sha256: .source.archive_sha256, archive_length: .source.archive_length, diff: (.previous != null)}]' "$verdict")"
+            echo "publisher=$publisher"
+            echo "role_version=$role_version"
+            echo "targets=$targets"
           } | tee -a "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -365,14 +408,19 @@ jobs:
 
   # The copies (docs/design/publishers.md, «Копии пакетов в наших Releases»): one immutable
   # release `pub-<publisher>-<sha256>` per new package, published complete before the merge.
-  # For each: the files hashed again against what `verdict` derived; a published release with
-  # the same package and archive is kept, with other bytes the run stops; a draft left by an
-  # interrupted run is deleted; then a draft with the files, the build attestation of the
-  # package, the draft's files downloaded through the API and compared, publication. No
-  # checkout, no cargo; `gh release upload` into a published release never happens.
+  # For each: every file hashed again against what `verdict` derived; a published release with
+  # the same package and archive is kept if it is immutable, with other bytes the run stops; a
+  # draft left by an interrupted run is deleted by its id; then a draft with the files, the
+  # build attestation of the package, the draft's files downloaded through the API and
+  # compared, publication. No checkout, no cargo; `gh release upload` into a published release
+  # never happens. One `mirror` at a time in the repository: two pull requests with the same
+  # package share its tag.
   mirror:
     needs: verdict
     if: needs.verdict.outputs.ok == 'true'
+    concurrency:
+      group: publisher-mirror
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -415,7 +463,7 @@ jobs:
           fi
           jq -e 'type == "array" and length <= 8' <<< "$TARGETS" > /dev/null || fail "unexpected targets"
           # Read from descriptor 3: no command in the loop takes the list from standard input.
-          while IFS=$'\t' read -r -u 3 id version length sha256 tag package archive archive_sha256 archive_length diff; do
+          while IFS=$'\t' read -r -u 3 id version length sha256 tag package archive archive_sha256 archive_length diff third_party_sha256 buildinfo_sha256 diff_sha256; do
             stem="$id-$version"
             if ! [[ "$stem" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$sha256" =~ ^[0-9a-f]{64}$ \
               && "$archive_sha256" =~ ^[0-9a-f]{64}$ && "$length" =~ ^[0-9]+$ && "$archive_length" =~ ^[0-9]+$ ]]; then
@@ -443,21 +491,31 @@ jobs:
               fi
               cp -- "$file" "$dir/"
             done
-            # The bytes that go out are the signed ones, hashed here.
+            # The bytes that go out are the ones `verdict` bound, hashed here.
             if [ "$(hex "$dir/$package")" != "$sha256" ] || [ "$(stat -c %s "$dir/$package")" != "$length" ]; then
               fail "$package is not the signed package"
             fi
             if [ "$(hex "$dir/$archive")" != "$archive_sha256" ] || [ "$(stat -c %s "$dir/$archive")" != "$archive_length" ]; then
               fail "$archive is not the signed archive"
             fi
-            if view="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft 2> "$root/view.err")"; then
+            if [ "$(hex "$dir/THIRD-PARTY.txt")" != "$third_party_sha256" ] || [ "$(hex "$dir/BUILDINFO.json")" != "$buildinfo_sha256" ]; then
+              fail "THIRD-PARTY.txt or BUILDINFO.json of $stem is not the one verdict hashed"
+            fi
+            if [ "$diff" = true ] && [ "$(hex "$dir/$stem.src.diff")" != "$diff_sha256" ]; then
+              fail "$stem.src.diff is not the one verdict hashed"
+            fi
+            if view="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json databaseId,isDraft,isImmutable 2> "$root/view.err" < /dev/null)"; then
               if [ "$(jq -r '.isDraft' <<< "$view")" = true ]; then
+                id_of_draft="$(jq -r '.databaseId' <<< "$view")"
+                [[ "$id_of_draft" =~ ^[1-9][0-9]*$ ]] || fail "unexpected release id $id_of_draft"
                 echo "$tag: a draft left by an interrupted run, deleted"
-                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+                gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id_of_draft" < /dev/null
               else
+                jq -e '.isImmutable == true' <<< "$view" > /dev/null \
+                  || fail "$tag is published but not immutable: enable release immutability (docs/dev/release.md, section 1); it needs a look by hand"
                 got="$root/existing/$tag"
                 mkdir -p "$got"
-                gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$got" --pattern "$package" --pattern "$archive" \
+                gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$got" --pattern "$package" --pattern "$archive" < /dev/null \
                   || fail "$tag is published without $package or $archive: it needs a look by hand"
                 if [ "$(hex "$got/$package")" = "$sha256" ] && [ "$(hex "$got/$archive")" = "$archive_sha256" ]; then
                   echo "$tag: published already with this package and archive"
@@ -474,7 +532,7 @@ jobs:
               --target "$GITHUB_SHA" --title "$PUBLISHER: $id $version" --notes "$notes" "$dir"/*
             cp -- "$dir/$package" "$root/attest/"
             echo "$tag" >> "$root/created"
-          done 3< <(jq -r '.[] | [.id, .version, .length, .sha256, .tag, .package, .archive, .archive_sha256, .archive_length, .diff] | @tsv' <<< "$TARGETS")
+          done 3< <(jq -r '.[] | [.id, .version, .length, .sha256, .tag, .package, .archive, .archive_sha256, .archive_length, .diff, .third_party_sha256, .buildinfo_sha256, (if .diff_sha256 == "" then "-" else .diff_sha256 end)] | @tsv' <<< "$TARGETS")
           echo "created=$(wc -l < "$root/created")" >> "$GITHUB_OUTPUT"
       - name: Build provenance of the packages
         if: steps.drafts.outputs.created != '0'
@@ -510,7 +568,9 @@ jobs:
 
   # The merge, after the copies exist: the required checks of the head (the status `check` of
   # ci.yml) for at most 30 minutes, then a squash merge of exactly the head that was checked,
-  # then Pages (a merge with GITHUB_TOKEN starts no `push` workflow). No checkout, no cargo.
+  # into `main` exactly as the checks saw it, then Pages (a merge with GITHUB_TOKEN starts no
+  # `push` workflow). No checkout, no cargo. A run whose `main` has moved on fails here: a
+  # re-run keeps the old commits, so the publisher pushes again (an empty commit will do).
   merge:
     needs: [verdict, mirror]
     runs-on: ubuntu-24.04
@@ -531,7 +591,7 @@ jobs:
           # fork waits for the owner to approve the run.
           until [ -n "$(gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --required --json name --jq '.[].name' 2> /dev/null)" ]; do
             if [ "$SECONDS" -ge "$end" ]; then
-              echo "::error::no required check on the head after 30 minutes; run this job again once CI runs"
+              echo "::error::no required check on the head after 30 minutes; once CI runs on it, push again"
               exit 1
             fi
             sleep 30
@@ -550,6 +610,18 @@ jobs:
           PUBLISHER: ${{ needs.verdict.outputs.publisher }}
           ROLE_VERSION: ${{ needs.verdict.outputs.role_version }}
         run: |
+          fail() { echo "::error::$*"; exit 1; }
+          if ! [[ "$PUBLISHER" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && "$ROLE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+            fail "unexpected publisher $PUBLISHER or role version $ROLE_VERSION"
+          fi
+          # The pull request is still the one checked: open, not a draft, into main, same head.
+          pr="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json baseRefName,headRefOid,state,isDraft)"
+          jq -e --arg head "$HEAD_SHA" \
+            '.baseRefName == "main" and .headRefOid == $head and .state == "OPEN" and .isDraft == false' <<< "$pr" > /dev/null \
+            || fail "the pull request changed since the checks ($pr): push again"
+          # main is still the commit every check ran against.
+          main="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          [ "$main" = "$GITHUB_SHA" ] || fail "main moved from $GITHUB_SHA to $main since the checks: push again to check against the new main"
           gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$HEAD_SHA" \
             --subject "publisher $PUBLISHER: role version $ROLE_VERSION" \
             --body "Merged by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
