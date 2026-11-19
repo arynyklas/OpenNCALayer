@@ -742,6 +742,10 @@ enum Unreadable {
     /// and marked delete-pending between two polls is never listed at all. The
     /// guarantee is therefore "no needle in any file the watcher could open".
     /// `SpoolWatch::finish` requires every such path to be gone.
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "only Windows marks files delete-pending")
+    )]
     DeletePending,
     /// Present and not delete-pending: a real failure once the deadline passes.
     Present(String),
@@ -844,6 +848,10 @@ impl SpoolWatch {
     fn start_with(root: PathBuf, needles: Vec<Vec<u8>>, scanning: bool) -> Self {
         Self::start_full(root, needles, scanning, UNREADABLE_DEADLINE)
     }
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the delete-pending tests run on Windows only")
+    )]
     /// Like `start`, but fails an unreadable-while-present file after `deadline`.
     pub fn start_with_deadline(root: PathBuf, needles: Vec<Vec<u8>>, deadline: Duration) -> Self {
         Self::start_full(root, needles, true, deadline)
@@ -938,6 +946,10 @@ impl SpoolWatch {
     pub fn seen(&self) -> bool {
         self.hit.load(Ordering::SeqCst)
     }
+    #[cfg_attr(
+        not(windows),
+        expect(dead_code, reason = "the delete-pending tests run on Windows only")
+    )]
     /// Number of DISTINCT scratch paths seen delete-pending (listed, counted, skipped).
     pub fn delete_pending_count(&self) -> usize {
         self.delete_pending.lock().unwrap().len()
