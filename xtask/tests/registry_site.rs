@@ -206,15 +206,10 @@ fn fixture_publishers_data_matches_expectations() {
         format!("https://github.com/arynyklas/OpenNCALayer/releases/tag/pub-acme-{sha}")
     );
     assert_eq!(v["license"], "Apache-2.0");
-    // The oldest version of the role has no previous one to differ from.
-    assert_eq!(v["diff_url"], Value::Null);
-    assert_eq!(
-        market["versions"][1]["diff_url"],
-        format!(
-            "https://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-{}/kz.acme.market-1.1.0.src.diff",
-            market["versions"][1]["sha256"].as_str().unwrap()
-        )
-    );
+    // No `.src.diff` link: the role does not tell whether the release has one.
+    assert_eq!(v.get("diff_url"), None);
+    // A name with a bidi override is left out.
+    assert!(plugins.get("kz.acme.bidi").is_none());
     // The crate's directory is quoted for the shell, whatever it holds.
     let verify = market["versions"][1]["verify"].as_str().unwrap();
     assert!(
@@ -447,7 +442,7 @@ fn zola_site_lists_publishers() {
         let list = read(&format!("{prefix}publishers/index.html"));
         for name in ["acme", "olden", "gone"] {
             assert!(
-                list.contains(&format!("<tr id=\"{name}\">")),
+                list.contains(&format!("<tr id=\"pub-{name}\">")),
                 "{prefix}{name}"
             );
             assert!(

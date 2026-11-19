@@ -282,6 +282,11 @@ mod tests {
             warnings.iter().any(|w| w.contains("kz.acme.rogue")),
             "{warnings:?}"
         );
+        // And the one whose name has a bidi override.
+        assert!(
+            warnings.iter().any(|w| w.contains("kz.acme.bidi") && w.contains("name.ru")),
+            "{warnings:?}"
+        );
         let pages = out.path().join("content/plugins");
         for short in ["alpha", "gamma", "hostile"] {
             let expected =

@@ -58,7 +58,7 @@ pub fn build(
     let src = out.join("src");
     let public = out.join("public");
     for warning in generate(root, inputs, &src)? {
-        println!("::warning::{warning}");
+        println!("::warning::{}", workflow_escaped(&warning));
     }
     let zola = match zola {
         Some(zola) => zola.to_path_buf(),
@@ -73,4 +73,24 @@ pub fn build(
         report.links
     );
     Ok(public)
+}
+
+/// `text` as the message of a GitHub workflow command: `%`, `\r` and `\n` escaped, so a
+/// warning that quotes an input (a publisher's role) cannot end the line and start another
+/// command.
+fn workflow_escaped(text: &str) -> String {
+    text.replace('%', "%25")
+        .replace('\r', "%0D")
+        .replace('\n', "%0A")
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn warnings_cannot_start_a_workflow_command() {
+        assert_eq!(
+            super::workflow_escaped("a\n::error::b\r%"),
+            "a%0A::error::b%0D%25"
+        );
+    }
 }

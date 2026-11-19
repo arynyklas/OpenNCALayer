@@ -288,7 +288,7 @@ pub fn site_data(
     let mut replaced_by: BTreeMap<&str, ReplacedBy> = BTreeMap::new();
     for site in sites.iter().filter(|s| s.publisher.is_active()) {
         for (port, id) in &site.publisher.supersedes {
-            if publishers.plugins.contains_key(id) {
+            if publishers.plugins.get(id).is_some_and(|p| !p.channels.is_empty()) {
                 replaced_by.insert(
                     port.as_str(),
                     ReplacedBy {

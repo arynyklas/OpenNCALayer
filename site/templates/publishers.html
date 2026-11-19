@@ -16,7 +16,7 @@
 <tbody>
 {%- for name in data.publishers.order[lang] %}
 {%- set publisher = data.publishers.list[name] %}
-<tr id="{{ publisher.name }}">
+<tr id="pub-{{ publisher.name }}">
 <th scope="row"><a href="{{ get_url(path='@/publishers/' ~ publisher.name ~ '.md', lang=lang) }}">{{ publisher.display[lang] }}</a></th>
 <td><code>{{ publisher.id_prefix }}</code></td>
 <td>{% include "parts/publisher_state.html" %}</td>

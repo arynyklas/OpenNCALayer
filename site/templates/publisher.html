@@ -78,7 +78,7 @@
 <td>{{ v.min_core }}</td>
 <td><a href="{{ v.package_url }}">.onclp</a>, {{ v.size }} {{ trans(key="bytes", lang=lang) }}<br><code class="hash">{{ v.sha256 }}</code></td>
 <td><a href="{{ v.source_url }}">{{ v.source_name }}</a> · {{ v.license }}<br><code class="hash">{{ v.source_sha256 }}</code></td>
-<td><a href="{{ v.buildinfo_url }}">BUILDINFO.json</a>{% if v.diff_url %}, <a href="{{ v.diff_url }}">{{ trans(key="file_diff", lang=lang) }}</a>{% endif %}, <a href="{{ v.release_url }}">{{ trans(key="file_release", lang=lang) }}</a></td>
+<td><a href="{{ v.buildinfo_url }}">BUILDINFO.json</a>, <a href="{{ v.release_url }}">{{ trans(key="file_release", lang=lang) }}</a></td>
 </tr>
 {%- endfor %}
 </tbody>
@@ -103,5 +103,5 @@
 <p class="nodata">{{ trans(key="publisher_no_plugins", lang=lang) }}</p>
 {%- endif %}
 {%- endif %}
-<p><a href="{{ get_url(path='@/publishers/_index.md', lang=lang) }}#{{ publisher.name }}">{{ trans(key="publisher_back", lang=lang) }}</a></p>
+<p><a href="{{ get_url(path='@/publishers/_index.md', lang=lang) }}#pub-{{ publisher.name }}">{{ trans(key="publisher_back", lang=lang) }}</a></p>
 {% endblock main %}

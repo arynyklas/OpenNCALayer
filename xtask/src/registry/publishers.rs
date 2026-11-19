@@ -17,6 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use oncl_flows::capabilities::capability_text;
+use oncl_plugin::operations::is_invisible;
 use oncl_plugin::{Capabilities, is_symbolic_name};
 use oncl_update::Channel;
 #[cfg(doc)]
@@ -77,8 +78,18 @@ pub fn load(dir: &Path, repo: Option<&Path>) -> anyhow::Result<(Vec<SitePublishe
         let releases = match (publisher.state, newest.get(&role), repo) {
             (State::Active | State::Retired, Some(version), Some(repo)) => {
                 let what = oncl_update::tuf::layout::delegated_path(*version, &role);
-                let bytes = read_limited(&repo.join(&what), Limits::default().delegated)?;
-                role_releases(publisher, &bytes, &what, &mut warnings)?
+                let read = read_limited(&repo.join(&what), Limits::default().delegated)
+                    .and_then(|bytes| role_releases(publisher, &bytes, &what, &mut warnings));
+                match read {
+                    Ok(releases) => releases,
+                    // A retired publisher's role is no longer delegated: `tuf check` reads it
+                    // leniently, and so does the site.
+                    Err(e) if publisher.state == State::Retired => {
+                        warnings.push(format!("{what} is left out: {e:#}"));
+                        Vec::new()
+                    }
+                    Err(e) => return Err(e),
+                }
             }
             _ => Vec::new(),
         };
@@ -119,11 +130,28 @@ fn role_releases(
     Ok(releases)
 }
 
+/// The longest translation of a plugin's name, in characters (as in a manifest).
+const MAX_NAME: usize = 128;
+
 /// `release` of `publisher`, if it keeps the rules of the publisher's entry the client
 /// checks: the id under its prefix, its modules and bundles, capabilities a manifest could
-/// declare.
+/// declare; and a name the site can show: each translation 1 to [`MAX_NAME`] characters,
+/// without control or invisible characters ([`oncl_plugin::operations::is_invisible`]: bidi
+/// overrides, zero-width ones).
 fn site_release(publisher: &Publisher, release: PublisherRelease) -> Result<SiteRelease, String> {
     let r = release.release();
+    for (lang, name) in [("ru", &r.name.ru), ("kk", &r.name.kk), ("en", &r.name.en)] {
+        let count = name.chars().count();
+        if name.trim().is_empty()
+            || count > MAX_NAME
+            || name.chars().any(|c| c.is_control() || is_invisible(c))
+        {
+            return Err(format!(
+                "name.{lang} is not 1 to {MAX_NAME} characters without control or format \
+                 characters"
+            ));
+        }
+    }
     if !publisher.covers(&r.id) {
         return Err(format!(
             "{} is outside the prefix {}",
@@ -272,8 +300,6 @@ pub struct VersionData {
     pub source_sha256: String,
     /// The crate's directory in the archive's `src/`.
     pub source_path: String,
-    /// The difference of the sources from the previous version of the role, if it has one.
-    pub diff_url: Option<String>,
     /// `BUILDINFO.json` of the release: how it was rebuilt and whether `vcs` matched.
     pub buildinfo_url: String,
     /// The release's page.
@@ -308,11 +334,15 @@ pub fn publishers_data(publishers: &[SitePublisher], taken: &BTreeSet<String>) -
                 .chunk_by(|a, b| a.release.release().id == b.release.release().id)
             {
                 let mut plugin = plugin_data(p, releases);
+                // The bundle's row is the client's hint target: only a publisher that may
+                // still offer the plugin takes it.
                 plugin.anchor = plugin
                     .replaces
                     .as_ref()
                     .map(|r| r.symname.clone())
-                    .filter(|symname| is_symbolic_name(symname) && anchors.insert(symname.clone()));
+                    .filter(|symname| {
+                        p.is_active() && is_symbolic_name(symname) && anchors.insert(symname.clone())
+                    });
                 ids.push(plugin.id.clone());
                 plugins.insert(plugin.id.clone(), plugin);
             }
@@ -417,15 +447,14 @@ fn plugin_data(publisher: &Publisher, releases: &[SiteRelease]) -> PublisherPlug
         channels,
         versions: releases
             .iter()
-            .enumerate()
-            .map(|(at, site)| version_data(publisher, site, at + 1 < releases.len()))
+            .map(|site| version_data(publisher, site))
             .collect(),
     }
 }
 
-/// A version's data; `previous`: the role has an older version of the same id, so the
-/// release has a `.src.diff`.
-fn version_data(publisher: &Publisher, site: &SiteRelease, previous: bool) -> VersionData {
+/// A version's data. The `.src.diff` of its release is not linked: whether it has one
+/// depends on the history of the mirror, not on the role; the release's page lists it.
+fn version_data(publisher: &Publisher, site: &SiteRelease) -> VersionData {
     let r = site.release.release();
     let source = site.release.source();
     let sha256 = r.package.sha256.to_string();
@@ -446,7 +475,6 @@ fn version_data(publisher: &Publisher, site: &SiteRelease, previous: bool) -> Ve
         source_url: format!("{files}{source_name}"),
         source_sha256: source.archive_sha256.to_string(),
         source_path: source.path.clone(),
-        diff_url: previous.then(|| format!("{files}{stem}.src.diff")),
         buildinfo_url: format!("{files}BUILDINFO.json"),
         release_url: format!("{REPOSITORY}/releases/tag/{tag}"),
         vcs: source.vcs.as_ref().map(|vcs| VcsData {
@@ -539,6 +567,14 @@ mod tests {
             .find(|p| p.publisher.name.as_str() == "gone")
             .unwrap();
         assert!(gone.releases.is_empty());
+        // A retired publisher's role that cannot be read is a warning.
+        fs::write(meta.join("1.pub-olden.json"), "not json").unwrap();
+        let (publishers, warnings) = load(&dir.path().join("publishers"), Some(&repo)).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("1.pub-olden.json")),
+            "{warnings:?}"
+        );
+        assert!(publishers.iter().all(|p| p.publisher.name.as_str() != "olden" || p.releases.is_empty()));
         // An active publisher's role that cannot be read stops the build.
         fs::write(meta.join("2.pub-acme.json"), "not json").unwrap();
         let err = load(&dir.path().join("publishers"), Some(&repo)).unwrap_err();
