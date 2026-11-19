@@ -65,7 +65,7 @@ fn verify_with(
     let temp = tempfile::tempdir().unwrap();
     let store = TemporaryStore::new(temp.path()).unwrap();
     let anchors = CaSet::new(vec![
-        oncl_pki::cert::parse(include_bytes!("fixtures/external-cert.der")).unwrap(),
+        oncl_pki::cert::parse(include_bytes!("../fixtures/external-cert.der")).unwrap(),
     ]);
     let r = verify_source(
         Source::seekable(&mut Cursor::new(bytes), None),
@@ -87,7 +87,7 @@ fn verify_with(
 
 #[test]
 fn own_signed_pdf_verifies_with_document_exact_input_limit() {
-    let source = include_bytes!("fixtures/external-multipage.pdf");
+    let source = include_bytes!("../fixtures/external-multipage.pdf");
     let signed = sign(source);
     let surcharge = signed.len() as u64 - source.len() as u64;
     assert!(surcharge > 0);
@@ -198,7 +198,7 @@ fn number_after(bytes: &[u8], at: usize, skip: usize) -> u64 {
 // credit; intake is the only layer asserted (progress == full wire).
 #[test]
 fn twenty_megabyte_evidence_revisions_fit_the_default_surcharge() {
-    let source = include_bytes!("fixtures/external-multipage.pdf");
+    let source = include_bytes!("../fixtures/external-multipage.pdf");
     let mut chain = sign(source);
     let crl = vec![0x5au8; 20 * 1024 * 1024];
     for revision in 0..3u32 {

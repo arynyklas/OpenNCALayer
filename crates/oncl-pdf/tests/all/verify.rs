@@ -35,7 +35,7 @@ fn verify(bytes: &[u8]) -> oncl_pdf::Result<oncl_pdf::PdfVerification> {
     let mut cursor = Cursor::new(bytes);
     let mut scope = scope();
     let anchors = CaSet::new(vec![
-        oncl_pki::cert::parse(include_bytes!("fixtures/external-cert.der")).unwrap(),
+        oncl_pki::cert::parse(include_bytes!("../fixtures/external-cert.der")).unwrap(),
     ]);
     let temp = tempfile::tempdir().unwrap();
     let store = oncl_pki::io::TemporaryStore::new(temp.path()).unwrap();
@@ -134,7 +134,7 @@ fn xref_offset_above_4gib() {
 }
 #[test]
 fn externally_signed_revision_and_mutations() {
-    let report = verify(include_bytes!("fixtures/external-signed.pdf")).unwrap();
+    let report = verify(include_bytes!("../fixtures/external-signed.pdf")).unwrap();
     assert_eq!(report.signatures.len(), 1);
     let signature = &report.signatures[0];
     assert_eq!(signature.byte_range.values(), [0, 1055, 5313, 493]);
@@ -147,13 +147,13 @@ fn externally_signed_revision_and_mutations() {
     );
     // A cryptographically correct self-signed test fixture is not full online trust.
     assert_ne!(report.verdict, Verdict::Valid);
-    let inside = verify(include_bytes!("fixtures/external-mutated.pdf")).unwrap();
+    let inside = verify(include_bytes!("../fixtures/external-mutated.pdf")).unwrap();
     assert_eq!(inside.verdict, Verdict::Invalid);
     assert_eq!(
         inside.signatures[0].validation.signers[0].signature,
         CheckStatus::Failed
     );
-    let outside = verify(include_bytes!("fixtures/external-later.pdf")).unwrap();
+    let outside = verify(include_bytes!("../fixtures/external-later.pdf")).unwrap();
     assert!(outside.signatures[0].later_changes);
     assert_eq!(outside.signatures[0].revision, 1);
     assert_eq!(
@@ -163,7 +163,7 @@ fn externally_signed_revision_and_mutations() {
 }
 #[test]
 fn object_stream_revision_chain() {
-    let mut cursor = Cursor::new(include_bytes!("fixtures/external-later.pdf").as_slice());
+    let mut cursor = Cursor::new(include_bytes!("../fixtures/external-later.pdf").as_slice());
     let mut scope = scope();
     let doc = PdfDocument::open(
         Source::seekable(&mut cursor, None),
@@ -175,12 +175,13 @@ fn object_stream_revision_chain() {
     assert_eq!(doc.revision_ends().nth(1), Some(5806));
     drop(doc);
     // lopdf is only an independent small-document oracle, never production DOM.
-    let oracle = lopdf::Document::load_mem(include_bytes!("fixtures/external-signed.pdf")).unwrap();
+    let oracle =
+        lopdf::Document::load_mem(include_bytes!("../fixtures/external-signed.pdf")).unwrap();
     assert_eq!(oracle.get_pages().len(), 1);
 }
 #[test]
 fn source_origin_hint_truncation_and_limits() {
-    let fixture = include_bytes!("fixtures/external-signed.pdf");
+    let fixture = include_bytes!("../fixtures/external-signed.pdf");
     let mut prefixed = b"ignored prefix".to_vec();
     prefixed.extend_from_slice(fixture);
     let mut cursor = Cursor::new(prefixed);
@@ -218,7 +219,7 @@ fn cancellation_and_typed_resource_failure() {
     let mut scope = Arc::new(SharedBudget::new(limits.clone()).unwrap())
         .begin(limits, Arc::new(Cancel))
         .unwrap();
-    let mut cursor = Cursor::new(include_bytes!("fixtures/external-signed.pdf").as_slice());
+    let mut cursor = Cursor::new(include_bytes!("../fixtures/external-signed.pdf").as_slice());
     assert!(matches!(
         PdfDocument::open(
             Source::seekable(&mut cursor, None),
@@ -264,7 +265,7 @@ fn classic_xref_and_decode_work_limit() {
         .revision_count(),
         1
     );
-    let mut cursor = Cursor::new(include_bytes!("fixtures/external-signed.pdf").as_slice());
+    let mut cursor = Cursor::new(include_bytes!("../fixtures/external-signed.pdf").as_slice());
     let limits = PdfLimits {
         max_decode_work: 1,
         ..PdfLimits::default()
@@ -277,7 +278,7 @@ fn classic_xref_and_decode_work_limit() {
 
 #[test]
 fn exact_contents_gap_and_revision_boundary_are_required() {
-    let original = include_bytes!("fixtures/external-signed.pdf");
+    let original = include_bytes!("../fixtures/external-signed.pdf");
     let marker = b"/ByteRange [0 1055 5313 493]";
     let start = original
         .windows(marker.len())
@@ -302,7 +303,7 @@ fn exact_contents_gap_and_revision_boundary_are_required() {
 
 #[test]
 fn multiple_signatures_replay_one_actual_intake_and_keep_all_reports() {
-    let bytes = include_bytes!("fixtures/external-two-signatures.pdf");
+    let bytes = include_bytes!("../fixtures/external-two-signatures.pdf");
     let limits = ResourceLimits {
         input_bytes: bytes.len() as u64,
         ..ResourceLimits::default()
@@ -312,7 +313,7 @@ fn multiple_signatures_replay_one_actual_intake_and_keep_all_reports() {
     let temp = tempfile::tempdir().unwrap();
     let store = oncl_pki::io::TemporaryStore::new(temp.path()).unwrap();
     let anchors = CaSet::new(vec![
-        oncl_pki::cert::parse(include_bytes!("fixtures/external-cert.der")).unwrap(),
+        oncl_pki::cert::parse(include_bytes!("../fixtures/external-cert.der")).unwrap(),
     ]);
     let context = ValidationContext {
         policy: ValidationPolicy::OfflineReport,
@@ -349,7 +350,7 @@ fn multiple_signatures_replay_one_actual_intake_and_keep_all_reports() {
     assert_eq!(validation.signers.len(), 2);
     assert_eq!(facts.signatures[0].signers, 0..1);
     assert_eq!(facts.signatures[1].signers, 1..2);
-    let (foreign, _) = verify(include_bytes!("fixtures/external-signed.pdf"))
+    let (foreign, _) = verify(include_bytes!("../fixtures/external-signed.pdf"))
         .unwrap()
         .into_aggregate(&scope)
         .unwrap();
@@ -455,7 +456,7 @@ fn hybrid_xref_and_inherited_root_revisions_are_resolved() {
             "no supported revision-bound signature"
         ))
     ));
-    let mut signed = include_bytes!("fixtures/external-signed.pdf").to_vec();
+    let mut signed = include_bytes!("../fixtures/external-signed.pdf").to_vec();
     let marker = signed.windows(9).rposition(|w| w == b"startxref").unwrap();
     let previous = std::str::from_utf8(&signed[marker + 9..])
         .unwrap()
@@ -496,7 +497,7 @@ fn forward_prev_cycles_and_xref_outside_revision_are_rejected() {
 #[test]
 fn genuine_pdf_verification_accepts_authentic_frozen_source_at_exact_input_quota() {
     use oncl_pki::io::{FrozenInput, Region, TemporaryStore};
-    let bytes = include_bytes!("fixtures/external-signed.pdf");
+    let bytes = include_bytes!("../fixtures/external-signed.pdf");
     let limits = ResourceLimits {
         input_bytes: bytes.len() as u64,
         ..ResourceLimits::default()
@@ -507,7 +508,7 @@ fn genuine_pdf_verification_accepts_authentic_frozen_source_at_exact_input_quota
     let temp = tempfile::tempdir().unwrap();
     let store = TemporaryStore::new(temp.path()).unwrap();
     let anchors = CaSet::new(vec![
-        oncl_pki::cert::parse(include_bytes!("fixtures/external-cert.der")).unwrap(),
+        oncl_pki::cert::parse(include_bytes!("../fixtures/external-cert.der")).unwrap(),
     ]);
     let mut input = Cursor::new(bytes.as_slice());
     let mut frozen =
