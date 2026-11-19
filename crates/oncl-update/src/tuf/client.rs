@@ -779,6 +779,25 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         Ok(root.expires.min(targets.expires))
     }
 
+    /// The top-level targets saved by the last refresh, checked again without the network
+    /// as [`TufClient::verify_cached_target`] checks them, and the moment they stop holding
+    /// (the earlier of the expiry of the root and of the targets); `None` if no targets are
+    /// saved. What a caller reads offline the delegations and the other targets from.
+    /// Nothing is read from the repository and nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`TufClient::verify_cached_target`] for the saved targets.
+    pub fn verify_cached_top_level(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<Option<(Targets, OffsetDateTime)>, TufError> {
+        Ok(self.cached_targets(now)?.map(|(root, targets, _)| {
+            let valid_until = root.expires.min(targets.expires);
+            (targets, valid_until)
+        }))
+    }
+
     /// The saved top-level targets, checked again offline as
     /// [`TufClient::verify_cached_target`] says, with the root in force and the state; `None`
     /// if no targets are saved.
@@ -959,6 +978,35 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         bytes: &[u8],
         now: OffsetDateTime,
     ) -> Result<VerifiedRole, TufError> {
+        self.cached_role(role, bytes, now, false)
+    }
+
+    /// [`TufClient::verify_cached_role`], and the version accepted must be the one the saved
+    /// snapshot lists: a newer version the last [`TufClient::delegated`] refused leaves the
+    /// role untrusted offline too, not trusted at the version accepted before. What a client
+    /// that uses a kept role in place of the repository's checks it with.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`TufClient::verify_cached_role`]; [`DelegationError::NotAccepted`] also if
+    /// the saved snapshot lists another version of the role, or none.
+    pub fn verify_cached_current_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<VerifiedRole, TufError> {
+        self.cached_role(role, bytes, now, true)
+    }
+
+    /// [`TufClient::verify_cached_role`], the snapshot's version required if `current`.
+    fn cached_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+        current: bool,
+    ) -> Result<VerifiedRole, TufError> {
         let Some((root, targets, state)) = self.cached_targets(now)? else {
             return Err(delegation_error(role, DelegationError::NotAccepted));
         };
@@ -973,6 +1021,15 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             .delegated
             .get(role)
             .ok_or_else(|| delegation_error(role, DelegationError::NotAccepted))?;
+        // The version the saved snapshot lists, no other: a newer one that was refused leaves
+        // the role unavailable offline too, not trusted at the version accepted before.
+        let listed = state
+            .snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.meta.get(&role.meta_name()).copied());
+        if current && listed != Some(accepted.version) {
+            return Err(delegation_error(role, DelegationError::NotAccepted));
+        }
         // Only the file accepted: another file of the same version, even one signed by the
         // delegation's keys, was never checked against the snapshot.
         if Digest::of(bytes) != accepted.sha256 {

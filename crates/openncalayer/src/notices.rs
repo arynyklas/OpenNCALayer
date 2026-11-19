@@ -393,6 +393,29 @@ impl TrayStatus {
                     None,
                 )
             }
+            PluginNotice::PublisherRevoked { name, publisher } => {
+                let (name, publisher) = (name.get(l), publisher.get(l));
+                (
+                    match l {
+                        Locale::Ru => "Плагин выключен",
+                        Locale::Kk => "Плагин өшірілді",
+                        Locale::En => "Plugin turned off",
+                    }
+                    .to_owned(),
+                    match l {
+                        Locale::Ru => format!(
+                            "Издатель {publisher} отключён в каталоге OpenNCALayer, плагин «{name}» выключен."
+                        ),
+                        Locale::Kk => format!(
+                            "{publisher} жариялаушысы OpenNCALayer каталогында ажыратылды, «{name}» плагині өшірілді."
+                        ),
+                        Locale::En => format!(
+                            "The publisher {publisher} is disabled in the OpenNCALayer catalog: the plugin «{name}» is turned off."
+                        ),
+                    },
+                    None,
+                )
+            }
             PluginNotice::Failed { name, error } => (
                 match l {
                     Locale::Ru => "Ошибка плагина",
@@ -1136,6 +1159,14 @@ mod tests {
                 name: name.clone(),
                 version: oncl_update::Version::new(0, 3, 0),
             },
+            PluginNotice::PublisherRevoked {
+                name: name.clone(),
+                publisher: oncl_plugin::Localized {
+                    ru: "ТОО «Акме»".to_owned(),
+                    kk: "«Акме» ЖШС".to_owned(),
+                    en: "Acme LLP".to_owned(),
+                },
+            },
         ];
         let t0 = Instant::now();
         let mut ru = TrayStatus::new(Locale::Ru, None);
@@ -1152,6 +1183,10 @@ mod tests {
         assert_eq!(
             n.action.map(|a| a.target),
             Some(ActionTarget::Command(TrayCommand::Plugins))
+        );
+        assert_eq!(
+            ru.plugin_notification(&notices[5], t0).unwrap().body,
+            "Издатель ТОО «Акме» отключён в каталоге OpenNCALayer, плагин «Пример» выключен."
         );
         for l in [Locale::Kk, Locale::En] {
             let mut status = TrayStatus::new(l, None);

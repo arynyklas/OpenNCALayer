@@ -300,6 +300,8 @@ pub struct PublisherPolicy {
 }
 
 impl PublisherPolicy {
+    /// Its path among the top-level targets.
+    pub const TARGET: &'static str = "publishers.json";
     /// The format version read.
     pub const SCHEMA: u32 = 1;
     /// The largest file, in bytes; also the most the caller downloads.

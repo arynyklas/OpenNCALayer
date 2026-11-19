@@ -4,14 +4,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use oncl_pki::http::HttpTransport;
-use oncl_update::tuf::PublicKey;
 use oncl_update::tuf::store::{FileStore, Store};
-use oncl_update::tuf::testing::Repo;
-use oncl_update::{Channel, Index, UpdateError};
+use oncl_update::tuf::testing::{self, Repo};
+use oncl_update::tuf::{PublicKey, RoleName, SigningKey};
+use oncl_update::{Channel, Index, PublisherPolicy, UpdateError};
 use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
-use super::Repository;
+use super::{CatalogRead, PUBLISHERS_TIMEOUT, Repository};
 use crate::update::tests::FakeTransport;
 
 /// Where the fake repository is "published".
@@ -518,4 +518,134 @@ fn no_usable_root_means_no_repository_and_nothing_asked() {
         )
         .is_err()
     );
+}
+
+fn publisher_key() -> SigningKey {
+    SigningKey::from_seed(&[77; 32]).unwrap()
+}
+
+fn publisher_role() -> RoleName {
+    RoleName::parse("pub-acme").unwrap()
+}
+
+/// Delegates to acme and lists its role (no targets) and `publishers` as
+/// `publishers.json`, with the next index of the stable channel.
+fn publish_with_publishers(server: &Server, transport: &FakeTransport, publishers: &[u8]) {
+    {
+        let mut repo = server.repo();
+        let key = publisher_key();
+        let role = publisher_role();
+        let file = repo.role_file(1, Map::new(), &[&key]);
+        repo.set_role(&role, 1, file);
+        repo.delegations = Some(testing::delegations(&[(&role, &key)]));
+        repo.set_target(PublisherPolicy::TARGET, publishers);
+    }
+    server.publish(transport, Channel::Stable, &index(Channel::Stable, 1));
+}
+
+#[test]
+fn the_catalog_brings_the_publishers_side_and_stops_at_an_unchanged_snapshot() {
+    let (server, transport, dir) = (
+        Server::new(),
+        Arc::new(FakeTransport::default()),
+        tempfile::tempdir().unwrap(),
+    );
+    let publishers = br#"{"schema": 1, "publishers": []}"#;
+    publish_with_publishers(&server, &transport, publishers);
+    let r = repository(&server, dir.path(), &transport);
+
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
+        panic!("nothing read");
+    };
+    assert_eq!(read.index.index.seq, 1);
+    assert!(read.top_level.contains_key(PublisherPolicy::TARGET));
+    assert_eq!(
+        read.publishers.as_ref().unwrap().as_deref(),
+        Some(&publishers[..])
+    );
+    let roles = read.roles.as_ref().unwrap();
+    let role = roles.role(&publisher_role()).unwrap().unwrap();
+    assert_eq!(role.version(), 1);
+
+    // The same snapshot again: nothing but the metadata is read.
+    let asked = transport.asked().len();
+    assert!(matches!(
+        r.catalog(
+            Channel::Stable,
+            None,
+            TIMEOUT,
+            PUBLISHERS_TIMEOUT,
+            Some(read.snapshot)
+        )
+        .unwrap(),
+        CatalogRead::Unchanged
+    ));
+    assert!(
+        transport.asked()[asked..]
+            .iter()
+            .all(|(url, ..)| url.contains("/metadata/")),
+        "{:?}",
+        &transport.asked()[asked..]
+    );
+
+    // What the store keeps is checked again offline.
+    let now = OffsetDateTime::now_utc();
+    r.verify_kept_publishers(publishers, now).unwrap();
+    assert!(r.verify_kept_publishers(b"{}", now).is_err());
+    let kept = r
+        .verify_kept_role(&publisher_role(), role.file(), now)
+        .unwrap();
+    assert_eq!(kept.version(), 1);
+    assert!(r.verify_kept_role(&publisher_role(), b"{}", now).is_err());
+    let top_level = r.kept_top_level(now).unwrap().unwrap();
+    let delegations = top_level.targets.delegations().unwrap().unwrap();
+    assert_eq!(delegations.roles().len(), 1);
+    assert!(top_level.valid_until > now);
+}
+
+#[test]
+fn the_publishers_side_fails_alone() {
+    let (server, transport, dir) = (
+        Server::new(),
+        Arc::new(FakeTransport::default()),
+        tempfile::tempdir().unwrap(),
+    );
+    // Over the limit of publishers.json, delegations that cannot be read: the index is read.
+    let too_large = vec![b' '; PublisherPolicy::MAX_LEN + 1];
+    publish_with_publishers(&server, &transport, &too_large);
+    server.repo().delegations = Some(json!({"keys": {}, "roles": 7}));
+    server.publish(&transport, Channel::Stable, &index(Channel::Stable, 2));
+    let r = repository(&server, dir.path(), &transport);
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
+        panic!("nothing read");
+    };
+    assert_eq!(read.index.index.seq, 2);
+    assert!(read.publishers.unwrap_err().contains("publishers.json"));
+    assert!(read.roles.is_err());
+    assert!(
+        !transport
+            .asked()
+            .iter()
+            .any(|(url, ..)| url.ends_with(".publishers.json")),
+        "a file over the limit is not asked for"
+    );
+
+    // No publishers.json and no delegations: nothing to read, nothing failed.
+    server.repo().remove_target(PublisherPolicy::TARGET);
+    server.repo().delegations = None;
+    server.publish(&transport, Channel::Stable, &index(Channel::Stable, 3));
+    let CatalogRead::Read(read) = r
+        .catalog(Channel::Stable, None, TIMEOUT, PUBLISHERS_TIMEOUT, None)
+        .unwrap()
+    else {
+        panic!("nothing read");
+    };
+    assert_eq!(read.publishers.unwrap(), None);
+    assert_eq!(read.roles.unwrap().roles().count(), 0);
 }

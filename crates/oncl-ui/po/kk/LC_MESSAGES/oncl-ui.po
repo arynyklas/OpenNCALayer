@@ -128,6 +128,15 @@ msgstr "Жаңартулар"
 msgid "Update automatically"
 msgstr "Автоматты түрде жаңарту"
 
+msgid "Check plugin revocations"
+msgstr "Плагиндердің кері қайтарылуын тексеру"
+
+msgid "Included in automatic updates"
+msgstr "Автожаңартуларға кіреді"
+
+msgid "Every few hours OpenNCALayer contacts arynyklas.github.io and turns off the plugins their publisher or OpenNCALayer revoked. No new versions are installed by it."
+msgstr "Бірнеше сағат сайын OpenNCALayer arynyklas.github.io сайтына жүгініп, баспагері немесе OpenNCALayer кері қайтарып алған плагиндерді өшіреді. Бұл ретте жаңа нұсқалар орнатылмайды."
+
 msgid "Channel"
 msgstr "Арна"
 
