@@ -50,38 +50,9 @@ time = { workspace = true, features = ["macros"] }
 # Catches the APDU trace of a test.
 tracing-subscriber.workspace = true
 
-[[test]]
-name = "emulator"
-required-features = ["emulator"]
-
-[[test]]
-name = "kaztoken"
-required-features = ["emulator"]
-
-[[test]]
-name = "service"
-required-features = ["emulator"]
-
-[[test]]
-name = "kzid"
-required-features = ["emulator"]
-
-[[test]]
-name = "etoken72k"
-required-features = ["emulator"]
-
-[[test]]
-name = "etoken5110"
-required-features = ["emulator"]
-
-[[test]]
-name = "jacarta"
-required-features = ["emulator"]
-
-[[test]]
-name = "akey"
-required-features = ["emulator"]
-
+# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files, each
+# a module of it; the emulator's are `#[cfg(feature = "emulator")]` there), `wipe`, which
+# installs its own `#[global_allocator]`, and `vpcd`, which CI runs alone against vpcd.
 [[test]]
 name = "vpcd"
 required-features = ["emulator"]

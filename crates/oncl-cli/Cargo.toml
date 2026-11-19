@@ -16,9 +16,9 @@ path = "src/main.rs"
 # Software tokens read from `ONCL_TOKEN_EMULATOR=<config.toml>`: tests only, never released.
 token-emulator = ["oncl-token/emulator"]
 
-[[test]]
-name = "token"
-required-features = ["token-emulator"]
+# The integration tests are two binaries: `tests/all/` (`main.rs` and the other files, each a
+# module of it; `token` is `#[cfg(feature = "token-emulator")]` there) and `config_budget`,
+# which installs its own `#[global_allocator]`.
 
 [dependencies]
 oncl-core = { workspace = true, features = ["xml", "pdf", "jose", "plugins", "tokens"] }

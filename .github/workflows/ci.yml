@@ -334,13 +334,14 @@ jobs:
           # zstd already.
           compression-level: 0
           overwrite: true
-      # `oncl-core`'s examples test runs `cargo run --example` of this workspace: it needs
-      # the build tree this job has, so it runs here and not from the archive.
+      # `oncl-core`'s examples tests (`examples::` in its `all` binary) run `cargo run
+      # --example` of this workspace: they need the build tree this job has, so they run here
+      # and not from the archive.
       - name: Tests that need the build tree
         shell: bash
         run: |
           cargo nextest run --profile ci --workspace --all-features --locked --run-ignored all \
-            -E 'binary_id(oncl-core::examples)'
+            -E 'binary_id(oncl-core::all) & test(/^examples::/)'
 
   # The archive of `test-build`, one third of the tests per job (`--partition slice:N/3`).
   # Every ignored test runs here (`--run-ignored all`), fixtures and oracles included, except
@@ -407,7 +408,7 @@ jobs:
           cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/nextest/nextest.tar.zst" \
             --workspace-remap . --extract-to . --extract-overwrite \
             --partition "slice:${{ matrix.partition }}/3" --run-ignored all \
-            -E 'not binary_id(oncl-core::examples)'
+            -E 'not (binary_id(oncl-core::all) & test(/^examples::/))'
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -518,7 +519,7 @@ jobs:
           mkdir -p target/tmp
           cargo nextest run --profile ci --archive-file "$RUNNER_TEMP/nextest/nextest.tar.zst" \
             --workspace-remap . --extract-to . --extract-overwrite --run-ignored all \
-            -E 'package(oncl-port-tests) | binary_id(openncalayer::ports_e2e) | binary_id(openncalayer::ports_heavy_e2e) | binary_id(oncl-core::plugin_ports_manual)'
+            -E 'package(oncl-port-tests) | (binary_id(openncalayer::all) & test(/^ports_(heavy_)?e2e::/)) | binary_id(oncl-core::plugin_ports_manual)'
       # The ports the tests above built (a no-op build then), linted as they ship.
       - name: Plugin operations lint (release modules)
         run: |

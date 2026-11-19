@@ -185,7 +185,7 @@ impl Lab {
         let script = self.w.dir.path().join("pyhanko_oracle.py");
         std::fs::write(
             &script,
-            include_str!("../../../oncl-cli/tests/support/pyhanko_oracle.py"),
+            include_str!("../../../oncl-cli/tests/all/support/pyhanko_oracle.py"),
         )
         .unwrap();
         let out: Output = Command::new(python)
@@ -201,7 +201,7 @@ impl Lab {
         let script = self.w.dir.path().join("xmldsig_oracle.py");
         std::fs::write(
             &script,
-            include_str!("../../../oncl-cli/tests/support/xmldsig_oracle.py"),
+            include_str!("../../../oncl-cli/tests/all/support/xmldsig_oracle.py"),
         )
         .unwrap();
         let leaf = self.w.dir.path().join("oracle-leaf.der");

@@ -760,8 +760,36 @@ impl RawManifest {
                 )));
             }
         }
-        let caps = self.capabilities;
-        if caps.builtin && !self.builtin {
+        let capabilities = self.capabilities.check(self.builtin)?;
+        let operations = check_operations(
+            self.operations,
+            &self.min_core,
+            &self.modules,
+            &capabilities,
+        )?;
+        Ok(Manifest {
+            id: self.id,
+            version: self.version,
+            name: self.name,
+            description: self.description,
+            min_core: self.min_core,
+            modules: self.modules,
+            replaces: self.replaces,
+            capabilities,
+            builtin: self.builtin,
+            operations,
+        })
+    }
+}
+
+impl RawCapabilities {
+    /// The `[capabilities]` table checked: `builtin` only for a module built into the core
+    /// (`builtin_module`), `key_files` with `keys`, `page_files_ext` with `page_files`, at
+    /// most so many prefixes, patterns and extensions, each of them valid.
+    fn check(self, builtin_module: bool) -> Result<Capabilities, PackageError> {
+        let bad = PackageError::Manifest;
+        let caps = self;
+        if caps.builtin && !builtin_module {
             return Err(bad(
                 "capabilities.builtin is reserved for built-in modules".to_owned()
             ));
@@ -826,7 +854,7 @@ impl RawManifest {
                 page_files_ext.push(ext);
             }
         }
-        let capabilities = Capabilities {
+        Ok(Capabilities {
             keys: caps.keys,
             dialogs: caps.dialogs,
             files: caps.files,
@@ -839,25 +867,23 @@ impl RawManifest {
             settings: caps.settings,
             shared: caps.shared,
             builtin: caps.builtin,
-        };
-        let operations = check_operations(
-            self.operations,
-            &self.min_core,
-            &self.modules,
-            &capabilities,
-        )?;
-        Ok(Manifest {
-            id: self.id,
-            version: self.version,
-            name: self.name,
-            description: self.description,
-            min_core: self.min_core,
-            modules: self.modules,
-            replaces: self.replaces,
-            capabilities,
-            builtin: self.builtin,
-            operations,
         })
+    }
+}
+
+/// The capabilities a publisher's catalog entry declares (`custom.oncl.capabilities`), read by
+/// the rules of a plugin's `[capabilities]` table: the same members, types and checks, and
+/// never `builtin` (a publisher's plugin is not built in). An unknown member is refused.
+#[cfg(feature = "distribution")]
+impl TryFrom<&oncl_update::DeclaredCapabilities> for Capabilities {
+    type Error = PackageError;
+
+    fn try_from(
+        declared: &oncl_update::DeclaredCapabilities,
+    ) -> Result<Capabilities, PackageError> {
+        let raw = RawCapabilities::deserialize(declared.as_object())
+            .map_err(|e| PackageError::Manifest(format!("capabilities: {e}")))?;
+        raw.check(false)
     }
 }
 

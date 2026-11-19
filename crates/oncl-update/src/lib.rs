@@ -40,7 +40,8 @@ pub use index::{
 };
 pub use keys::embedded_root;
 pub use plugins::{
-    PluginChoice, PluginName, PluginRelease, PluginReplaces, choose_plugin, offer, plugin_bucket,
+    PluginChoice, PluginName, PluginRelease, PluginReplaces, choose_installed, choose_plugin,
+    offer, plugin_bucket,
 };
 pub use semver::Version;
 pub use state::{PendingHealth, State};

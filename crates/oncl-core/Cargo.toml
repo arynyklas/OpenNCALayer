@@ -75,6 +75,9 @@ x509-cert.workspace = true
 rcgen.workspace = true
 getrandom.workspace = true
 
+# The integration tests are eight binaries: `tests/all/` (`main.rs` and the other files, each
+# a module of it; the modules that need a feature are `#[cfg(feature = ...)]` there), the six
+# files that install their own `#[global_allocator]` and `plugin_ports_manual`.
 [[test]]
 name = "plugin_access"
 required-features = ["plugins", "tokens"]
@@ -83,20 +86,8 @@ required-features = ["plugins", "tokens"]
 name = "plugin_manual"
 required-features = ["plugins", "tokens"]
 
-[[test]]
-name = "plugin_ticket"
-required-features = ["plugins", "tokens", "testing"]
-
-[[test]]
-name = "plugin_approval"
-required-features = ["plugins", "tokens", "testing"]
-
 # The real wasm of the plugin ports under the manual window's call path; all `#[ignore]`:
 # `cargo xtask plugin-ports-manual` builds the modules and runs them (docs/dev/plugins-manual-tests.md).
 [[test]]
 name = "plugin_ports_manual"
 required-features = ["plugins"]
-
-[[test]]
-name = "key_sources"
-required-features = ["tokens"]
