@@ -50,8 +50,15 @@ const BUILD_XTASK: &str = "cargo build --locked -p xtask";
 const AUTHOR: &str = "${{ github.event.pull_request.user.login }}";
 const HEAD: &str = "${{ github.event.pull_request.head.sha }}";
 
+/// A job: its name, its permissions, and the jobs it needs.
+type Job = (
+    &'static str,
+    &'static [(&'static str, &'static str)],
+    &'static [&'static str],
+);
+
 /// The jobs, in their order, with the permissions and the needs of each.
-const JOBS: [(&str, &[(&str, &str)], &[&str]); 6] = [
+const JOBS: [Job; 6] = [
     ("publisher-check", &[("contents", "read")], &[]),
     ("provenance", &[], &["publisher-check"]),
     ("rebuild", &[], &["publisher-check"]),
