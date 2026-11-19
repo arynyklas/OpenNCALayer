@@ -84,11 +84,6 @@ pub fn release_notes_url(version: &Version) -> String {
     format!("{REPOSITORY}/releases/tag/v{version}")
 }
 
-/// The immutable asset name of a plugin release.
-pub fn plugin_package_name(id: &str, version: &Version) -> String {
-    format!("{id}-{version}.onclp")
-}
-
 /// Whether `tag` names a dated batch of plugin releases.
 pub fn is_plugin_tag(tag: &str) -> bool {
     let Some(date) = tag.strip_prefix("plugins-") else {
@@ -113,7 +108,7 @@ pub fn plugin_asset_url(tag: &str, id: &str, version: &Version) -> anyhow::Resul
     }
     Ok(format!(
         "{REPOSITORY}/releases/download/{tag}/{}",
-        plugin_package_name(id, version)
+        oncl_pack::package_file_name(id, version)
     ))
 }
 

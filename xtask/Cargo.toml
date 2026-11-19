@@ -20,8 +20,10 @@ oncl-builtins-build.workspace = true
 oncl-flows.workspace = true
 oncl-gost.workspace = true
 oncl-ipc.workspace = true
-# `plugin pack`: the core version each host function a plugin imports appeared in.
+# `platform-interop`: the host functions of the synthetic plugin.
 oncl-pdk.workspace = true
+# `plugin pack`: the build and checks of a plugin package (the builder image's code).
+oncl-pack.workspace = true
 oncl-pki = { workspace = true, features = ["testing"] }
 # `plugin pack` and `index add-plugin`: the package format and the ABI check the daemon uses.
 oncl-plugin = { workspace = true, features = ["distribution"] }

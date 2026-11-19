@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, bail};
 
 use super::SITE_DIR;
-use crate::plugin::read_limited;
+use oncl_pack::read_limited;
 
 /// What the build and the check read from `site/config.toml`.
 #[derive(Debug, Clone, PartialEq, Eq)]
