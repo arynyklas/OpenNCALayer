@@ -4,7 +4,7 @@
 // in Rust.
 
 import { Button, Palette } from "std-widgets.slint";
-import { ActionBar, DialogScroll, EscapeScope, Metrics, NameText, PluginFrame, Subheading, Tone } from "common.slint";
+import { ActionBar, DialogScroll, EscapeScope, LinkButton, Metrics, NameText, PluginFrame, Subheading, Tone } from "common.slint";
 
 // One operation of the plugin for the manual-tools window. `heading` and `lines` are the
 // host's own words, built from checked fields only (an identifier, the kinds of key use and
@@ -47,6 +47,12 @@ export component InstallPluginWindow inherits Window {
     in property <[OperationBlock]> operations;
     // Not from the catalog: the warning, or empty.
     in property <string> warning;
+    // «Издатель: …»; empty for a file.
+    in property <string> publisher;
+    // A publisher's plugin: the project built it and did not review its code; or empty.
+    in property <string> publisher-note;
+    // A publisher's plugin: «Исходный код: {file} · {licence}», a link; or empty.
+    in property <string> source;
     // «Установить» works: set a moment after the window appears.
     in-out property <bool> can-install: false;
     // The buttons are inside the window, whatever the text and the scale.
@@ -61,6 +67,8 @@ export component InstallPluginWindow inherits Window {
     out property <bool> consent-in-view: may-text.absolute-position.y + may-text.height <= body.absolute-position.y + body.visible-height;
 
     callback answer(bool);
+    // The source archive, opened in the browser (its URL stays in Rust).
+    callback open-source();
 
     EscapeScope {
         escape => {
@@ -77,6 +85,28 @@ export component InstallPluginWindow inherits Window {
                 Subheading {
                     text: root.plugin;
                     wrap: char-wrap;
+                }
+
+                // Who released it, right under its name.
+                if root.publisher != "": Text {
+                    text: root.publisher;
+                    wrap: word-wrap;
+                }
+
+                if root.publisher-note != "": Text {
+                    text: root.publisher-note;
+                    wrap: word-wrap;
+                    color: Tone.quiet();
+                }
+
+                if root.source != "": HorizontalLayout {
+                    alignment: start;
+                    LinkButton {
+                        text: root.source;
+                        clicked => {
+                            root.open-source();
+                        }
+                    }
                 }
 
                 // What the plugin may do comes first, with the warning above it: the host's

@@ -912,7 +912,7 @@ public = "<64 hex>"
 7. Pages: job `snapshot` для `tuf/v1`, явные условия jobs `oracle`, `deploy`, `verify`, проверка сроков ролей в `tuf-expiry.yml`, `workflows_tuf.rs`. Затем ротация корня `tuf/v1` (этап 2), действие владельца.
 8. Клиент Y, библиотека (раздел «Клиент»): `TryFrom<&DeclaredCapabilities>`, `Installed.publisher`, хранение `publishers.json` и ролей, `choose_installed`. Сделано.
 9. Клиент Y, приложение: каталог в `Repository`, хранение и офлайн-проверка ролей, отзыв по состояниям, сверка `capabilities`, частота проверки, настройка «Проверять отзывы плагинов», замена порта. Сделано, кроме замены порта.
-10. Интерфейс (`oncl-ui`, `oncl-desktop`): `PluginOrigin`, строки издателя, окно замены, уведомление, флажок настроек; тексты ru/kk/en.
+10. Интерфейс (`oncl-ui`, `oncl-desktop`): `PluginOrigin`, строки издателя, окно замены, уведомление, флажок настроек; тексты ru/kk/en. Сделано, кроме окна замены порта и строки «Доступна замена от издателя {publisher}»; казахские тексты, кроме «Жариялаушы», — черновики для переводчика (открытый вопрос 3).
 11. Сборщик и инструменты издателя: образ `oncl-plugin-builder` (`xtask/assets/plugin-builder/Dockerfile`, `oncl-pack source/build`), `publishers/builders.toml`, `xtask vendor …` (`source`, `build`, `add`, `verify`, `check_pr` со скачиванием архива по `fetch`), переиспользуемый `publisher-build.yml`, `docs/dev/publishers.md`.
 12. Автослияние (`publisher-pr.yml`: jobs `publisher-check`, `provenance`, `rebuild`, `verdict`, `mirror`, `merge`; копирование пересборки и архива в неизменяемые выпуски; шаблон PR подключения, `vendor check-onboarding` в `ci.yml`, пропуск `pub-*` в `pages.yml` и `registry/inputs.rs`, `workflows_tuf.rs`), политика Actions для `pull_request_target`.
 13. Сайт.

@@ -215,8 +215,8 @@ fn create(desktop: &Desktop, tab: i32) -> Result<(), PlatformError> {
         ui.set_selected_crate(0);
         show_crate(&ui, 0);
     }
-    ui.on_open_repository(|| open_in_browser(REPOSITORY, "the repository"));
-    ui.on_open_chat(|| open_in_browser(CHAT, "the project chat"));
+    ui.on_open_repository(|| open_in_browser(REPOSITORY.to_owned(), "the repository"));
+    ui.on_open_chat(|| open_in_browser(CHAT.to_owned(), "the project chat"));
     ui.on_dismiss(close);
     ui.window().on_close_requested(|| {
         close();
@@ -248,11 +248,11 @@ fn show_crate(ui: &AboutWindow, i: i32) {
 
 /// Opens `url` (named `what` in the log) in the default browser, off the event loop (a
 /// browser may take its time to start).
-fn open_in_browser(url: &'static str, what: &'static str) {
+pub(crate) fn open_in_browser(url: String, what: &'static str) {
     let opened = std::thread::Builder::new()
         .name("browser".into())
         .spawn(move || {
-            if let Err(e) = webbrowser::open(url) {
+            if let Err(e) = webbrowser::open(&url) {
                 tracing::warn!(error = %e, "cannot open {what} in a browser");
             }
         });

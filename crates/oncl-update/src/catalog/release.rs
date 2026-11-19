@@ -67,6 +67,24 @@ pub fn mirror_url(
     format!("{MIRROR_BASE}pub-{publisher}-{sha256}/{id}-{version}.onclp")
 }
 
+/// The file name of a release's source archive in the project's Releases:
+/// `<id>-<version>.src.tar.gz`.
+pub fn source_archive_name(id: &str, version: &Version) -> String {
+    format!("{id}-{version}.src.tar.gz")
+}
+
+/// The copy of the source archive of a publisher's `release` in the project's Releases: the
+/// release of its package ([`mirror_url`]), file [`source_archive_name`]. Built from the
+/// signed fields alone, never from `source.fetch`; `None` for a release of the owner's index.
+pub fn source_mirror_url(release: &PluginRelease) -> Option<String> {
+    let publisher = release.publisher.as_ref()?;
+    Some(format!(
+        "{MIRROR_BASE}pub-{publisher}-{}/{}",
+        release.package.sha256,
+        source_archive_name(&release.id, &release.version)
+    ))
+}
+
 /// Whether `url` is an anonymous `https://` URL of at most [`MAX_URL`] bytes: a host, no
 /// user info or fragment, no whitespace or control characters. A query is allowed.
 pub(crate) fn anonymous_https_url(url: &str) -> bool {

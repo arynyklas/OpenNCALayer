@@ -235,6 +235,107 @@ fn key_dialog_screenshots() {
     }
 }
 
+/// The install window and the «Плагины» window of a publisher's plugin: its publisher, the
+/// note that its code was not reviewed, and its source link; beside it a port and a file.
+#[test]
+#[ignore = "writes screenshots to target/screenshots"]
+fn publisher_screenshots() {
+    use crate::install_plugin::{self, InstallPluginRequest};
+    use crate::plugins_view::{
+        self, AvailablePlugin, CatalogLine, InstalledPlugin, LocalizedText, PluginOrigin,
+        PluginStatus, PluginsView, PublisherOrigin, SourceArchive,
+    };
+    use crate::ui::{InstallPluginWindow, PluginsWindow};
+    use oncl_flows::capabilities::CapabilityLine;
+
+    std::fs::create_dir_all(out_dir()).unwrap();
+    let last = offscreen::install();
+    let text = |ru: &str, kk: &str, en: &str| LocalizedText {
+        ru: ru.to_owned(),
+        kk: kk.to_owned(),
+        en: en.to_owned(),
+    };
+    let acme = PluginOrigin::Publisher(PublisherOrigin {
+        display: text("ТОО «Акме»", "«Акме» ЖШС", "Acme LLP"),
+        source: Some(SourceArchive {
+            file: "kz.acme.market-1.2.0.src.tar.gz".to_owned(),
+            url: concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-0909/kz.acme.market-1.2.0.src.tar.gz"
+            )
+            .to_owned(),
+            license: "Apache-2.0".to_owned(),
+        }),
+    });
+    let market = text("Маркет", "Маркет", "Market");
+    for (locale, code) in [(Locale::Ru, "ru"), (Locale::Kk, "kk"), (Locale::En, "en")] {
+        select_language(locale);
+        let request = InstallPluginRequest {
+            origin: Some("https://market.acme.kz".to_owned()),
+            name: market.clone(),
+            version: "1.2.0".to_owned(),
+            replaces: None,
+            replacing: None,
+            capabilities: vec![
+                CapabilityLine::Keys,
+                CapabilityLine::Http(vec!["https://api.acme.kz/".to_owned()]),
+            ],
+            operations: Vec::new(),
+            update: false,
+            window: None,
+            origin_kind: acme.clone(),
+            decide: Box::new(|_| {}),
+        };
+        let ui = InstallPluginWindow::new().unwrap();
+        install_plugin::fill(&ui, &request, locale);
+        ui.show().unwrap();
+        save(&last, 560, 520, &format!("install-publisher-{code}"));
+        ui.hide().unwrap();
+
+        let view = PluginsView {
+            catalog: CatalogLine::Ready {
+                channel: "stable".to_owned(),
+                generated: datetime!(2026-11-19 09:00 UTC),
+                error: None,
+            },
+            installed: vec![
+                InstalledPlugin {
+                    id: "kz.acme.market".to_owned(),
+                    name: market.clone(),
+                    version: "1.2.0".to_owned(),
+                    replaces: None,
+                    origin: acme.clone(),
+                    state: PluginStatus::Enabled,
+                    pending_update: None,
+                },
+                InstalledPlugin {
+                    id: "kz.example.file".to_owned(),
+                    name: text("Из файла", "Файлдан", "From a file"),
+                    version: "0.1.0".to_owned(),
+                    replaces: None,
+                    origin: PluginOrigin::LocalFile,
+                    state: PluginStatus::Disabled,
+                    pending_update: None,
+                },
+            ],
+            available: vec![AvailablePlugin {
+                id: "io.github.arynyklas.openncalayer.port.commonutils".to_owned(),
+                name: text("commonUtils", "commonUtils", "commonUtils"),
+                version: "1.0.0".to_owned(),
+                replaces: None,
+                origin: PluginOrigin::Project,
+                needed: false,
+                needed_by: None,
+            }],
+        };
+        let ui = PluginsWindow::new().unwrap();
+        plugins_view::fill(&ui, &view, locale);
+        ui.show().unwrap();
+        save(&last, 640, 560, &format!("plugins-publisher-{code}"));
+        ui.hide().unwrap();
+    }
+}
+
 /// The wizard on `target/screenshots/tls` with this user's trust stores (read only here: no
 /// button is pressed) and a server that is not running.
 fn wizard_services() -> TlsWizardServices {

@@ -29,7 +29,7 @@ use slint::{
 };
 
 use crate::foreground;
-use crate::plugins_view::{LocalizedText, ReplacedBundle};
+use crate::plugins_view::{LocalizedText, PluginOrigin, ReplacedBundle, open_source, origin_texts};
 use crate::prompter::select_desktop_language;
 use crate::ui::{InstallPluginWindow, OperationBlock};
 use crate::view::{page_text, page_text_upto};
@@ -66,8 +66,9 @@ pub struct InstallPluginRequest {
     pub update: bool,
     /// The plugin window that asked (an update): its closing withdraws the request.
     pub window: Option<u64>,
-    /// From a file the user chose, not from the catalog.
-    pub local: bool,
+    /// Who released it: the project, a publisher (named, with the source archive it was
+    /// built from) or a file the user chose (warned about).
+    pub origin_kind: PluginOrigin,
     /// Called once with the answer (`true`: install), on a thread of its own: it may take
     /// its time.
     pub decide: Decide,
@@ -80,8 +81,8 @@ pub type Decide = Box<dyn FnOnce(bool) + Send>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InstalledVersion {
     pub version: String,
-    /// From a file the user chose, not from the catalog.
-    pub local: bool,
+    /// Where it came from.
+    pub origin: PluginOrigin,
 }
 
 /// The open window and the answer it waits for.
@@ -176,7 +177,38 @@ fn create(desktop: &Rc<Desktop>, request: InstallPluginRequest) -> Result<(), Pl
     };
     let l = desktop.locale.get();
     select_desktop_language(l);
-    let texts = texts(&request, l);
+    fill(&ui, &request, l);
+    ui.on_answer(answer);
+    ui.window().on_close_requested(|| {
+        answer(false);
+        CloseRequestResponse::HideWindow
+    });
+    let open = Rc::new(Open {
+        window: request.window,
+        ui: ui.clone_strong(),
+        decide: RefCell::new(Some(request.decide)),
+    });
+    OPEN.set(Some(Rc::clone(&open)));
+    if let Err(e) = ui.show() {
+        OPEN.set(None);
+        if let Some(decide) = open.decide.take() {
+            answer_with(decide, false);
+        }
+        return Err(e);
+    }
+    foreground::take(&ui);
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(INSTALL_DELAY, move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_can_install(true);
+        }
+    });
+    Ok(())
+}
+
+/// Sets the window's texts for `request` in `l`, the source link included.
+pub(crate) fn fill(ui: &InstallPluginWindow, request: &InstallPluginRequest, l: Locale) {
+    let texts = texts(request, l);
     ui.set_asker(texts.asker.into());
     ui.set_plugin(texts.plugin.into());
     ui.set_replacing(texts.replacing.into());
@@ -210,32 +242,11 @@ fn create(desktop: &Rc<Desktop>, request: InstallPluginRequest) -> Result<(), Pl
         .collect();
     ui.set_operations(ModelRc::new(VecModel::from(blocks)));
     ui.set_warning(texts.warning.into());
-    ui.on_answer(answer);
-    ui.window().on_close_requested(|| {
-        answer(false);
-        CloseRequestResponse::HideWindow
-    });
-    let open = Rc::new(Open {
-        window: request.window,
-        ui: ui.clone_strong(),
-        decide: RefCell::new(Some(request.decide)),
-    });
-    OPEN.set(Some(Rc::clone(&open)));
-    if let Err(e) = ui.show() {
-        OPEN.set(None);
-        if let Some(decide) = open.decide.take() {
-            answer_with(decide, false);
-        }
-        return Err(e);
-    }
-    foreground::take(&ui);
-    let weak = ui.as_weak();
-    slint::Timer::single_shot(INSTALL_DELAY, move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_can_install(true);
-        }
-    });
-    Ok(())
+    ui.set_publisher(texts.origin.publisher.into());
+    ui.set_publisher_note(texts.origin.note.into());
+    ui.set_source(texts.origin.source.into());
+    let url = texts.origin.url;
+    ui.on_open_source(move || open_source(&url));
 }
 
 /// «Установить» (`true`), «Отмена» or the close button: the window goes, the answer is
@@ -283,6 +294,8 @@ struct WindowTexts {
     may: String,
     capabilities: Vec<String>,
     warning: String,
+    /// The publisher, the note on a publisher's plugin and its source archive.
+    origin: crate::plugins_view::OriginTexts,
 }
 
 /// One operation: `heading` and `lines` are the host's words (checked fields only), `calls`
@@ -394,10 +407,12 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
                     .replace("{version}", &installed.version)
                     .replace(
                         "{source}",
-                        if installed.local {
-                            t.installed_local
-                        } else {
-                            t.installed_catalog
+                        &match &installed.origin {
+                            PluginOrigin::LocalFile => t.installed_local.to_owned(),
+                            PluginOrigin::Project => t.installed_catalog.to_owned(),
+                            PluginOrigin::Publisher(publisher) => t
+                                .installed_publisher
+                                .replace("{name}", &untrusted_label(publisher.display.get(l))),
                         },
                     )
             })
@@ -423,11 +438,12 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
             .iter()
             .map(|c| capability_text(c, l))
             .collect(),
-        warning: if request.local {
+        warning: if request.origin_kind == PluginOrigin::LocalFile {
             t.local.to_owned()
         } else {
             String::new()
         },
+        origin: origin_texts(&request.origin_kind, l),
     }
 }
 
@@ -485,6 +501,8 @@ struct Texts {
     replacing: &'static str,
     installed_local: &'static str,
     installed_catalog: &'static str,
+    /// `{name}`: the publisher. The Kazakh one is a draft for the translator.
+    installed_publisher: &'static str,
     /// `{symname}`, `{version}`.
     replaces: &'static str,
     may: &'static str,
@@ -513,6 +531,7 @@ impl Texts {
                 replacing: "Орнатылған {version} нұсқасын ({source}) алмастырады",
                 installed_local: "жергілікті, файлдан",
                 installed_catalog: "каталогтан",
+                installed_publisher: "{name} жариялаушысынан",
                 replaces: "Түпнұсқа NCALayer-дің {symname} {version} бандлын алмастырады",
                 may: "Плагин мыналарды істей алады:",
                 nothing: "Плагин сайттардың сұрауларына ғана жауап береді.",
@@ -536,6 +555,7 @@ impl Texts {
                 replacing: "Заменит установленную версию {version} ({source})",
                 installed_local: "локальную, из файла",
                 installed_catalog: "из каталога",
+                installed_publisher: "от издателя {name}",
                 replaces: "Заменяет {symname} {version} оригинального NCALayer",
                 may: "Плагин сможет:",
                 nothing: "Плагин будет только отвечать на запросы сайтов.",
@@ -559,6 +579,7 @@ impl Texts {
                 replacing: "Replaces the installed version {version} ({source})",
                 installed_local: "local, from a file",
                 installed_catalog: "from the catalog",
+                installed_publisher: "from the publisher {name}",
                 replaces: "Replaces {symname} {version} of the original NCALayer",
                 may: "The plugin will be able to:",
                 nothing: "The plugin will only answer the sites' requests.",
@@ -648,7 +669,11 @@ mod tests {
                 CapabilityLine::Files,
                 CapabilityLine::Http(vec!["https://example.invalid/".to_owned()]),
             ],
-            local,
+            origin_kind: if local {
+                PluginOrigin::LocalFile
+            } else {
+                PluginOrigin::Project
+            },
             decide: Box::new(move |yes| tx.send(yes).unwrap()),
         };
         (request, rx)
@@ -721,7 +746,7 @@ mod tests {
         let (mut first, first_rx) = request(true, None);
         first.replacing = Some(InstalledVersion {
             version: "0.0.9".to_owned(),
-            local: false,
+            origin: PluginOrigin::Project,
         });
         let (second, second_rx) = request(false, None);
         enqueue(first);
@@ -792,7 +817,7 @@ mod tests {
         assert!(texts(&request, Locale::En).asker.contains('…'));
         request.replacing = Some(InstalledVersion {
             version: "0.0.9".to_owned(),
-            local: true,
+            origin: PluginOrigin::LocalFile,
         });
         assert_eq!(
             texts(&request, Locale::En).replacing,
@@ -1171,5 +1196,159 @@ mod tests {
         })
         .join()
         .unwrap();
+    }
+
+    /// A publisher's plugin whose release the catalog lists with its source archive.
+    fn acme(url: &str) -> PluginOrigin {
+        PluginOrigin::Publisher(crate::plugins_view::PublisherOrigin {
+            display: LocalizedText {
+                ru: "ТОО «Акме»".to_owned(),
+                kk: "«Акме» ЖШС".to_owned(),
+                en: "Acme LLP".to_owned(),
+            },
+            source: Some(crate::plugins_view::SourceArchive {
+                file: "kz.acme.market-1.2.0.src.tar.gz".to_owned(),
+                url: url.to_owned(),
+                license: "Apache-2.0".to_owned(),
+            }),
+        })
+    }
+
+    const ACME_SOURCE: &str = concat!(
+        env!("CARGO_PKG_REPOSITORY"),
+        "/releases/download/pub-acme-0909090909090909090909090909090909090909090909090909090909090909/kz.acme.market-1.2.0.src.tar.gz"
+    );
+
+    #[test]
+    fn a_publishers_plugin_names_its_publisher_and_links_its_source() {
+        let (mut request, _rx) = request(false, None);
+        request.origin_kind = acme(ACME_SOURCE);
+        let ru = texts(&request, Locale::Ru);
+        assert_eq!(ru.origin.publisher, "Издатель: ТОО «Акме»");
+        assert_eq!(
+            ru.origin.note,
+            "Плагин подписан издателем и собран OpenNCALayer из опубликованного исходного кода. Сам код OpenNCALayer не проверял."
+        );
+        assert_eq!(
+            ru.origin.source,
+            "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        assert_eq!(ru.origin.url, ACME_SOURCE);
+        assert_eq!(ru.warning, "", "a catalog plugin is not warned about");
+        let en = texts(&request, Locale::En);
+        assert_eq!(en.origin.publisher, "Publisher: Acme LLP");
+        assert_eq!(
+            en.origin.note,
+            "The publisher signed this plugin, and OpenNCALayer built it from the published source code. OpenNCALayer did not review the code."
+        );
+        assert_eq!(
+            en.origin.source,
+            "Source code: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        assert_eq!(
+            texts(&request, Locale::Kk).origin.publisher,
+            "Жариялаушы: «Акме» ЖШС"
+        );
+    }
+
+    #[test]
+    fn a_port_names_the_project_without_a_note_or_a_source() {
+        let (request, _rx) = request(false, None);
+        for l in ALL {
+            let t = texts(&request, l);
+            assert!(t.origin.publisher.ends_with(": OpenNCALayer"), "{l:?}");
+            assert_eq!(t.origin.note, "", "{l:?}");
+            assert_eq!(t.origin.source, "", "{l:?}");
+            assert_eq!(t.origin.url, "", "{l:?}");
+            assert_eq!(t.warning, "", "{l:?}");
+        }
+    }
+
+    #[test]
+    fn a_file_is_warned_about_and_names_no_publisher() {
+        let (request, _rx) = request(true, None);
+        for l in ALL {
+            let t = texts(&request, l);
+            assert_eq!(t.warning, Texts::of(l).local, "{l:?}");
+            assert_eq!(
+                t.origin,
+                crate::plugins_view::OriginTexts::default(),
+                "{l:?}"
+            );
+        }
+    }
+
+    /// Only a source archive of the project's Releases is linked: a URL from anywhere else
+    /// (the publisher's own `fetch`, a lookalike) gets no link, and the publisher is still
+    /// named.
+    #[test]
+    fn only_an_archive_in_the_projects_releases_is_linked() {
+        for url in [
+            "https://downloads.acme.kz/oncl/kz.acme.market-1.2.0.src.tar.gz",
+            "https://github.com/arynyklas/OpenNCALayer.evil/releases/download/pub-acme-09/a-1.src.tar.gz",
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/a-1.onclp"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/../x/a-1.src.tar.gz"
+            ),
+            concat!(
+                env!("CARGO_PKG_REPOSITORY"),
+                "/releases/download/pub-acme-09/a 1.src.tar.gz"
+            ),
+        ] {
+            assert!(!crate::plugins_view::is_source_link(url), "{url}");
+            let (mut request, _rx) = request(false, None);
+            request.origin_kind = acme(url);
+            let t = texts(&request, Locale::Ru);
+            assert_eq!(
+                (t.origin.source.as_str(), t.origin.url.as_str()),
+                ("", ""),
+                "{url}"
+            );
+            assert_eq!(t.origin.publisher, "Издатель: ТОО «Акме»");
+        }
+        assert!(crate::plugins_view::is_source_link(ACME_SOURCE));
+    }
+
+    #[test]
+    fn replacing_a_publishers_plugin_names_its_publisher() {
+        let (mut request, _rx) = request(false, None);
+        request.replacing = Some(InstalledVersion {
+            version: "1.1.0".to_owned(),
+            origin: acme(ACME_SOURCE),
+        });
+        assert_eq!(
+            texts(&request, Locale::Ru).replacing,
+            "Заменит установленную версию 1.1.0 (от издателя ТОО «Акме»)"
+        );
+        assert_eq!(
+            texts(&request, Locale::En).replacing,
+            "Replaces the installed version 1.1.0 (from the publisher Acme LLP)"
+        );
+    }
+
+    #[test]
+    fn the_window_shows_the_publisher_and_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        desktop(dir.path(), Locale::Ru);
+        let (mut request, rx) = request(false, None);
+        request.origin_kind = acme(ACME_SOURCE);
+        enqueue(request);
+        let ui = the_window();
+        assert_eq!(ui.get_publisher(), "Издатель: ТОО «Акме»");
+        assert!(
+            ui.get_publisher_note()
+                .ends_with("Сам код OpenNCALayer не проверял.")
+        );
+        assert_eq!(
+            ui.get_source(),
+            "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        assert_eq!(ui.get_warning(), "");
+        ui.invoke_answer(false);
+        assert!(!answered(&rx));
     }
 }

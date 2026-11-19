@@ -19,8 +19,8 @@ use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, StandardListVi
 
 use crate::prompter::select_language;
 use crate::ui::{
-    AboutWindow, ChoiceDialog, ConfirmDialog, CsrDialog, FileDialog, ImportDialog,
-    InstallPluginWindow, KeyDialog, KeyItem, MessageDialog, Metrics, OperationBlock,
+    AboutWindow, AvailableRow, ChoiceDialog, ConfirmDialog, CsrDialog, FileDialog, ImportDialog,
+    InstallPluginWindow, InstalledRow, KeyDialog, KeyItem, MessageDialog, Metrics, OperationBlock,
     PasswordDialog, PluginsWindow, ReaderDialog, SaveDialog, SettingsWindow, StopOriginalWindow,
     StorageDialog, StorageRow, TlsWizardWindow,
 };
@@ -308,6 +308,9 @@ fn install_plugin_window_installs_only_on_a_deliberate_press() {
     ui.set_plugin(long_name().into());
     ui.set_replacing(long_error().into());
     ui.set_warning(long_error().into());
+    ui.set_publisher(long_name().into());
+    ui.set_publisher_note(long_error().into());
+    ui.set_source(long_name().into());
     ui.set_capabilities(ModelRc::new(VecModel::from(vec![
         SharedString::from(long_error()),
         SharedString::from(long_name()),
@@ -413,6 +416,25 @@ fn plugins_window_escape_closes_a_question_before_the_window() {
     ui.set_catalog(long_error().into());
     ui.set_message(long_error().into());
     ui.set_message_is_error(true);
+    // A publisher's plugin installed and offered: its publisher and source link, long.
+    ui.set_installed(ModelRc::new(VecModel::from(vec![InstalledRow {
+        title: long_name().into(),
+        details: long_error().into(),
+        state: long_error().into(),
+        error: true,
+        can_toggle: true,
+        enabled: true,
+        update: long_error().into(),
+        publisher: long_name().into(),
+        source: long_name().into(),
+    }])));
+    ui.set_available(ModelRc::new(VecModel::from(vec![AvailableRow {
+        title: long_name().into(),
+        details: long_error().into(),
+        publisher: long_name().into(),
+        source: long_name().into(),
+        needed: long_error().into(),
+    }])));
     actions_stay_reachable(&ui, Class::Wide, |ui| ui.get_actions_reachable(), "plugins");
     let (dismissed, on_dismiss) = counter();
     ui.on_dismiss(on_dismiss);
@@ -633,6 +655,33 @@ fn the_consent_of_a_plugin_is_in_the_first_screenful() {
         "sign",
     )])));
     ui.set_replacing(long_error().into());
+    ui.set_replaces(long_error().into());
+    open(&ui, narrowest(Class::Dialog));
+    for step in UiScale::ALL {
+        scale::apply_to(ui.window(), 1.0, step);
+        assert!(ui.get_consent_in_view(), "at {}%", step.percent());
+    }
+}
+
+/// A publisher's plugin: its publisher, the note that its code was not reviewed and its
+/// source link come under its name, and the consent text is still in the first screenful.
+#[test]
+fn the_consent_of_a_publishers_plugin_is_in_the_first_screenful() {
+    offscreen::install();
+    let ui = InstallPluginWindow::new().unwrap();
+    ui.set_asker("https://site.test".into());
+    ui.set_plugin("\"Market\" (the plugin's own name), version 1.2.0".into());
+    ui.set_publisher("Publisher: Acme LLP".into());
+    ui.set_publisher_note(
+        "The publisher signed this plugin, and OpenNCALayer built it from the published \
+         source code. OpenNCALayer did not review the code."
+            .into(),
+    );
+    ui.set_source("Source code: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0".into());
+    ui.set_may("It may:".into());
+    ui.set_capabilities(ModelRc::new(VecModel::from(vec![SharedString::from(
+        "sign",
+    )])));
     ui.set_replaces(long_error().into());
     open(&ui, narrowest(Class::Dialog));
     for step in UiScale::ALL {

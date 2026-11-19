@@ -92,15 +92,112 @@ pub struct InstallRequest {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
-    /// The installed plugin of the same id it would replace: its version and source.
-    pub replacing: Option<(Version, Source)>,
+    /// The installed plugin of the same id it would replace: its version and origin.
+    pub replacing: Option<(Version, ReleaseOrigin)>,
     /// What its manifest declares it may do.
     pub capabilities: Capabilities,
     /// What its `[[operations]]` do, said from checked fields; over the installed version
     /// of the plugin, if any, with what is new or wider marked.
     pub operations: Vec<OperationConsent>,
-    /// From a file the user chose, not from the catalog: nobody has reviewed it.
-    pub local: bool,
+    /// Who released it: the project, a publisher, or a file the user chose (nobody has
+    /// reviewed it).
+    pub origin_kind: ReleaseOrigin,
+}
+
+/// Who released a plugin, as the windows name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseOrigin {
+    /// A port of the owner's index.
+    Project,
+    /// A publisher's plugin of the catalog.
+    Publisher {
+        /// Its display name in `publishers.json` (its name if the catalog does not have it).
+        display: Localized,
+        /// The source archive of the release, if the catalog in use lists the release.
+        source: Option<SourceLink>,
+    },
+    /// A file the user chose.
+    LocalFile,
+}
+
+/// The source archive of a publisher's release in the project's Releases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLink {
+    /// `<id>-<version>.src.tar.gz`.
+    pub file: String,
+    /// Its copy in the project's Releases, beside the package
+    /// ([`oncl_update::catalog::source_mirror_url`]).
+    pub url: String,
+    /// The license the release declares (SPDX).
+    pub license: String,
+}
+
+/// Who released `release` of `catalog` (none: the release is not known), the plugin of
+/// `publisher` installed from `source`.
+fn release_origin(
+    catalog: Option<&oncl_update::Catalog>,
+    release: Option<&PluginRelease>,
+    publisher: Option<&PublisherName>,
+    source: Source,
+) -> ReleaseOrigin {
+    if source == Source::Local {
+        return ReleaseOrigin::LocalFile;
+    }
+    let Some(publisher) = publisher else {
+        return ReleaseOrigin::Project;
+    };
+    let source = catalog.zip(release).and_then(|(catalog, release)| {
+        let archive = catalog.source(release)?;
+        Some(SourceLink {
+            file: oncl_update::catalog::source_archive_name(&release.id, &release.version),
+            url: oncl_update::catalog::source_mirror_url(release)?,
+            license: archive.license.clone(),
+        })
+    });
+    ReleaseOrigin::Publisher {
+        display: catalog.map_or_else(
+            || same_name(publisher.as_str()),
+            |catalog| publisher_display(catalog, publisher),
+        ),
+        source,
+    }
+}
+
+/// The display name of `publisher` in `catalog`'s `publishers.json`, or its name.
+fn publisher_display(catalog: &oncl_update::Catalog, publisher: &PublisherName) -> Localized {
+    catalog
+        .policy()
+        .and_then(|policy| policy.publisher(publisher))
+        .map_or_else(
+            || same_name(publisher.as_str()),
+            |p| Localized {
+                ru: p.display().ru.clone(),
+                kk: p.display().kk.clone(),
+                en: p.display().en.clone(),
+            },
+        )
+}
+
+/// Who released the installed `id` (`installed`): its release in `catalog`, if listed, gives
+/// the source archive.
+fn installed_origin(
+    catalog: Option<&oncl_update::Catalog>,
+    id: &str,
+    installed: &Installed,
+) -> ReleaseOrigin {
+    let publisher = installed
+        .publisher
+        .as_ref()
+        .or_else(|| catalog.and_then(|catalog| catalog.publisher_of(id)));
+    let release = catalog.and_then(|catalog| {
+        catalog.releases().find(|r| {
+            r.id == id
+                && r.version == installed.version
+                && r.publisher.as_ref() == publisher
+                && r.package.sha256 == installed.sha256
+        })
+    });
+    release_origin(catalog, release, publisher, installed.source)
 }
 
 /// What the plugins tell the user (tray notifications).
@@ -192,7 +289,7 @@ pub struct InstalledView {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
-    pub source: Source,
+    pub origin: ReleaseOrigin,
     pub state: PluginState,
     /// An update that waits for the user: it may do more than this version.
     pub pending_update: Option<PendingView>,
@@ -210,6 +307,8 @@ pub struct PendingView {
     /// The sha256 of the package of this update (hex, from the signed index): the answer the
     /// user gives is for this package ([`PluginService::confirm_update`]).
     pub package_sha256: String,
+    /// Who released the update.
+    pub origin: ReleaseOrigin,
 }
 
 impl PendingView {
@@ -249,6 +348,7 @@ pub struct AvailableView {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
+    pub origin: ReleaseOrigin,
     /// A page called one of its modules: its origin (`Some(None)`: without an origin).
     pub needed_by: Option<Option<String>>,
 }
@@ -519,6 +619,7 @@ impl PluginService {
         let state = self.store.state();
         let errors = lock(&self.errors).clone();
         let known = lock(&self.known).clone();
+        let index = self.valid_catalog().map(|in_use| in_use.catalog);
         let pending: BTreeMap<String, PendingView> = lock(&self.pending)
             .iter()
             .map(|(id, p)| {
@@ -527,6 +628,12 @@ impl PluginService {
                     added: p.added.clone(),
                     operations: p.package.manifest.operation_consents(Some(&p.added)),
                     package_sha256: p.release.package.sha256.to_string(),
+                    origin: release_origin(
+                        index.as_deref(),
+                        Some(&p.release),
+                        p.release.publisher.as_ref(),
+                        Source::Catalog,
+                    ),
                 };
                 (id.clone(), view)
             })
@@ -541,7 +648,7 @@ impl PluginService {
                     name: known.map_or_else(|| same_name(id), |k| k.name.clone()),
                     version: installed.version.clone(),
                     replaces: known.and_then(|k| k.replaces.clone()),
-                    source: installed.source,
+                    origin: installed_origin(index.as_deref(), id, installed),
                     state: if installed.withdrawn {
                         PluginState::Withdrawn
                     } else if !installed.enabled {
@@ -563,7 +670,6 @@ impl PluginService {
             };
         }
         let channel = self.update_settings().channel;
-        let index = self.valid_catalog().map(|in_use| in_use.catalog);
         let (checked, error) = {
             let catalog = lock(&self.catalog);
             (catalog.checked, catalog.error.clone())
@@ -594,6 +700,12 @@ impl PluginService {
                             name: localized(&release.name),
                             version: release.version.clone(),
                             replaces: replaces_of(release),
+                            origin: release_origin(
+                                Some(index.as_ref()),
+                                Some(release),
+                                release.publisher.as_ref(),
+                                Source::Catalog,
+                            ),
                             needed_by: needed.get(id).cloned(),
                         })
                     })
@@ -672,7 +784,21 @@ impl PluginService {
             return Err(PluginActionError::Failed(e.to_string()));
         }
         let publisher = release.publisher.clone();
-        self.ask(package, bytes, Source::Catalog, publisher, origin, guard);
+        let origin_kind = release_origin(
+            Some(index.as_ref()),
+            Some(&release),
+            publisher.as_ref(),
+            Source::Catalog,
+        );
+        self.ask(
+            package,
+            bytes,
+            Source::Catalog,
+            publisher,
+            origin,
+            origin_kind,
+            guard,
+        );
         Ok(())
     }
 
@@ -719,7 +845,15 @@ impl PluginService {
         let Some(guard) = self.begin_install(&package.manifest.id) else {
             return Err(PluginActionError::BeingInstalled);
         };
-        self.ask(package, bytes, Source::Local, None, None, guard);
+        self.ask(
+            package,
+            bytes,
+            Source::Local,
+            None,
+            None,
+            ReleaseOrigin::LocalFile,
+            guard,
+        );
         Ok(())
     }
 
@@ -1143,17 +1277,7 @@ impl PluginService {
                 }
                 PluginChoice::Withdrawn => self.withdraw(id, snapshot, None),
                 PluginChoice::PublisherRevoked(publisher) => {
-                    let display = catalog
-                        .policy()
-                        .and_then(|policy| policy.publisher(publisher))
-                        .map_or_else(
-                            || same_name(publisher.as_str()),
-                            |p| Localized {
-                                ru: p.display().ru.clone(),
-                                kk: p.display().kk.clone(),
-                                en: p.display().en.clone(),
-                            },
-                        );
+                    let display = publisher_display(catalog, publisher);
                     self.withdraw(id, snapshot, Some(display))
                 }
                 // A choice this core does not know leaves the plugin as it is, but is logged:
@@ -1543,8 +1667,9 @@ impl PluginService {
         Ok((read, bytes))
     }
 
-    /// Asks the user about `package`; installs it if they agree, from `source`, released by
-    /// `publisher` (a publisher's plugin of the catalog).
+    /// Asks the user about `package` (released as `origin_kind` says); installs it if they
+    /// agree, from `source`, released by `publisher` (a publisher's plugin of the catalog).
+    #[allow(clippy::too_many_arguments)] // each is a fact of the request, none derivable
     fn ask(
         self: &Arc<Self>,
         package: Package,
@@ -1552,15 +1677,17 @@ impl PluginService {
         source: Source,
         publisher: Option<PublisherName>,
         origin: Option<String>,
+        origin_kind: ReleaseOrigin,
         guard: Installing,
     ) {
         let m = &package.manifest;
-        let replacing = self
-            .store
-            .state()
-            .plugins
-            .get(&m.id)
-            .map(|installed| (installed.version.clone(), installed.source));
+        let replacing = self.store.state().plugins.get(&m.id).map(|installed| {
+            let catalog = self.valid_catalog().map(|in_use| in_use.catalog);
+            (
+                installed.version.clone(),
+                installed_origin(catalog.as_deref(), &m.id, installed),
+            )
+        });
         let added = replacing.is_some().then(|| self.added_over_installed(m));
         let request = InstallRequest {
             origin,
@@ -1570,7 +1697,7 @@ impl PluginService {
             replacing,
             capabilities: m.capabilities.clone(),
             operations: m.operation_consents(added.as_ref()),
-            local: source == Source::Local,
+            origin_kind,
         };
         let service = Arc::downgrade(self);
         self.cfg.ui.confirm(

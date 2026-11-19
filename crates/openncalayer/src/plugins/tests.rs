@@ -284,7 +284,7 @@ fn install_from_catalog_confirmed() {
         request.capabilities.keys && request.capabilities.dialogs && request.capabilities.files
     );
     assert_eq!(request.capabilities.http.len(), 1);
-    assert!(!request.local);
+    assert_eq!(request.origin_kind, ReleaseOrigin::Project);
     assert_eq!(
         sandbox.notices(),
         [PluginNotice::Installed { name: name() }]
@@ -523,7 +523,7 @@ fn local_plugin_is_not_updated() {
         .unwrap();
     let requests = sandbox.requests();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].local);
+    assert_eq!(requests[0].origin_kind, ReleaseOrigin::LocalFile);
     assert_eq!(requests[0].origin, None);
     assert_eq!(requests[0].replacing, None);
     assert_eq!(
@@ -537,7 +537,7 @@ fn local_plugin_is_not_updated() {
         .unwrap();
     assert_eq!(
         sandbox.requests()[0].replacing,
-        Some((v("0.1.0"), Source::Local))
+        Some((v("0.1.0"), ReleaseOrigin::LocalFile))
     );
     sandbox.notices();
     service
@@ -555,7 +555,7 @@ fn local_plugin_is_not_updated() {
     assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
     assert_eq!(sandbox.modules.names(), [MODULE]);
     let view = service.view();
-    assert_eq!(view.installed[0].source, Source::Local);
+    assert_eq!(view.installed[0].origin, ReleaseOrigin::LocalFile);
     assert_eq!(view.installed[0].state, PluginState::Enabled);
     // Installed: not offered.
     assert!(view.available.is_empty());

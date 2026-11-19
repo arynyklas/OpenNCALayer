@@ -222,6 +222,17 @@ fn a_publishers_plugin_is_offered_installed_with_its_publisher_and_updated() {
             .collect::<Vec<_>>(),
         [(ACME_ID, v("1.0.0"))]
     );
+    // Named by its publisher, its source archive beside its package in the project's
+    // Releases (not the publisher's `fetch`), its license from the signed release.
+    let acme_origin = |version: &str| ReleaseOrigin::Publisher {
+        display: acme_display(),
+        source: Some(SourceLink {
+            file: format!("{ACME_ID}-{version}.src.tar.gz"),
+            url: package_url_of(version).replace(".onclp", ".src.tar.gz"),
+            license: "Apache-2.0".to_owned(),
+        }),
+    };
+    assert_eq!(view.available[0].origin, acme_origin("1.0.0"));
 
     service.install_from_catalog(ACME_ID, None).unwrap();
     assert_eq!(
@@ -229,7 +240,8 @@ fn a_publishers_plugin_is_offered_installed_with_its_publisher_and_updated() {
         [PluginNotice::Installed { name: name() }]
     );
     let requests = sandbox.requests();
-    assert!(!requests[0].local);
+    assert_eq!(requests[0].origin_kind, acme_origin("1.0.0"));
+    assert_eq!(service.view().installed[0].origin, acme_origin("1.0.0"));
     let record = installed(&sandbox);
     assert_eq!(record.source, Source::Catalog);
     assert_eq!(record.publisher, Some(acme()));

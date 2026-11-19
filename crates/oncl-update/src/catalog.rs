@@ -46,7 +46,7 @@ pub use policy::{
 };
 pub use release::{
     CapabilitiesError, DeclaredCapabilities, EntryRejected, EntryRejection, MAX_URL, MIRROR_BASE,
-    PublisherRelease, PublisherTarget, mirror_url,
+    PublisherRelease, PublisherTarget, mirror_url, source_archive_name, source_mirror_url,
 };
 pub use source::{ReleaseSource, SourceError, SourceVcs};
 
@@ -82,6 +82,9 @@ pub struct Catalog {
     states: BTreeMap<PublisherName, PublisherState>,
     /// The releases of the active publishers offered on the index's channel.
     releases: Vec<PluginRelease>,
+    /// The source archives of `releases`, by package URL (unique: it names the package's
+    /// sha256).
+    sources: BTreeMap<String, ReleaseSource>,
     /// The versions (build metadata cleared) the publishers' verified roles revoke, by
     /// publisher and id, on every channel, whatever their publisher's state: read by the
     /// target path alone.
@@ -127,6 +130,7 @@ impl Catalog {
             policy: None,
             states: BTreeMap::new(),
             releases: Vec::new(),
+            sources: BTreeMap::new(),
             self_revoked: BTreeMap::new(),
             rejected: Vec::new(),
         }
@@ -168,6 +172,13 @@ impl Catalog {
     /// channel. A port another publisher replaces is among them ([`Catalog::replacement`]).
     pub fn releases(&self) -> impl Iterator<Item = &PluginRelease> {
         self.index.plugins.iter().chain(&self.releases)
+    }
+
+    /// The source archive `release` of this catalog was built from: `None` for a release of
+    /// the owner's index or one this catalog does not offer.
+    pub fn source(&self, release: &PluginRelease) -> Option<&ReleaseSource> {
+        release.publisher.as_ref()?;
+        self.sources.get(&release.package.url)
     }
 
     /// The publishers' targets left out, and why.
@@ -406,6 +417,7 @@ impl<'r> CatalogBuilder<'r> {
         };
         let mut states = BTreeMap::new();
         let mut releases = Vec::new();
+        let mut sources = BTreeMap::new();
         let mut self_revoked =
             BTreeMap::<PublisherName, BTreeMap<String, BTreeSet<Version>>>::new();
         let mut rejected = Vec::new();
@@ -459,6 +471,10 @@ impl<'r> CatalogBuilder<'r> {
                 });
                 match admitted {
                     Ok(release) if release.offered_on(index.channel) => {
+                        sources.insert(
+                            release.release().package.url.clone(),
+                            release.source().clone(),
+                        );
                         releases.push(release.into_release());
                     }
                     Ok(_) => {}
@@ -477,6 +493,7 @@ impl<'r> CatalogBuilder<'r> {
             policy: Some(policy),
             states,
             releases,
+            sources,
             self_revoked,
             rejected,
         }
