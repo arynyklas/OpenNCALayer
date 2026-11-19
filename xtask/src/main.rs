@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, bail};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use oncl_update::{Channel, Version};
 use time::OffsetDateTime;
 
@@ -258,38 +258,42 @@ enum BuiltinsCommand {
 #[derive(Subcommand)]
 enum RegistryCommand {
     /// Generate the build copy into `<out>/src`, build it into `<out>/public` and check it.
-    Build {
-        /// The ports [default: `plugins/` of the workspace].
-        #[arg(long)]
-        plugins: Option<PathBuf>,
-        /// The update indexes [default: `updates/v1/` of the workspace, if there].
-        #[arg(long)]
-        updates: Option<PathBuf>,
-        /// The project's releases, JSON Lines (`gh api …/releases`).
-        #[arg(long)]
-        releases: Option<PathBuf>,
-        /// A copy of the `upstream` branch's `index.json` and `latest/facts.json`.
-        #[arg(long)]
-        upstream: Option<PathBuf>,
-        /// The publishers' registry [default: `publishers/` of the workspace, if there].
-        #[arg(long)]
-        publishers: Option<PathBuf>,
-        /// The TUF repository with the publishers' roles [default: `tuf/v1/` of the
-        /// workspace, if there].
-        #[arg(long)]
-        tuf: Option<PathBuf>,
-        /// Output directory [default: target/site].
-        #[arg(long)]
-        out: Option<PathBuf>,
-        /// The Zola binary [default: the pinned one, downloaded into target/tools].
-        #[arg(long)]
-        zola: Option<PathBuf>,
-    },
+    Build(Box<RegistryBuild>),
     /// Check a built site offline: links, fragments, external places and page rules.
     Check {
         /// The built site.
         dir: PathBuf,
     },
+}
+
+/// The inputs and output of `registry build`.
+#[derive(Args)]
+struct RegistryBuild {
+    /// The ports [default: `plugins/` of the workspace].
+    #[arg(long)]
+    plugins: Option<PathBuf>,
+    /// The update indexes [default: `updates/v1/` of the workspace, if there].
+    #[arg(long)]
+    updates: Option<PathBuf>,
+    /// The project's releases, JSON Lines (`gh api …/releases`).
+    #[arg(long)]
+    releases: Option<PathBuf>,
+    /// A copy of the `upstream` branch's `index.json` and `latest/facts.json`.
+    #[arg(long)]
+    upstream: Option<PathBuf>,
+    /// The publishers' registry [default: `publishers/` of the workspace, if there].
+    #[arg(long)]
+    publishers: Option<PathBuf>,
+    /// The TUF repository with the publishers' roles [default: `tuf/v1/` of the workspace,
+    /// if there].
+    #[arg(long)]
+    tuf: Option<PathBuf>,
+    /// Output directory [default: target/site].
+    #[arg(long)]
+    out: Option<PathBuf>,
+    /// The Zola binary [default: the pinned one, downloaded into target/tools].
+    #[arg(long)]
+    zola: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -778,16 +782,17 @@ enum ExtCommand {
 fn registry(command: RegistryCommand) -> anyhow::Result<()> {
     let root = oncl_testkit::workspace_root();
     match command {
-        RegistryCommand::Build {
-            plugins,
-            updates,
-            releases,
-            upstream,
-            publishers,
-            tuf,
-            out,
-            zola,
-        } => {
+        RegistryCommand::Build(build) => {
+            let RegistryBuild {
+                plugins,
+                updates,
+                releases,
+                upstream,
+                publishers,
+                tuf,
+                out,
+                zola,
+            } = *build;
             let existing = |path: Option<PathBuf>, default: &str| {
                 path.or_else(|| {
                     let dir = root.join(default);

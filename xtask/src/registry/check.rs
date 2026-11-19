@@ -560,8 +560,8 @@ mod tests {
     fn minimal_site_passes() {
         let dir = site(&[]);
         let report = check(dir.path(), BASE).unwrap();
-        assert_eq!(report.pages, 13);
-        assert_eq!(report.links, 26);
+        assert_eq!(report.pages, REQUIRED.len());
+        assert_eq!(report.links, 2 * REQUIRED.len());
     }
 
     #[test]

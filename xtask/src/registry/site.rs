@@ -258,7 +258,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(indexes, 4);
+        assert_eq!(indexes, 5);
     }
 
     #[test]
