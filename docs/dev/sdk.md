@@ -249,10 +249,11 @@ Core выполняет три шага в указанном порядке (`d
 | 0.1.0-rc.4 → 0.1.0 | Публичный API крейтов SDK не меняется. |
 | 0.1.0 → 0.1.1 | Публичный API крейтов SDK не меняется. |
 | 0.1.1 → 0.1.2-beta.1 | Несовместимо меняется публичный API `oncl-update` (каталог плагинов и делегированные роли TUF), см. «Переход с 0.1.1 на 0.1.2». У остальных крейтов SDK меняется только номер версии. Номер патча не означает совместимость: до 1.0 SDK и программа выходят под одной версией. |
+| 0.1.2-beta.1 → следующий выпуск | Несовместимо меняется публичный API `oncl-plugin` (feature `distribution`): `Store::install` принимает издателя, у `Installed` и `StoreState` новые поля; `oncl-update` получает `choose_installed` и методы каталога для записанного издателя. См. «Переход с 0.1.1 на 0.1.2». |
 
 ### Переход с 0.1.1 на 0.1.2
 
-Сравнение с выпущенным `v0.1.1`. Публичный API меняется только у `oncl-update`. У `oncl-gost`, `oncl-registry`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows`, `oncl-plugin` и `oncl-core` он прежний.
+Сравнение с выпущенным `v0.1.1`. Публичный API меняется у `oncl-update` и у `oncl-plugin` с feature `distribution`. У `oncl-gost`, `oncl-registry`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows` и `oncl-core` он прежний.
 
 Что перестанет собираться в `oncl-update` и как это исправить:
 
@@ -266,6 +267,11 @@ Core выполняет три шага в указанном порядке (`d
 - Функция `tuf::model::valid_target_path` удалена, её заменяет `TargetPath::parse(path).is_ok()`.
 - `tuf::layout::target_file_path` принимает `&TargetPath` и возвращает `String` вместо `Option<String>`.
 
+Что перестанет собираться в `oncl-plugin` (feature `distribution`) и как это исправить:
+
+- `Store::install(package, bytes, source)` стал `install(package, bytes, source, publisher)`: `publisher: Option<&tuf::PublisherName>` — издатель выпуска каталога (`PluginRelease::publisher`), для порта из индекса владельца и для файла пользователя `None`.
+- У `Installed` новое поле `publisher: Option<PublisherName>`, у `StoreState` — `declined_replacements: BTreeMap<String, String>`; в литерале задайте `None` и `BTreeMap::new()`. Файл состояния с ними версии 0.1.1 и 0.1.2-beta.1 читают: оба поля без значения не пишутся, а незнакомые поля они пропускают. Но, сохранив состояние заново (после отката на них проверкой здоровья или вручную), они оба поля теряют: издатель затем восстанавливается по префиксу, а отказы от замены порта забываются, и замену предложат снова. Имя издателя, которое новая версия не принимает, читается как `None` (журнал `warn`), остальное состояние не теряется.
+
 Что меняется в поведении:
 
 - `TufClient` по умолчанию читает репозиторий в профиле `Profile::Delegating`: член `delegations` верхнего `targets` принимается, а `refresh` его не читает. Клиент 0.1.1 отказывал в таком файле с `TufError::Unsupported`. Прежнее поведение включает `TufClient::with_profile(Profile::Legacy)`.
@@ -275,7 +281,10 @@ Core выполняет три шага в указанном порядке (`d
 
 - модуль `catalog` (каталог плагинов: индекс владельца и выпуски сторонних издателей, `docs/design/publishers.md`). Из корня крейта реэкспортируются `Catalog`, `CatalogBuilder`, `CatalogError`, `DeclaredCapabilities`, `EntryRejected`, `EntryRejection`, `PublisherPolicy`, `PublisherRelease` и `PublisherState`. Остальное доступно как `catalog::…`: `PluginId`, `IdPrefix`, `ModuleName`, `BundleName`, `PROJECT_PREFIX`, `ActivePublisher`, `Publisher`, `PublisherDisplay`, `RevokedVersion`, `Standing`, `CapabilitiesError`, `PublisherTarget`, `MAX_URL`, `MIRROR_BASE`, `mirror_url`, `ReleaseSource`, `SourceError` и `SourceVcs`;
 - метод `UpdateError::unreachable()`;
-- в `tuf`: модули `delegation` (`Delegations`, `DelegatedRole`, `RefusedRole`) и `names` (`TargetPath`, `RoleName`, `PublisherName`, `PathPattern`, `NameError`, `NameKind`), типы `Profile`, `DelegationError`, `RoleState`, `Delegated` и `VerifiedRole`, методы `TufClient::with_profile`, `TufClient::profile`, `TufClient::delegated`, `TufClient::verify_cached_role` и `Targets::delegations`, функции `ed25519::verify_threshold` и `layout::delegated_path`.
+- в `tuf`: модули `delegation` (`Delegations`, `DelegatedRole`, `RefusedRole`) и `names` (`TargetPath`, `RoleName`, `PublisherName`, `PathPattern`, `NameError`, `NameKind`), типы `Profile`, `DelegationError`, `RoleState`, `Delegated` и `VerifiedRole`, методы `TufClient::with_profile`, `TufClient::profile`, `TufClient::delegated`, `TufClient::verify_cached_role` и `Targets::delegations`, функции `ed25519::verify_threshold` и `layout::delegated_path`; `PublisherName` (де)сериализуется строкой с проверкой грамматики;
+- функция `choose_installed` (как `choose_plugin`, но с издателем, записанным при установке), методы `Catalog::publisher_state_of`, `Catalog::is_installed_revoked` и `CatalogBuilder::capabilities`, вариант `EntryRejection::CapabilitiesUnreadable`.
+
+Что добавлено в `oncl-plugin` (feature `distribution`): `TryFrom<&DeclaredCapabilities> for Capabilities` (правила таблицы `[capabilities]` манифеста, без `builtin`); у `Store` методы `set_publisher`, `set_declined_replacement`, `save_publishers`, `load_publishers`, `save_role`, `load_roles` и `prune_roles` (файлы `<data>/plugins/catalog/publishers.json` и `<data>/plugins/catalog/roles/pub-<имя>.json`).
 
 Сборка: `oncl-gost` и `oncl-pki` берут `streebog` и `hmac` из crates.io, поэтому раздел `[patch.crates-io]` с форками из заметки rc.2 → rc.3 потребителю SDK больше не нужен. Новая зависимость `oncl-gost`: `subtle` `=2.6.1`.
 

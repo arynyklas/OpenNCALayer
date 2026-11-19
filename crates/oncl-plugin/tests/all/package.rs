@@ -870,3 +870,39 @@ fn symbolic_name_rules() {
         assert!(!is_symbolic_name(bad), "{bad:?}");
     }
 }
+
+#[test]
+fn declared_capabilities_read_like_the_manifest_table() {
+    use serde_json::json;
+    let read = |value: serde_json::Value| {
+        let declared = oncl_update::DeclaredCapabilities::try_from(value).unwrap();
+        Capabilities::try_from(&declared)
+    };
+    assert_eq!(read(json!({})).unwrap(), Capabilities::default());
+    let declared = read(json!({
+        "keys": true,
+        "http": ["https://api.ecc.kz/"],
+        "page_files": true,
+        "page_files_ext": ["PDF", "pdf"]
+    }))
+    .unwrap();
+    let manifest = Manifest::from_toml(&format!(
+        "{MANIFEST}\n[capabilities]\nkeys = true\nhttp = [\"https://api.ecc.kz/\"]\n\
+         page_files = true\npage_files_ext = [\"PDF\", \"pdf\"]\n"
+    ))
+    .unwrap();
+    assert_eq!(declared, manifest.capabilities);
+    assert_eq!(declared.page_files_ext, vec!["pdf".to_owned()]);
+    for bad in [
+        json!({"unknown": true}),
+        json!({"keys": "yes"}),
+        json!({"http": "https://api.ecc.kz/"}),
+        json!({"http": ["http://api.ecc.kz/"]}),
+        json!({"key_files": true}),
+        json!({"builtin": true}),
+        json!({"page_files_ext": ["pdf"]}),
+        json!({"page_files": true, "page_files_ext": ["p.df"]}),
+    ] {
+        assert!(read(bad.clone()).is_err(), "{bad}");
+    }
+}

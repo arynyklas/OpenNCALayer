@@ -683,7 +683,7 @@ fn startup_loads_enabled_only() {
     let store = sandbox.store();
     let bytes = example("0.1.0");
     store
-        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local)
+        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Local, None)
         .unwrap();
     let other = example_at("1.0.0", |m| {
         m.replacen(&format!("id = \"{ID}\""), "id = \"kz.example.other\"", 1)
@@ -694,7 +694,7 @@ fn startup_loads_enabled_only() {
             )
     });
     store
-        .install(&Package::read(&other).unwrap(), &other, Source::Local)
+        .install(&Package::read(&other).unwrap(), &other, Source::Local, None)
         .unwrap();
     store.set_enabled("kz.example.other", false).unwrap();
     let broken = example_at("1.0.0", |m| {
@@ -706,7 +706,12 @@ fn startup_loads_enabled_only() {
             )
     });
     store
-        .install(&Package::read(&broken).unwrap(), &broken, Source::Local)
+        .install(
+            &Package::read(&broken).unwrap(),
+            &broken,
+            Source::Local,
+            None,
+        )
         .unwrap();
     // Changed on disk after its installation.
     let file = sandbox
@@ -1614,7 +1619,12 @@ fn a_catalog_downloaded_on_demand_is_applied() {
     let bytes = example("0.1.0");
     sandbox
         .store()
-        .install(&Package::read(&bytes).unwrap(), &bytes, Source::Catalog)
+        .install(
+            &Package::read(&bytes).unwrap(),
+            &bytes,
+            Source::Catalog,
+            None,
+        )
         .unwrap();
     let service = sandbox.service();
     let old = sandbox.release("0.1.0", &bytes);

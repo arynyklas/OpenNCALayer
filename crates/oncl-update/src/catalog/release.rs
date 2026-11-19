@@ -191,6 +191,10 @@ pub enum EntryRejection {
     /// `capabilities` are not a [`DeclaredCapabilities`].
     #[error("invalid capabilities")]
     Capabilities(#[source] CapabilitiesError),
+    /// `capabilities` do not read by the rules of a plugin manifest's `[capabilities]`
+    /// table (the reader given to [`super::CatalogBuilder::capabilities`]).
+    #[error("capabilities do not read as a manifest's: {0}")]
+    CapabilitiesUnreadable(String),
     /// `id` is not under the publisher's prefix.
     #[error("the id is outside the publisher's prefix")]
     IdOutsidePrefix,
