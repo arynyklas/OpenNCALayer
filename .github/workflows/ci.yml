@@ -232,10 +232,14 @@ jobs:
       - uses: actions/checkout@v5
       # The window system's development files for slint and winit (fontconfig, xkbcommon,
       # wayland in Cargo.lock); nothing links GTK.
+      # apt fails fast and retries (30 s network timeouts, 3 retries) within 10 minutes: a
+      # stalled mirror once held `sudo apt-get update` until the job's own limit.
       - name: Install system libraries
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/pinned-toolchains
@@ -304,9 +308,11 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install system libraries
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/pinned-toolchains
@@ -365,11 +371,13 @@ jobs:
       # if one is missing).
       - name: System libraries
         if: runner.os == 'Linux'
+        timeout-minutes: 10
         run: |
           libs=(libfontconfig1 libxkbcommon0 libwayland-client0)
           if ! dpkg -s "${libs[@]}" > /dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y --no-install-recommends "${libs[@]}"
+            sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+            sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+              install -y --no-install-recommends "${libs[@]}"
           fi
       # Tests build the example plugin, the plugin ports and the Windows 7 DLLs with cargo.
       - name: Install toolchain (rust-toolchain.toml)
@@ -541,9 +549,11 @@ jobs:
           # (docs/dev/plugin-version-check.md); without one it only prints a NOTICE.
           fetch-depth: 0
       - name: Install system libraries
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: ./.github/actions/pinned-toolchains
@@ -663,9 +673,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install pcscd and vpcd
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          if ! sudo apt-get install -y --no-install-recommends pcscd vsmartcard-vpcd; then
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          if ! sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends pcscd vsmartcard-vpcd; then
             echo "::error::pcscd or vsmartcard-vpcd is not installable on this runner image"
             exit 1
           fi
@@ -756,9 +768,11 @@ jobs:
       # libdbus-glib-1-2: Firefox ESR 115 links libdbus-glib-1.so.2 (later Firefox does not).
       # libgtk-3-0t64: the browsers' own GTK (the runner image has it; named so that it stays).
       - name: Install system libraries
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev \
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends libfontconfig1-dev libxkbcommon-dev libwayland-dev \
             libdbus-glib-1-2 libgtk-3-0t64
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
@@ -1060,9 +1074,11 @@ jobs:
       - name: Install toolchain (rust-toolchain.toml)
         run: rustup toolchain install
       - name: Install squashfs-tools (vpk's AppImage)
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends squashfs-tools
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::Retries=3 \
+            install -y --no-install-recommends squashfs-tools
       - uses: actions/download-artifact@v5
         with:
           name: builtins
