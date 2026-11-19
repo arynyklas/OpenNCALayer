@@ -4,19 +4,14 @@
 #
 # Nextest runs every test in its own process. A lock or a counter in a `static` of a test
 # binary therefore no longer serialises the tests of that binary: the groups below do it
-# where tests share something outside their process.
+# where tests share something outside their process. The daemon tests share the ports
+# 13580..=13679 and need no group: `oncl_testkit::ports::DaemonPort` leases a port through a
+# lock file, which holds across processes.
 
 [test-groups]
-# The daemon tests that pick a port by scanning 13580..=13679 (bind, close, hand the number
-# to a daemon): two processes can pick the same port at the same time. One at a time.
-daemon-ports = { max-threads = 1 }
 # The built-in modules' memory limits (`one_large_call_at_a_time`, `turn`): calls of up to
 # 64 MiB that the binary ran one at a time. In parallel they would sum on a small runner.
 builtin-memory = { max-threads = 1 }
-
-[[profile.default.overrides]]
-filter = "binary_id(openncalayer::bridge) | (binary_id(openncalayer::all) & test(/^(plugins|ports_e2e|tokens)::/))"
-test-group = "daemon-ports"
 
 [[profile.default.overrides]]
 filter = "binary_id(oncl-builtin-tests::limits) | binary_id(oncl-builtin-tests::call_heap)"
