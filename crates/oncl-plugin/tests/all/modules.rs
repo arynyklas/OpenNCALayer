@@ -2,7 +2,7 @@
 //! under running calls, module names that cannot be taken twice, the instance cap and the
 //! memory budget.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::{

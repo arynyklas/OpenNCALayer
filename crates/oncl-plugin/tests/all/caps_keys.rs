@@ -3,7 +3,7 @@
 //! `local_time`, `platform`, `ca_list`, `ca_issuer`), through guests in WebAssembly text
 //! that call them with fixed arguments.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::testing::{ScriptedPrompter, Step};

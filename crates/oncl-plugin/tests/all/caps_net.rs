@@ -3,7 +3,7 @@
 //! for an http page or under an exact `http_insecure` prefix, and the headers a plugin may
 //! send.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_pdk::abi::{

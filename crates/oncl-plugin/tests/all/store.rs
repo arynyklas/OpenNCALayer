@@ -1,8 +1,6 @@
 //! `<data>/plugins/`: installed packages checked against their sums, the state file
 //! replaced when damaged, and the catalog kept and checked again against the TUF state.
 
-mod common;
-
 use oncl_plugin::{Package, Source, Store, StoreError};
 use oncl_testkit::plugin::{example_package, example_package_with};
 use oncl_update::tuf::testing::Repo;

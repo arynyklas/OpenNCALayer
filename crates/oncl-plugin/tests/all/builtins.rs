@@ -1,7 +1,7 @@
 //! The modules built into the core: their manifests, their trust, `call_locale`, the
 //! errors' causes and the pool of their instances.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_flows::Locale;

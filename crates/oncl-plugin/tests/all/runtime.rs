@@ -2,7 +2,7 @@
 //! that break the ABI, and the basic host functions. Guests are WebAssembly text; what they
 //! answer is CBOR made here with the ABI's own encoder.
 
-mod common;
+use crate::common;
 
 use common::*;
 use oncl_pdk::abi::{
