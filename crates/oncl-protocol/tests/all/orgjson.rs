@@ -269,7 +269,7 @@ fn deep_text_of_many_keys_reads_in_linear_time() {
 }
 
 /// `scan` and `parse` against `serde_json` on texts of many keys, optimized:
-/// `cargo test --release -p oncl-protocol --test orgjson -- --ignored --nocapture`.
+/// `cargo test --release -p oncl-protocol --test all orgjson:: -- --ignored --nocapture`.
 #[test]
 #[ignore = "a measurement"]
 fn many_keys_against_serde_json() {
