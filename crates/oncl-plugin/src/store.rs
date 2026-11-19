@@ -8,7 +8,7 @@
 //!   whenever it is read, against the targets metadata of the TUF state ([`Store::load_catalog`]);
 //! - `catalog/publishers.json` and `catalog/roles/pub-<publisher>.json`: the publishers'
 //!   rules and each publisher's delegated role as last verified, kept beside the index and
-//!   checked again offline the same way ([`Store::load_publishers`], [`Store::load_roles`]);
+//!   checked again offline the same way ([`Store::load_publishers`], [`Store::load_role`]);
 //! - `settings/<id>.json`: a plugin's settings (`settings_*`), kept across its updates and
 //!   removed with it.
 //!
@@ -456,48 +456,7 @@ impl Store {
     /// bytes (for the TUF client, [`oncl_update::tuf::TufClient::verify_cached_role`]). A file
     /// longer than a role may be, or that cannot be read, is none (logged).
     pub fn load_role<T>(&self, role: &RoleName, check: impl FnOnce(&[u8]) -> T) -> Option<T> {
-        read_kept(&self.role_path(role), ROLE_MAX).map(|bytes| check(&bytes))
-    }
-
-    /// Every kept role file, by role, with what `check` says of its bytes (for the TUF
-    /// client, [`oncl_update::tuf::TufClient::verify_cached_role`]); a file whose name is not
-    /// `pub-<publisher>.json`, or that cannot be read, is skipped (logged).
-    pub fn load_roles<T, E>(
-        &self,
-        mut check: impl FnMut(&RoleName, &[u8]) -> Result<T, E>,
-    ) -> Vec<(RoleName, Result<T, E>)> {
-        let entries = match std::fs::read_dir(self.roles_dir()) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Vec::new(),
-            Err(e) => {
-                tracing::warn!(error = %e, "cannot read the kept publishers' roles");
-                return Vec::new();
-            }
-        };
-        let mut roles: Vec<(RoleName, PathBuf)> = entries
-            .filter_map(Result::ok)
-            .filter_map(|entry| {
-                let path = entry.path();
-                let role = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_suffix(".json"))
-                    .and_then(|name| RoleName::parse(name).ok());
-                if role.is_none() {
-                    tracing::info!(path = %path.display(), "not a kept role file; skipped");
-                }
-                role.map(|role| (role, path))
-            })
-            .collect();
-        roles.sort();
-        roles
-            .into_iter()
-            .filter_map(|(role, path)| {
-                let bytes = read_kept(&path, ROLE_MAX)?;
-                let checked = check(&role, &bytes);
-                Some((role, checked))
-            })
-            .collect()
+        read_kept(&self.role_path(role), role_max()).map(|bytes| check(&bytes))
     }
 
     /// Removes the kept role files of every role not in `keep`: the roles the top-level
@@ -613,9 +572,10 @@ fn not_installed(id: &str) -> io::Error {
 /// The longest kept `publishers.json` read: what the client downloads at most.
 const PUBLISHERS_MAX: u64 = oncl_update::PublisherPolicy::MAX_LEN as u64;
 
-/// The longest kept role file read: what the client downloads at most
-/// ([`oncl_update::tuf::Limits::delegated`]).
-const ROLE_MAX: u64 = 128 << 10;
+/// The longest kept role file read: what the client downloads at most.
+fn role_max() -> u64 {
+    oncl_update::tuf::Limits::default().delegated
+}
 
 /// The kept file at `path`, at most `max` bytes; `None` if there is none, it is longer or
 /// it cannot be read (logged).

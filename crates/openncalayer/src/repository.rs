@@ -247,10 +247,12 @@ impl Repository {
     /// The plugin catalog of `channel`, read within `timeout` as [`Repository::index`]
     /// reads the index, unless the snapshot refreshed is version `unless_snapshot`: then
     /// nothing more is read ([`CatalogRead::Unchanged`]). Else the index, then the
-    /// publishers' side, within [`PUBLISHERS_TIMEOUT`] more: `publishers.json` (at most
-    /// [`PublisherPolicy::MAX_LEN`] bytes) and the delegated roles
-    /// ([`TufClient::delegated`]). A failure of the publishers' side is in the result, logged
-    /// once until it changes, and fails nothing else.
+    /// publishers' side: `publishers.json` (at most [`PublisherPolicy::MAX_LEN`] bytes) and
+    /// the delegated roles ([`TufClient::delegated`]), within what is left of `timeout` or,
+    /// if later, `publishers` from the end of the index's download ([`PUBLISHERS_TIMEOUT`]
+    /// for a scheduled or the user's check; zero for a page, which keeps to its own time). A
+    /// failure of the publishers' side is in the result, logged once until it changes, and
+    /// fails nothing else.
     ///
     /// # Errors
     ///
@@ -260,21 +262,26 @@ impl Repository {
         channel: Channel,
         last_seq: Option<u64>,
         timeout: Duration,
+        publishers: Duration,
         unless_snapshot: Option<u64>,
     ) -> Result<CatalogRead, UpdateError> {
+        let side_budget = publishers;
         let result = self.read(channel, timeout, |client, trusted, now| {
             let snapshot = trusted.snapshot().version;
             if unless_snapshot == Some(snapshot) {
                 return Ok(CatalogRead::Unchanged);
             }
             let index = download_index(client, trusted, channel, last_seq, now)?;
-            // The publishers' side has a time of its own: on a slow link the roles would
-            // otherwise run out of the index's.
-            *client
-                .fetcher()
-                .deadline
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner) = Instant::now() + PUBLISHERS_TIMEOUT;
+            // The publishers' side may have a time of its own: on a slow link the roles
+            // would otherwise run out of the index's.
+            {
+                let mut deadline = client
+                    .fetcher()
+                    .deadline
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner);
+                *deadline = (*deadline).max(Instant::now() + side_budget);
+            }
             let publishers = match trusted.target(PublisherPolicy::TARGET) {
                 None => Ok(None),
                 Some(_) => client
@@ -298,6 +305,15 @@ impl Repository {
                 roles.as_ref().err(),
                 "cannot read the publishers' delegations; every publisher is unavailable",
             );
+            // The roles no longer delegated (or none, delegations unread) are forgotten.
+            let delegated: Vec<String> = roles
+                .as_ref()
+                .map(|roles| roles.roles().map(|(role, _)| role.to_string()).collect())
+                .unwrap_or_default();
+            self.refusals
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .retain(|part, _| !part.starts_with("pub-") || delegated.contains(part));
             if let Ok(roles) = &roles {
                 for (role, verified) in roles.roles() {
                     let error = verified.err().map(ToString::to_string);

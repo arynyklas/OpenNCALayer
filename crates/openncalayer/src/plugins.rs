@@ -54,7 +54,7 @@ use time::OffsetDateTime;
 use tracing::{info, warn};
 
 use crate::load_settings;
-use crate::repository::{CatalogRead, Repository};
+use crate::repository::{CatalogRead, PUBLISHERS_TIMEOUT, Repository};
 use crate::update::installer::fetch_package;
 use crate::update::{DOWNLOAD_TIMEOUT, FIRST_CHECK, INDEX_TIMEOUT, RETRY_AFTER, jitter};
 use catalog::{Apply, InUse};
@@ -120,7 +120,8 @@ pub enum PluginNotice {
     /// Installing or updating a plugin failed.
     Failed { name: Localized, error: String },
     /// An update of a plugin to `version` may do more than the version installed: it waits
-    /// for the user, in the plugin window; the installed version runs on.
+    /// for the user, in the plugin window; the installed version runs on, unless it is
+    /// revoked (then it is off meanwhile).
     UpdateNeedsConfirmation { name: Localized, version: Version },
     /// A page (`origin`) called a module of the plugin `id` of the catalog, not installed.
     Needed {
@@ -819,24 +820,27 @@ impl PluginService {
         });
     }
 
-    /// Reads the catalog of the channel in the settings within `timeout`, verifies it and
-    /// keeps it. `unless`: a scheduled check that is to apply this much; if the catalog last
-    /// applied that much was read under the snapshot the repository has now, nothing more
-    /// is read ([`Fresh::Unchanged`]).
+    /// Reads the catalog of the channel in the settings within `timeout` (the publishers'
+    /// side within [`PUBLISHERS_TIMEOUT`] more), verifies it and keeps it. `unless`: a
+    /// scheduled check that is to apply this much; if the catalog last applied that much
+    /// was read under the snapshot the repository has now, nothing more is read
+    /// ([`Fresh::Unchanged`]).
     fn refresh(&self, timeout: Duration, unless: Option<Apply>) -> Result<Fresh, Refresh> {
         if self.cfg.repository.is_none() {
             return Err(Refresh::NoRepository);
         }
         let one = lock(&self.checking);
-        self.refresh_locked(&one, timeout, unless)
+        self.refresh_locked(&one, timeout, PUBLISHERS_TIMEOUT, unless)
     }
 
-    /// [`PluginService::refresh`], `checking` held: the parts of the catalog kept in the
-    /// store are written by one check at a time.
+    /// [`PluginService::refresh`], `checking` held, the publishers' side given `publishers`
+    /// more than `timeout` (none for a page, which keeps to its time): the parts of the
+    /// catalog kept in the store are written by one check at a time.
     fn refresh_locked(
         &self,
         _one: &MutexGuard<'_, ()>,
         timeout: Duration,
+        publishers: Duration,
         unless: Option<Apply>,
     ) -> Result<Fresh, Refresh> {
         let channel = self.update_settings().channel;
@@ -848,7 +852,7 @@ impl PluginService {
                 .filter(|applied| applied.channel == channel && applied.apply >= apply)
                 .map(|applied| applied.snapshot)
         });
-        let result = self.download_catalog(channel, timeout, unless_snapshot);
+        let result = self.download_catalog(channel, timeout, publishers, unless_snapshot);
         let mut catalog = lock(&self.catalog);
         match &result {
             Ok(read) => {
@@ -887,6 +891,7 @@ impl PluginService {
         &self,
         channel: Channel,
         timeout: Duration,
+        publishers: Duration,
         unless_snapshot: Option<u64>,
     ) -> Result<Option<InUse>, Refresh> {
         let Some(repository) = &self.cfg.repository else {
@@ -894,7 +899,7 @@ impl PluginService {
         };
         let last_seq = self.store.state().last_seq.get(&channel).copied();
         let read = repository
-            .catalog(channel, last_seq, timeout, unless_snapshot)
+            .catalog(channel, last_seq, timeout, publishers, unless_snapshot)
             .map_err(|e| match e {
                 UpdateError::NotPublished(_) => Refresh::NotPublished,
                 e if e.retry_soon() => Refresh::Unreachable(e.to_string()),
@@ -980,7 +985,12 @@ impl PluginService {
         if left.is_zero() {
             return None;
         }
-        self.refresh_locked(&one, left, None).ok()?;
+        // A page keeps to its own time, the publishers' side included.
+        let publishers = match asker {
+            Asker::User => PUBLISHERS_TIMEOUT,
+            Asker::Page => Duration::ZERO,
+        };
+        self.refresh_locked(&one, left, publishers, None).ok()?;
         drop(one);
         if let Some(service) = self.me.upgrade() {
             let apply = Apply::with_updates(self.update_settings().enabled);
@@ -1108,9 +1118,13 @@ impl PluginService {
                     match self.update_to(release, snapshot) {
                         Updated::Installed => true,
                         outcome => {
-                            // The version installed is revoked and stays until the one
-                            // to move to is installed: off meanwhile.
-                            let off = !revoked || self.withdraw(id, snapshot, None);
+                            // A revoked version stays off until the one to move to is
+                            // installed; one no longer revoked runs on meanwhile.
+                            let off = if revoked {
+                                self.withdraw(id, snapshot, None)
+                            } else {
+                                self.unwithdraw(catalog, id, snapshot)
+                            };
                             off && outcome == Updated::StillWaiting
                         }
                     }
@@ -1214,6 +1228,14 @@ impl PluginService {
     /// it is. Whether it settled (not changed meanwhile, recorded).
     fn withdraw(&self, id: &str, snapshot: &Installed, publisher: Option<Localized>) -> bool {
         if snapshot.withdrawn {
+            // Told already; whatever loaded it meanwhile, it does not run.
+            let _change = lock(&self.changing);
+            if self
+                .still(id, snapshot)
+                .is_some_and(|fresh| fresh.withdrawn)
+            {
+                self.cfg.modules.unload(id);
+            }
             return true;
         }
         let _change = lock(&self.changing);
@@ -1262,7 +1284,8 @@ impl PluginService {
     /// downloaded and checked, then, under `changing` and only if the plugin is still
     /// `snapshot`, loaded (if it is on; else checked only) and recorded. A release whose
     /// capabilities go beyond the installed version's is not installed: it waits for the
-    /// user ([`PluginService::confirm_update`]), told once, and the installed version runs on.
+    /// user ([`PluginService::confirm_update`]), told once, and the installed version runs on
+    /// unless it is revoked ([`PluginService::apply_index`] turns it off meanwhile).
     /// What came of it.
     fn update_to(&self, release: &PluginRelease, snapshot: &Installed) -> Updated {
         let waiting = lock(&self.pending).get(&release.id).is_some_and(|p| {
@@ -1323,7 +1346,7 @@ impl PluginService {
     ///
     /// No update of `id` waits ([`PluginActionError::NothingToConfirm`]); another package
     /// waits than the one shown ([`PluginActionError::Superseded`], it stays waiting); updates
-    /// are off (it stays waiting); the catalog in use no longer chooses it (revoked, marked
+    /// are off ([`PluginActionError::UpdatesOff`], it stays waiting); the catalog in use no longer chooses it (revoked, marked
     /// bad, another version: dropped, [`PluginActionError::NothingToConfirm`]); or it failed
     /// (also told in the tray); the plugin changed meanwhile: nothing is done.
     pub fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError> {
@@ -1332,7 +1355,7 @@ impl PluginService {
                 plugin = id,
                 "updates are off; the plugin's update keeps waiting"
             );
-            return Err(PluginActionError::Failed("updates are off".to_owned()));
+            return Err(PluginActionError::UpdatesOff);
         }
         let pending = {
             let mut waiting = lock(&self.pending);
@@ -1465,9 +1488,12 @@ impl PluginService {
                 .install(&package, bytes, Source::Catalog, release.publisher.as_ref())
         {
             warn!(plugin = %release.id, error = %e, "cannot record the plugin's update");
-            if enabled {
+            if enabled && !fresh.withdrawn {
                 // The version recorded runs again.
                 let _ = self.load_installed(&release.id);
+            } else {
+                // Off, or withdrawn (a revoked version waiting for this one): nothing runs.
+                self.cfg.modules.unload(&release.id);
             }
             self.failed(localized(&release.name), e.to_string());
             return Err(e.to_string());
