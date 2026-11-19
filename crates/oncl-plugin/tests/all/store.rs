@@ -505,6 +505,67 @@ fn a_port_is_replaced_by_a_publishers_plugin() {
     assert!(store.load_package(MARKET).is_ok());
     assert!(!package_file(dir.path(), "0.1.0").exists());
     assert!(!store.settings_path(ID).exists());
+    // A replacement installed already is never installed again over another port.
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    let err = store.replace(ID, &market, &bytes, Some(&acme)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(store.state().plugins.contains_key(ID));
+}
+
+/// The state cannot be saved: the port stays installed with its files, and the
+/// replacement's package written for it is gone again.
+#[test]
+fn a_replacement_not_saved_leaves_the_port_as_it_was() {
+    const MARKET: &str = "kz.acme.market";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (port, port_bytes) = example();
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    let bytes = example_package_with(|m| m.replace(ID, MARKET));
+    let market = Package::read(&bytes).unwrap();
+    // The state file is a directory now: no save succeeds.
+    let state_file = dir.path().join("plugins/state.json");
+    std::fs::remove_file(&state_file).unwrap();
+    std::fs::create_dir(&state_file).unwrap();
+    std::fs::write(state_file.join("keep"), b"x").unwrap();
+    assert!(store.replace(ID, &market, &bytes, None).is_err());
+    let state = store.state();
+    assert!(state.plugins.contains_key(ID) && !state.plugins.contains_key(MARKET));
+    assert!(package_file(dir.path(), "0.1.0").is_file());
+    let market_file = dir
+        .path()
+        .join("plugins/packages/kz.acme.market-0.1.0.onclp");
+    assert!(!market_file.exists());
+}
+
+/// Files a crash left behind (a port replaced, a plugin removed) go; the installed
+/// plugins' files and the built-in modules' settings stay.
+#[test]
+fn files_no_plugin_owns_are_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
+    let packages = dir.path().join("plugins/packages");
+    let orphan = packages.join("kz.gone.port-1.0.0.onclp");
+    std::fs::write(&orphan, b"old").unwrap();
+    let unrelated = packages.join("notes.txt");
+    std::fs::write(&unrelated, b"x").unwrap();
+    std::fs::create_dir_all(store.settings_dir()).unwrap();
+    std::fs::write(store.settings_path(ID), b"{}").unwrap();
+    std::fs::write(store.settings_path("kz.gone.port"), b"{}").unwrap();
+    let builtin = store.settings_path("io.github.arynyklas.openncalayer.builtin.basics");
+    std::fs::write(&builtin, b"{}").unwrap();
+    store.prune_files();
+    assert!(!orphan.exists() && !store.settings_path("kz.gone.port").exists());
+    assert!(package_file(dir.path(), "0.1.0").is_file());
+    assert!(store.settings_path(ID).is_file() && builtin.is_file() && unrelated.is_file());
 }
 
 #[test]

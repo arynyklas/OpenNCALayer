@@ -279,9 +279,11 @@ impl Store {
     ///
     /// # Errors
     ///
-    /// [`io::ErrorKind::NotFound`] if `port` is not installed; [`io::ErrorKind::InvalidInput`]
-    /// if `bytes` is not `package`'s file or `package` is `port`; any I/O error writing the
-    /// package or the state (nothing changes then).
+    /// [`io::ErrorKind::NotFound`] if `port` is not installed;
+    /// [`io::ErrorKind::AlreadyExists`] if `package`'s plugin is (a port and its replacement
+    /// are never both installed); [`io::ErrorKind::InvalidInput`] if `bytes` is not
+    /// `package`'s file or `package` is `port`; any I/O error writing the package or the
+    /// state (nothing changes then).
     pub fn replace(
         &self,
         port: &str,
@@ -305,12 +307,18 @@ impl Store {
         }
         let version = &package.manifest.version;
         let mut state = lock(&self.state);
+        if state.plugins.contains_key(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("the plugin {id} is installed already"),
+            ));
+        }
         let mut next = state.clone();
         let Some(removed) = next.plugins.remove(port) else {
             return Err(not_installed(port));
         };
         next.declined_replacements.remove(port);
-        let before = next.plugins.insert(
+        next.plugins.insert(
             id.clone(),
             Installed {
                 version: version.clone(),
@@ -325,20 +333,54 @@ impl Store {
         std::fs::create_dir_all(self.dir.join("packages"))?;
         write_atomically(&file, bytes, Access::Default)?;
         if let Err(e) = self.save(&next) {
-            if before.as_ref().is_none_or(|b| b.version != *version) {
-                remove_file(&file);
-            }
+            remove_file(&file);
             return Err(e);
         }
         *state = next;
-        if let Some(before) = before
-            && before.version != *version
-        {
-            remove_file(&self.package_path(id, &before.version));
-        }
         remove_file(&self.settings_path(port));
         remove_file(&self.package_path(port, &removed.version));
         Ok(())
+    }
+
+    /// Removes the package and settings files no installed plugin owns: what a crash left
+    /// between a save of the state and the removal of the files it no longer names (a port
+    /// replaced, a plugin removed, an old version). The built-in modules' settings stay. Call
+    /// it before any plugin is installed in this run. Each failure is only logged.
+    pub fn prune_files(&self) {
+        let state = lock(&self.state);
+        let packages: BTreeSet<PathBuf> = state
+            .plugins
+            .iter()
+            .map(|(id, installed)| self.package_path(id, &installed.version))
+            .collect();
+        let settings: BTreeSet<PathBuf> = state
+            .plugins
+            .keys()
+            .map(|id| self.settings_path(id))
+            .collect();
+        for (dir, ext, keep) in [
+            (self.dir.join("packages"), PACKAGE_EXT, &packages),
+            (self.settings_dir(), "json", &settings),
+        ] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let builtin = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(crate::BUILTIN_ID_PREFIX));
+                if path.extension().is_some_and(|e| e == ext)
+                    && path.is_file()
+                    && !builtin
+                    && !keep.contains(&path)
+                {
+                    tracing::info!(path = %path.display(), "a plugin file no plugin owns is removed");
+                    remove_file(&path);
+                }
+            }
+        }
     }
 
     /// Turns `id` on or off.

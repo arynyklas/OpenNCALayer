@@ -1293,6 +1293,19 @@ mod tests {
         "/releases/download/pub-acme-0909090909090909090909090909090909090909090909090909090909090909/kz.acme.market-1.2.0.src.tar.gz"
     );
 
+    /// Without the daemon's windows a port replacement is declined, as an install is: the
+    /// daemon records it and offers it again from the port's row.
+    #[test]
+    fn without_windows_a_replacement_is_declined() {
+        std::thread::spawn(|| {
+            let (replace, rx) = replacement();
+            enqueue(replace);
+            assert!(!answered(&rx));
+        })
+        .join()
+        .unwrap();
+    }
+
     #[test]
     fn a_publishers_plugin_names_its_publisher_and_links_its_source() {
         let (mut request, _rx) = request(false, None);

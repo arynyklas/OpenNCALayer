@@ -722,3 +722,30 @@ fn an_expired_role_leaves_its_publisher_unavailable_in_the_catalog_rebuilt() {
     assert!(view.available.is_empty(), "{:?}", view.available);
     assert!(matches!(view.catalog, CatalogView::Ready { .. }));
 }
+
+/// The user agrees to install acme's plugin after acme was revoked while the window was
+/// open: nothing is installed.
+#[test]
+fn agreeing_to_install_a_plugin_no_longer_offered_installs_nothing() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    let first = plain(&sandbox, "1.0.0");
+    publish(
+        &sandbox,
+        1,
+        Some(&policy(vec![entry("active")])),
+        Some((1, role(std::slice::from_ref(&first)))),
+    );
+    *lock(&sandbox.ui.answer) = None;
+    service.install_from_catalog(ACME_ID, None).unwrap();
+    assert_eq!(sandbox.requests().len(), 1);
+    publish(&sandbox, 2, Some(&policy(vec![entry("revoked")])), None);
+    service.check_now();
+    let decide = lock(&sandbox.ui.waiting).pop().expect("the window waits");
+    decide(true);
+    assert!(
+        matches!(&sandbox.notices()[..], [PluginNotice::Failed { error, .. }] if error.contains("no longer offers")),
+    );
+    assert!(sandbox.store().state().plugins.is_empty());
+    assert!(sandbox.modules.names().is_empty());
+}

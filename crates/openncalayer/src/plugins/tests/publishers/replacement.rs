@@ -97,7 +97,10 @@ fn an_installed_port_is_offered_its_replacement_and_replaced_once_agreed() {
     assert_eq!(request.origin, None);
     assert_eq!(
         sandbox.notices(),
-        [PluginNotice::Installed { name: name() }]
+        [PluginNotice::PortReplaced {
+            port: name(),
+            name: name()
+        }]
     );
     // Agreed: acme's plugin serves the module, its publisher recorded; the port is gone.
     let state = sandbox.store().state();
@@ -168,7 +171,10 @@ fn a_declined_replacement_is_not_offered_again_but_from_the_ports_row() {
     assert_eq!(requests[0].replaces_port, Some((name(), v("1.0.0"))));
     assert_eq!(
         sandbox.notices(),
-        [PluginNotice::Installed { name: name() }]
+        [PluginNotice::PortReplaced {
+            port: name(),
+            name: name()
+        }]
     );
     let state = sandbox.store().state();
     assert!(!state.plugins.contains_key(ID) && state.declined_replacements.is_empty());
@@ -326,8 +332,8 @@ fn a_bad_replacement_is_not_offered_and_the_port_runs_on() {
 }
 
 /// A replacement that cannot load (a module of its is served by a plugin from a file): the
-/// port runs again, the user is told, and it is not offered again while that plugin serves
-/// the module.
+/// port runs again, the user is told, and while that plugin serves the module no version of
+/// the replacement is offered again, an older one included.
 #[test]
 fn a_replacement_that_does_not_load_gives_the_port_back() {
     const OTHER: &str = "kz.local.Other";
@@ -348,10 +354,16 @@ fn a_replacement_that_does_not_load_gives_the_port_back() {
     sandbox.requests();
     sandbox.notices();
     let modules = format!(r#"modules = ["{MODULE}"]"#);
-    let wider = example_at("2.0.0", |m| {
-        m.replace(ID, ACME_ID)
-            .replace(&modules, &format!(r#"modules = ["{MODULE}", "{OTHER}"]"#))
-    });
+    let wider = |version: &str| {
+        let bytes = example_at(version, |m| {
+            m.replace(ID, ACME_ID)
+                .replace(&modules, &format!(r#"modules = ["{MODULE}", "{OTHER}"]"#))
+        });
+        release(&sandbox, version, &bytes, |oncl| {
+            oncl["modules"] = json!([MODULE, OTHER]);
+            oncl["replaces"] = json!({"symname": PORT_BUNDLE, "version": "1.0.0"});
+        })
+    };
     let mut acme = superseding("active");
     acme["modules"] = json!([ACME_MODULE, MODULE, OTHER]);
     publish_with(
@@ -359,13 +371,7 @@ fn a_replacement_that_does_not_load_gives_the_port_back() {
         2,
         vec![sandbox.release("1.0.0", &example("1.0.0"))],
         Some(&policy(vec![acme])),
-        Some((
-            1,
-            role(&[release(&sandbox, "2.0.0", &wider, |oncl| {
-                oncl["modules"] = json!([MODULE, OTHER]);
-                oncl["replaces"] = json!({"symname": PORT_BUNDLE, "version": "1.0.0"});
-            })]),
-        )),
+        Some((1, role(&[wider("2.0.0"), wider("1.9.0")]))),
     );
     service.check_now();
     assert_eq!(sandbox.requests().len(), 1);
@@ -383,4 +389,90 @@ fn a_replacement_that_does_not_load_gives_the_port_back() {
     assert!(sandbox.modules.names().contains(&MODULE.to_owned()));
     service.check_now();
     assert!(sandbox.requests().is_empty() && sandbox.notices().is_empty());
+}
+
+/// The user agrees after the catalog stopped offering the replacement (its publisher
+/// revoked) or after updates were turned off: nothing is replaced and nothing recorded.
+#[test]
+fn agreeing_to_a_replacement_no_longer_offered_changes_nothing() {
+    for revoke in [true, false] {
+        let sandbox = Sandbox::new(true);
+        let service = sandbox.service();
+        port_then_replacement(&sandbox, &service);
+        *lock(&sandbox.ui.answer) = None;
+        service.check_now();
+        assert_eq!(sandbox.requests().len(), 1);
+        if revoke {
+            publish_with(
+                &sandbox,
+                3,
+                vec![sandbox.release("1.0.0", &example("1.0.0"))],
+                Some(&policy(vec![superseding("revoked")])),
+                None,
+            );
+            service.check_now();
+        } else {
+            set_updates(&sandbox, false);
+        }
+        let decide = lock(&sandbox.ui.waiting).pop().expect("the window waits");
+        decide(true);
+        assert!(
+            matches!(&sandbox.notices()[..], [PluginNotice::Failed { error, .. }] if error.contains("no longer offers")),
+            "revoke: {revoke}"
+        );
+        port_runs(&sandbox);
+        assert!(sandbox.store().state().declined_replacements.is_empty());
+    }
+}
+
+/// The replacement cannot be recorded: it is unloaded and the port runs again, its files
+/// kept.
+#[test]
+fn a_replacement_not_recorded_gives_the_port_back() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    port_then_replacement(&sandbox, &service);
+    *lock(&sandbox.ui.answer) = None;
+    service.check_now();
+    let decide = lock(&sandbox.ui.waiting).pop().expect("the window waits");
+    // The state file is a directory now: no save succeeds.
+    let state_file = sandbox.dir.path().join("plugins/state.json");
+    std::fs::remove_file(&state_file).unwrap();
+    std::fs::create_dir(&state_file).unwrap();
+    std::fs::write(state_file.join("keep"), b"x").unwrap();
+    decide(true);
+    assert!(matches!(
+        &sandbox.notices()[..],
+        [PluginNotice::Failed { .. }]
+    ));
+    assert_eq!(sandbox.modules.names(), [MODULE]);
+    assert!(service.view().installed.iter().any(|p| p.id == ID));
+    assert!(!service.view().installed.iter().any(|p| p.id == ACME_ID));
+    assert_eq!(sandbox.count(), 1, "the port serves the module again");
+    let port_package = sandbox
+        .dir
+        .path()
+        .join(format!("plugins/packages/{ID}-1.0.0.onclp"));
+    assert!(port_package.is_file());
+}
+
+/// A page asking for the port's bundle while the port is off is not given the replacement
+/// beside it; nor is the plugin window.
+#[test]
+fn the_replacement_is_not_installed_beside_a_port_turned_off() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    port_then_replacement(&sandbox, &service);
+    service.set_enabled(ID, false).unwrap();
+    assert!(!service.request_install(PORT_BUNDLE, ORIGIN));
+    assert_eq!(
+        service.install_from_catalog(ACME_ID, None),
+        Err(PluginActionError::NotOffered)
+    );
+    assert!(sandbox.requests().is_empty());
+    assert!(!sandbox.store().state().plugins.contains_key(ACME_ID));
+    assert!(
+        service.view().available.iter().all(|a| a.id != ACME_ID),
+        "not listed apart"
+    );
 }

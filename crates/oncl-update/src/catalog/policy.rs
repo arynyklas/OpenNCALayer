@@ -91,7 +91,8 @@ pub enum CatalogError {
         module: ModuleName,
     },
     /// A replaced port lies under a publisher's prefix, the replacement outside the
-    /// replacing publisher's, or two publishers replace the same port.
+    /// replacing publisher's, two publishers replace the same port, or one plugin replaces
+    /// several ports (a client replaces one port by one plugin).
     #[error("publisher {publisher} cannot replace {port} with {plugin}")]
     Supersedes {
         /// The publisher.
@@ -590,6 +591,7 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
         let mut modules = BTreeSet::new();
         let mut bundles = BTreeSet::new();
         let mut ports = BTreeSet::new();
+        let mut replacing = BTreeSet::new();
         for (index, publisher) in publishers.iter().enumerate() {
             for earlier in &publishers[..index] {
                 if earlier.name == publisher.name {
@@ -627,7 +629,7 @@ impl TryFrom<RawPolicy> for PublisherPolicy {
             }
             for (port, plugin) in &active.supersedes {
                 let covered = publishers.iter().any(|p| p.id_prefix.covers(port.as_str()));
-                if covered || !ports.insert(port) {
+                if covered || !ports.insert(port) || !replacing.insert(plugin) {
                     return Err(CatalogError::Supersedes {
                         publisher: publisher.name.clone(),
                         port: port.clone(),

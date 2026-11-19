@@ -1079,6 +1079,12 @@ fn publishers_json_refuses_what_lies_outside_a_prefix() {
         refused(vec![superseding_ecc(), twice]),
         CatalogError::Supersedes { .. }
     ));
+    // One plugin replacing two ports: a client replaces one port by one plugin.
+    let both = with(|p| p["supersedes"] = json!({ PORT: MARKET, OTHER_PORT: MARKET }));
+    assert!(matches!(
+        refused(vec![both]),
+        CatalogError::Supersedes { .. }
+    ));
 }
 
 #[test]
