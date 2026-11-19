@@ -21,6 +21,12 @@
 //!   Plugins installed from a file are never touched. With updates off (`updates.enabled` of
 //!   the settings) only the revocations are applied ([`catalog::Apply::RevocationsOnly`]),
 //!   on schedule only while «Проверять отзывы плагинов» (`updates.check_revocations`) is on.
+//! - A port an active publisher's plugin replaces (Р11, `supersedes`) gets only its
+//!   revocations from the catalog; with updates on its replacement is downloaded, checked
+//!   and offered in a window: agreed, it takes the port's place (the port, its package and
+//!   settings removed); declined, the port runs on, the offer is not repeated for that
+//!   plugin and stays in the plugin window ([`PluginService::replace_port`]). Once the
+//!   publisher is no longer active the port is an ordinary port again.
 //! - An install asks the user ([`InstallUi`]) with the capabilities the package declares.
 //! - A request for a module nothing serves that a plugin of the catalog would serve is told
 //!   ([`PluginNotice::Needed`]) and listed in the plugin window.
@@ -42,10 +48,11 @@ use oncl_plugin::core::Bundles;
 use oncl_plugin::operations::{AddedOperation, AddedReason};
 use oncl_plugin::{
     Added, BUILT_IN, Capabilities, Installed, LoadError, Localized, MAX_PACKAGE, Manifest, Package,
-    PluginModules, Replaces, Source, Store,
+    PluginModules, Replaces, Source, Store, StoreState,
 };
 use oncl_protocol::{AddInfo, DynamicModules};
 use oncl_ui::PluginActionError;
+use oncl_update::catalog::SourceArchive;
 use oncl_update::tuf::PublisherName;
 use oncl_update::{
     Channel, PluginChoice, PluginName, PluginRelease, Sha256, UpdateError, Version,
@@ -92,15 +99,110 @@ pub struct InstallRequest {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
-    /// The installed plugin of the same id it would replace: its version and source.
-    pub replacing: Option<(Version, Source)>,
+    /// The installed plugin of the same id it would replace: its version and origin.
+    pub replacing: Option<(Version, ReleaseOrigin)>,
     /// What its manifest declares it may do.
     pub capabilities: Capabilities,
     /// What its `[[operations]]` do, said from checked fields; over the installed version
     /// of the plugin, if any, with what is new or wider marked.
     pub operations: Vec<OperationConsent>,
-    /// From a file the user chose, not from the catalog: nobody has reviewed it.
-    pub local: bool,
+    /// Who released it: the project, a publisher, or a file the user chose (nobody has
+    /// reviewed it).
+    pub origin_kind: ReleaseOrigin,
+    /// The installed port this publisher's plugin is to replace (Р11): its name and version.
+    /// The port and its settings go if the user agrees; declining is remembered.
+    pub replaces_port: Option<(Localized, Version)>,
+}
+
+/// Who released a plugin, as the windows name it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReleaseOrigin {
+    /// A port of the owner's index.
+    Project,
+    /// A publisher's plugin of the catalog.
+    Publisher {
+        /// Its display name in `publishers.json` (its name if the catalog does not have it).
+        display: Localized,
+        /// The source archive of the release, if the catalog in use lists the release.
+        source: Option<SourceArchive>,
+    },
+    /// Of the catalog, but its publisher is not known (its record lost it and no catalog
+    /// tells it): nobody is named.
+    Unknown,
+    /// A file the user chose.
+    LocalFile,
+}
+
+/// Who released `release` of `catalog` (none: the release is not known), the plugin `id`
+/// of `publisher` installed from `source`. A plugin of the catalog whose publisher is not
+/// known is the project's only if it is one of its ports (its prefix, or the owner's index
+/// lists it); otherwise nobody is named.
+fn release_origin(
+    catalog: Option<&oncl_update::Catalog>,
+    release: Option<&PluginRelease>,
+    id: &str,
+    publisher: Option<&PublisherName>,
+    source: Source,
+) -> ReleaseOrigin {
+    if source == Source::Local {
+        return ReleaseOrigin::LocalFile;
+    }
+    let Some(publisher) = publisher else {
+        let port = release.is_some_and(|r| r.publisher.is_none())
+            || id.starts_with(oncl_update::catalog::PROJECT_PREFIX)
+            || catalog.is_some_and(|c| c.index().plugins.iter().any(|r| r.id == id));
+        return if port {
+            ReleaseOrigin::Project
+        } else {
+            ReleaseOrigin::Unknown
+        };
+    };
+    ReleaseOrigin::Publisher {
+        display: catalog.map_or_else(
+            || same_name(publisher.as_str()),
+            |catalog| publisher_display(catalog, publisher),
+        ),
+        source: catalog
+            .zip(release)
+            .and_then(|(catalog, release)| catalog.source_archive(release).cloned()),
+    }
+}
+
+/// The display name of `publisher` in `catalog`'s `publishers.json`, or its name.
+fn publisher_display(catalog: &oncl_update::Catalog, publisher: &PublisherName) -> Localized {
+    catalog
+        .policy()
+        .and_then(|policy| policy.publisher(publisher))
+        .map_or_else(
+            || same_name(publisher.as_str()),
+            |p| Localized {
+                ru: p.display().ru.clone(),
+                kk: p.display().kk.clone(),
+                en: p.display().en.clone(),
+            },
+        )
+}
+
+/// Who released the installed `id` (`installed`): its release in `catalog`, if listed, gives
+/// the source archive.
+fn installed_origin(
+    catalog: Option<&oncl_update::Catalog>,
+    id: &str,
+    installed: &Installed,
+) -> ReleaseOrigin {
+    let publisher = installed
+        .publisher
+        .as_ref()
+        .or_else(|| catalog.and_then(|catalog| catalog.publisher_of(id)));
+    let release = catalog.and_then(|catalog| {
+        catalog.releases().find(|r| {
+            r.id == id
+                && r.version == installed.version
+                && r.publisher.as_ref() == publisher
+                && r.package.sha256 == installed.sha256
+        })
+    });
+    release_origin(catalog, release, id, publisher, installed.source)
 }
 
 /// What the plugins tell the user (tray notifications).
@@ -108,6 +210,9 @@ pub struct InstallRequest {
 pub enum PluginNotice {
     /// A plugin is installed.
     Installed { name: Localized },
+    /// The port `port` is replaced by the publisher's plugin `name`, the user agreeing
+    /// (Р11).
+    PortReplaced { port: Localized, name: Localized },
     /// A plugin is updated to `version` (or moved back to it from a revoked one).
     Updated { name: Localized, version: Version },
     /// A plugin's version is revoked with nothing to move to: it is off.
@@ -192,10 +297,13 @@ pub struct InstalledView {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
-    pub source: Source,
+    pub origin: ReleaseOrigin,
     pub state: PluginState,
     /// An update that waits for the user: it may do more than this version.
     pub pending_update: Option<PendingView>,
+    /// A port an active publisher's plugin replaces, the replacement declined once (and
+    /// updates on): the publisher's display name ([`PluginService::replace_port`]).
+    pub replacement: Option<Localized>,
 }
 
 /// An update waiting for the user.
@@ -210,6 +318,8 @@ pub struct PendingView {
     /// The sha256 of the package of this update (hex, from the signed index): the answer the
     /// user gives is for this package ([`PluginService::confirm_update`]).
     pub package_sha256: String,
+    /// Who released the update.
+    pub origin: ReleaseOrigin,
 }
 
 impl PendingView {
@@ -249,6 +359,7 @@ pub struct AvailableView {
     pub name: Localized,
     pub version: Version,
     pub replaces: Option<Replaces>,
+    pub origin: ReleaseOrigin,
     /// A page called one of its modules: its origin (`Some(None)`: without an origin).
     pub needed_by: Option<Option<String>>,
 }
@@ -385,14 +496,16 @@ enum Download {
 }
 
 impl PluginService {
-    /// The plugins of `cfg`: the enabled ones loaded, the kept catalog read; without a
-    /// schedule ([`PluginService::start`] has one).
+    /// The plugins of `cfg`: the files no installed plugin owns removed (left by a crash),
+    /// the enabled ones loaded, the kept catalog read; without a schedule
+    /// ([`PluginService::start`] has one).
     ///
     /// # Errors
     ///
     /// `<data>/plugins/` cannot be opened ([`Store::open`]).
     pub fn new(cfg: PluginConfig) -> std::io::Result<Arc<PluginService>> {
         let store = Store::open(&cfg.data_dir)?;
+        store.prune_files();
         let service = Arc::new_cyclic(|me| PluginService {
             me: Weak::clone(me),
             cfg,
@@ -519,6 +632,7 @@ impl PluginService {
         let state = self.store.state();
         let errors = lock(&self.errors).clone();
         let known = lock(&self.known).clone();
+        let index = self.valid_catalog().map(|in_use| in_use.catalog);
         let pending: BTreeMap<String, PendingView> = lock(&self.pending)
             .iter()
             .map(|(id, p)| {
@@ -527,10 +641,24 @@ impl PluginService {
                     added: p.added.clone(),
                     operations: p.package.manifest.operation_consents(Some(&p.added)),
                     package_sha256: p.release.package.sha256.to_string(),
+                    origin: release_origin(
+                        index.as_deref(),
+                        Some(&p.release),
+                        &p.release.id,
+                        p.release.publisher.as_ref(),
+                        Source::Catalog,
+                    ),
                 };
                 (id.clone(), view)
             })
             .collect();
+        // A replacement the user declined is offered again from its port's row while
+        // updates are on (they install it); its plugin is not listed apart.
+        let replacements = index
+            .as_ref()
+            .map(|index| self.replacements(index, &state))
+            .unwrap_or_default();
+        let updates = self.update_settings().enabled;
         let installed = state
             .plugins
             .iter()
@@ -541,7 +669,7 @@ impl PluginService {
                     name: known.map_or_else(|| same_name(id), |k| k.name.clone()),
                     version: installed.version.clone(),
                     replaces: known.and_then(|k| k.replaces.clone()),
-                    source: installed.source,
+                    origin: installed_origin(index.as_deref(), id, installed),
                     state: if installed.withdrawn {
                         PluginState::Withdrawn
                     } else if !installed.enabled {
@@ -552,6 +680,13 @@ impl PluginService {
                         PluginState::Enabled
                     },
                     pending_update: pending.get(id).cloned(),
+                    replacement: replacements
+                        .get(id)
+                        .filter(|q| updates && state.declined_replacements.get(id) == Some(&q.id))
+                        .zip(index.as_deref())
+                        .and_then(|(q, index)| {
+                            q.publisher.as_ref().map(|p| publisher_display(index, p))
+                        }),
                 }
             })
             .collect();
@@ -563,7 +698,6 @@ impl PluginService {
             };
         }
         let channel = self.update_settings().channel;
-        let index = self.valid_catalog().map(|in_use| in_use.catalog);
         let (checked, error) = {
             let catalog = lock(&self.catalog);
             (catalog.checked, catalog.error.clone())
@@ -584,6 +718,7 @@ impl PluginService {
                 let ids: BTreeSet<&str> = index.releases().map(|r| r.id.as_str()).collect();
                 ids.into_iter()
                     .filter(|id| !state.plugins.contains_key(*id))
+                    .filter(|id| !self.replaces_installed_port(index, &state, id))
                     .filter_map(|id| {
                         let release =
                             offer(index, &self.cfg.core, &state.install_id, &state.bad, |r| {
@@ -594,6 +729,13 @@ impl PluginService {
                             name: localized(&release.name),
                             version: release.version.clone(),
                             replaces: replaces_of(release),
+                            origin: release_origin(
+                                Some(index.as_ref()),
+                                Some(release),
+                                id,
+                                release.publisher.as_ref(),
+                                Source::Catalog,
+                            ),
                             needed_by: needed.get(id).cloned(),
                         })
                     })
@@ -644,6 +786,14 @@ impl PluginService {
             return Err(PluginActionError::NoCatalog);
         };
         let state = self.store.state();
+        if self.replaces_installed_port(&index, &state, id) {
+            failed(
+                same_name(id),
+                "it replaces an installed port: the plugin window offers it from the port"
+                    .to_owned(),
+            );
+            return Err(PluginActionError::NotOffered);
+        }
         let Some(release) = offer(&index, &self.cfg.core, &state.install_id, &state.bad, |r| {
             r.id == id
         })
@@ -671,8 +821,14 @@ impl PluginService {
             failed(localized(&release.name), e.to_string());
             return Err(PluginActionError::Failed(e.to_string()));
         }
-        let publisher = release.publisher.clone();
-        self.ask(package, bytes, Source::Catalog, publisher, origin, guard);
+        let origin_kind = release_origin(
+            Some(index.as_ref()),
+            Some(&release),
+            id,
+            release.publisher.as_ref(),
+            Source::Catalog,
+        );
+        self.ask(package, bytes, Some(release), origin, origin_kind, guard);
         Ok(())
     }
 
@@ -719,7 +875,7 @@ impl PluginService {
         let Some(guard) = self.begin_install(&package.manifest.id) else {
             return Err(PluginActionError::BeingInstalled);
         };
-        self.ask(package, bytes, Source::Local, None, None, guard);
+        self.ask(package, bytes, None, None, ReleaseOrigin::LocalFile, guard);
         Ok(())
     }
 
@@ -809,7 +965,11 @@ impl PluginService {
         }) else {
             return;
         };
-        if state.plugins.contains_key(&release.id) {
+        // Installed, or the replacement of an installed port (offered from the port, not
+        // installed beside it).
+        if state.plugins.contains_key(&release.id)
+            || self.replaces_installed_port(&index, &state, &release.id)
+        {
             return;
         }
         let before = lock(&self.needed).insert(release.id.clone(), add_info.origin.clone());
@@ -1086,8 +1246,13 @@ impl PluginService {
     /// turned off even if the catalog has a version to move to (nothing is installed), with
     /// [`Apply::Full`] if the version to move to is not installed in this pass. An update
     /// waiting for the user is dropped unless it is still the catalog's choice.
+    ///
+    /// A port an active publisher's plugin replaces (Р11, [`PluginService::replacements`])
+    /// gets only its revocations: its replacement is offered instead, with [`Apply::Full`]
+    /// only and unless the user declined that plugin for it.
     fn apply_index(&self, catalog: &oncl_update::Catalog, apply: Apply) -> bool {
         let state = self.store.state();
+        let replacements = self.replacements(catalog, &state);
         let mut settled = true;
         for (id, snapshot) in &state.plugins {
             if snapshot.source != Source::Catalog {
@@ -1109,15 +1274,26 @@ impl PluginService {
                 &state.install_id,
                 &bad,
             );
+            // A port being replaced: its own updates are not installed, nor waited for.
+            let replacement = replacements.get(id).copied();
+            let apply_here = if replacement.is_some() {
+                Apply::RevocationsOnly
+            } else {
+                apply
+            };
             let target = match &choice {
-                PluginChoice::Update(release) | PluginChoice::Downgrade(release) => Some(*release),
+                PluginChoice::Update(release) | PluginChoice::Downgrade(release)
+                    if replacement.is_none() =>
+                {
+                    Some(*release)
+                }
                 _ => None,
             };
             self.drop_pending_unless(id, target);
             settled &= match choice {
                 PluginChoice::Keep => self.unwithdraw(catalog, id, snapshot),
                 PluginChoice::Update(release) | PluginChoice::Downgrade(release)
-                    if apply == Apply::Full =>
+                    if apply_here == Apply::Full =>
                 {
                     match self.update_to(release, snapshot) {
                         Updated::Installed => true,
@@ -1143,17 +1319,7 @@ impl PluginService {
                 }
                 PluginChoice::Withdrawn => self.withdraw(id, snapshot, None),
                 PluginChoice::PublisherRevoked(publisher) => {
-                    let display = catalog
-                        .policy()
-                        .and_then(|policy| policy.publisher(publisher))
-                        .map_or_else(
-                            || same_name(publisher.as_str()),
-                            |p| Localized {
-                                ru: p.display().ru.clone(),
-                                kk: p.display().kk.clone(),
-                                en: p.display().en.clone(),
-                            },
-                        );
+                    let display = publisher_display(catalog, publisher);
                     self.withdraw(id, snapshot, Some(display))
                 }
                 // A choice this core does not know leaves the plugin as it is, but is logged:
@@ -1163,8 +1329,303 @@ impl PluginService {
                     true
                 }
             };
+            if let Some(release) = replacement
+                && apply == Apply::Full
+                && state.declined_replacements.get(id) != Some(&release.id)
+            {
+                settled &= self.offer_replacement(catalog, id, snapshot, release);
+            }
         }
         settled
+    }
+
+    /// The publishers' plugins `catalog` has to replace the ports `state` has installed from
+    /// the catalog (Р11: [`oncl_update::Catalog::replacement`], an active publisher's
+    /// `supersedes`), by port: never a version bad here, nor any version of a plugin held
+    /// back by a failed load until the plugins change (`conflicts`). A port whose
+    /// replacement is installed already has none.
+    fn replacements<'c>(
+        &self,
+        catalog: &'c oncl_update::Catalog,
+        state: &StoreState,
+    ) -> BTreeMap<String, &'c PluginRelease> {
+        let held = lock(&self.conflicts).clone();
+        state
+            .plugins
+            .iter()
+            .filter(|(_, installed)| installed.source == Source::Catalog)
+            .filter_map(|(port, _)| {
+                let release =
+                    catalog.replacement(port, &self.cfg.core, &state.install_id, &state.bad)?;
+                (!state.plugins.contains_key(&release.id) && !held.contains_key(&release.id))
+                    .then(|| (port.clone(), release))
+            })
+            .collect()
+    }
+
+    /// Whether `id` is the plugin of an active publisher that replaces a port installed from
+    /// `catalog` (any version of it offered here, bad or held back or not): it is offered from
+    /// the port, never installed beside it.
+    fn replaces_installed_port(
+        &self,
+        catalog: &oncl_update::Catalog,
+        state: &StoreState,
+        id: &str,
+    ) -> bool {
+        let any = BTreeMap::new();
+        state.plugins.iter().any(|(port, installed)| {
+            installed.source == Source::Catalog
+                && catalog
+                    .replacement(port, &self.cfg.core, &state.install_id, &any)
+                    .is_some_and(|q| q.id == id)
+        })
+    }
+
+    /// Whether `release` is still what the catalog in use offers to replace the installed
+    /// port `port`, with updates on: what the user agrees to is installed only then.
+    fn still_replacing(&self, port: &str, release: &PluginRelease) -> bool {
+        if !self.update_settings().enabled {
+            return false;
+        }
+        let Some(in_use) = self.valid_catalog() else {
+            return false;
+        };
+        let state = self.store.state();
+        self.replacements(&in_use.catalog, &state)
+            .get(port)
+            .is_some_and(|q| {
+                q.id == release.id
+                    && q.version == release.version
+                    && q.package.sha256 == release.package.sha256
+            })
+    }
+
+    /// Whether the catalog in use still offers `release` for a first install as the user was
+    /// shown it: the newest offered version of its id, the same package, and not the
+    /// replacement of an installed port.
+    fn still_offered(&self, release: &PluginRelease) -> bool {
+        let Some(in_use) = self.valid_catalog() else {
+            return false;
+        };
+        let state = self.store.state();
+        !self.replaces_installed_port(&in_use.catalog, &state, &release.id)
+            && offer(
+                &in_use.catalog,
+                &self.cfg.core,
+                &state.install_id,
+                &state.bad,
+                |r| r.id == release.id,
+            )
+            .is_some_and(|r| {
+                r.version == release.version && r.package.sha256 == release.package.sha256
+            })
+    }
+
+    /// Offers `release`, the publisher's plugin replacing the installed port `port`
+    /// (`snapshot`), in the replacement window, once it is downloaded and checked. Whether it
+    /// settled: only if the user is being asked already; asking anew, a download that failed
+    /// or a version marked bad leave the pass unsettled.
+    fn offer_replacement(
+        &self,
+        catalog: &oncl_update::Catalog,
+        port: &str,
+        snapshot: &Installed,
+        release: &PluginRelease,
+    ) -> bool {
+        let Some(service) = self.me.upgrade() else {
+            return true;
+        };
+        let Some(guard) = service.begin_install(&release.id) else {
+            return true;
+        };
+        // A failure is logged (and a bad version told) there; the next check tries again.
+        let _ = service.ask_replacement(catalog, port, snapshot, release, guard);
+        false
+    }
+
+    /// Asks again whether the publisher's plugin that replaces the installed port `port` may
+    /// replace it, the catalog downloaded first if none is in use: the user declined it once
+    /// and the plugin window offers it ([`InstalledView::replacement`]). Blocks for the
+    /// downloads, not for the user.
+    ///
+    /// # Errors
+    ///
+    /// Why nothing is asked: updates are off, the port is not installed from the catalog, no
+    /// catalog, the catalog offers no replacement for it, it is being asked already, or the
+    /// package failed (a bad one also told in the tray).
+    pub fn replace_port(self: &Arc<Self>, port: &str) -> Result<(), PluginActionError> {
+        if !self.update_settings().enabled {
+            return Err(PluginActionError::UpdatesOff);
+        }
+        if !self.store.state().plugins.contains_key(port) {
+            return Err(PluginActionError::NotInstalled);
+        }
+        let Some(catalog) = self.ensure_catalog(INDEX_TIMEOUT, Asker::User) else {
+            return Err(PluginActionError::NoCatalog);
+        };
+        // The port as it is now, after the download.
+        let state = self.store.state();
+        let Some(snapshot) = state.plugins.get(port).cloned() else {
+            return Err(PluginActionError::NotInstalled);
+        };
+        let Some(release) = self.replacements(&catalog, &state).remove(port).cloned() else {
+            return Err(PluginActionError::NotOffered);
+        };
+        let Some(guard) = self.begin_install(&release.id) else {
+            return Err(PluginActionError::BeingInstalled);
+        };
+        self.ask_replacement(&catalog, port, &snapshot, &release, guard)
+    }
+
+    /// Downloads and checks `release`, the publisher's plugin replacing the installed port
+    /// `port` (`snapshot`), then asks the user in the replacement window: «Заменить»
+    /// replaces the port ([`PluginService::finish_replacement`]), «Не сейчас» or closing the
+    /// window is remembered ([`PluginService::decline_replacement`]).
+    fn ask_replacement(
+        self: &Arc<Self>,
+        catalog: &oncl_update::Catalog,
+        port: &str,
+        snapshot: &Installed,
+        release: &PluginRelease,
+        guard: Installing,
+    ) -> Result<(), PluginActionError> {
+        let (package, bytes) = match self.download(release) {
+            Ok(downloaded) => downloaded,
+            Err(Download::Unreachable(e)) => {
+                warn!(port, plugin = %release.id, error = %e, "cannot download the port's replacement");
+                return Err(PluginActionError::Failed(e));
+            }
+            Err(Download::Bad(e)) => {
+                self.bad(release, e.clone());
+                return Err(PluginActionError::Failed(e));
+            }
+        };
+        info!(port, plugin = %release.id, version = %release.version, "a publisher's plugin replaces the port; the user is asked");
+        let m = &package.manifest;
+        let request = InstallRequest {
+            origin: None,
+            name: m.name.clone(),
+            version: m.version.clone(),
+            replaces: m.replaces.clone(),
+            replacing: None,
+            capabilities: m.capabilities.clone(),
+            operations: m.operation_consents(None),
+            origin_kind: release_origin(
+                Some(catalog),
+                Some(release),
+                &release.id,
+                release.publisher.as_ref(),
+                Source::Catalog,
+            ),
+            replaces_port: Some((self.name_of(port), snapshot.version.clone())),
+        };
+        let service = Arc::downgrade(self);
+        let (port, snapshot, release) = (port.to_owned(), snapshot.clone(), release.clone());
+        self.cfg.ui.confirm(
+            request,
+            Box::new(move |yes| {
+                let _guard = guard;
+                let Some(service) = service.upgrade() else {
+                    return;
+                };
+                if yes {
+                    service.finish_replacement(&port, &snapshot, &release, package, &bytes);
+                } else {
+                    service.decline_replacement(&port, &release.id);
+                }
+            }),
+        );
+        Ok(())
+    }
+
+    /// «Заменить»: under `changing`, if the port is still `snapshot` and `release` still
+    /// what the catalog in use offers for it with updates on ([`PluginService::still_replacing`];
+    /// else nothing changes and nothing is recorded), the port is unloaded and `package` of
+    /// `release` loaded in its place (checked only if the port is off); then one save records
+    /// the plugin with its publisher and forgets the port, whose settings and package go
+    /// ([`Store::replace`]). If the plugin does not load, its version is marked bad (unless
+    /// another plugin serves its module), the plugin is held back until the plugins change,
+    /// and the port runs again; if it cannot be recorded, the port runs again.
+    fn finish_replacement(
+        &self,
+        port: &str,
+        snapshot: &Installed,
+        release: &PluginRelease,
+        package: Package,
+        bytes: &[u8],
+    ) {
+        let _change = lock(&self.changing);
+        let name = package.manifest.name.clone();
+        let Some(fresh) = self.still(port, snapshot) else {
+            return self.failed(name, "the port changed meanwhile".to_owned());
+        };
+        if !self.still_replacing(port, release) {
+            info!(port, plugin = %release.id, version = %release.version, "the catalog no longer offers the port's replacement; nothing is replaced");
+            return self.failed(
+                name,
+                "the catalog no longer offers this replacement, or updates are off".to_owned(),
+            );
+        }
+        let port_ran = fresh.enabled && !fresh.withdrawn;
+        self.cfg.modules.unload(port);
+        let loaded = if fresh.enabled {
+            self.cfg.modules.load(package.clone())
+        } else {
+            self.cfg.modules.check(&package)
+        };
+        if let Err(e) = loaded {
+            warn!(port, plugin = %release.id, error = %e, "cannot load the port's replacement; the port stays");
+            if port_ran {
+                let _ = self.load_installed(port);
+            }
+            self.refused(&release.id, &release.version, &e);
+            // No window for an older version meanwhile: the whole plugin waits.
+            lock(&self.conflicts)
+                .entry(release.id.clone())
+                .or_default()
+                .insert(release.version.clone());
+            return self.failed(name, e.to_string());
+        }
+        if let Err(e) = self
+            .store
+            .replace(port, &package, bytes, release.publisher.as_ref())
+        {
+            warn!(port, plugin = %release.id, error = %e, "cannot record the port's replacement; the port stays");
+            self.cfg.modules.unload(&release.id);
+            if port_ran {
+                let _ = self.load_installed(port);
+            }
+            return self.failed(name, e.to_string());
+        }
+        info!(port, plugin = %release.id, version = %release.version, "the port is replaced by the publisher's plugin");
+        let port_name = self.name_of(port);
+        lock(&self.errors).remove(port);
+        lock(&self.known).remove(port);
+        lock(&self.pending).remove(port);
+        lock(&self.conflicts).clear();
+        self.remember(&package);
+        lock(&self.errors).remove(&release.id);
+        lock(&self.needed).remove(&release.id);
+        (self.cfg.notify)(PluginNotice::PortReplaced {
+            port: port_name,
+            name,
+        });
+    }
+
+    /// «Не сейчас», or the replacement window closed: the port runs on, and `plugin` is not
+    /// offered for it again but from its row in the plugin window.
+    fn decline_replacement(&self, port: &str, plugin: &str) {
+        let _change = lock(&self.changing);
+        if !self.store.state().plugins.contains_key(port) {
+            return;
+        }
+        info!(
+            port,
+            plugin, "the user declined the port's replacement; it is not offered again"
+        );
+        if let Err(e) = self.store.set_declined_replacement(port, Some(plugin)) {
+            warn!(port, plugin, error = %e, "cannot record the declined replacement");
+        }
     }
 
     /// Drops the update of `id` waiting for the user unless it is of `release`, the
@@ -1543,24 +2004,25 @@ impl PluginService {
         Ok((read, bytes))
     }
 
-    /// Asks the user about `package`; installs it if they agree, from `source`, released by
-    /// `publisher` (a publisher's plugin of the catalog).
+    /// Asks the user about `package` (released as `origin_kind` says); installs it if they
+    /// agree: `release` of the catalog (with its publisher), or a file the user chose (none).
     fn ask(
         self: &Arc<Self>,
         package: Package,
         bytes: Vec<u8>,
-        source: Source,
-        publisher: Option<PublisherName>,
+        release: Option<PluginRelease>,
         origin: Option<String>,
+        origin_kind: ReleaseOrigin,
         guard: Installing,
     ) {
         let m = &package.manifest;
-        let replacing = self
-            .store
-            .state()
-            .plugins
-            .get(&m.id)
-            .map(|installed| (installed.version.clone(), installed.source));
+        let replacing = self.store.state().plugins.get(&m.id).map(|installed| {
+            let catalog = self.valid_catalog().map(|in_use| in_use.catalog);
+            (
+                installed.version.clone(),
+                installed_origin(catalog.as_deref(), &m.id, installed),
+            )
+        });
         let added = replacing.is_some().then(|| self.added_over_installed(m));
         let request = InstallRequest {
             origin,
@@ -1570,7 +2032,8 @@ impl PluginService {
             replacing,
             capabilities: m.capabilities.clone(),
             operations: m.operation_consents(added.as_ref()),
-            local: source == Source::Local,
+            origin_kind,
+            replaces_port: None,
         };
         let service = Arc::downgrade(self);
         self.cfg.ui.confirm(
@@ -1581,7 +2044,7 @@ impl PluginService {
                     return;
                 };
                 if yes {
-                    service.finish_install(package, &bytes, source, publisher.as_ref());
+                    service.finish_install(package, &bytes, release.as_ref());
                 } else {
                     info!(plugin = %package.manifest.id, "the user declined the plugin");
                 }
@@ -1589,17 +2052,25 @@ impl PluginService {
         );
     }
 
-    /// Loads `package`, then records it.
-    fn finish_install(
-        &self,
-        package: Package,
-        bytes: &[u8],
-        source: Source,
-        publisher: Option<&PublisherName>,
-    ) {
+    /// Loads `package`, then records it: of `release` of the catalog, or from a file (none).
+    /// A release of the catalog is installed only if the catalog in use still offers it
+    /// as it was shown ([`PluginService::still_offered`]); else nothing changes.
+    fn finish_install(&self, package: Package, bytes: &[u8], release: Option<&PluginRelease>) {
         let _change = lock(&self.changing);
         let id = package.manifest.id.clone();
         let name = package.manifest.name.clone();
+        if let Some(release) = release
+            && !self.still_offered(release)
+        {
+            info!(plugin = %id, version = %release.version, "the catalog no longer offers the plugin as it was shown; not installed");
+            return self.failed(name, "the catalog no longer offers this plugin".to_owned());
+        }
+        let source = if release.is_some() {
+            Source::Catalog
+        } else {
+            Source::Local
+        };
+        let publisher = release.and_then(|r| r.publisher.as_ref());
         if let Err(e) = self.cfg.modules.load(package.clone()) {
             warn!(plugin = %id, error = %e, "cannot load the plugin");
             if source == Source::Catalog {
@@ -1873,16 +2344,24 @@ impl Bundles for PluginService {
 
     /// Looks in the catalog in use (downloaded within [`PluginConfig::offer_timeout`] if
     /// there is none) for a plugin porting `symname`; one not installed is installed in the
-    /// background (the user is asked) and `true` returned.
+    /// background (the user is asked) and `true` returned. The replacement of an installed
+    /// port (off, withdrawn or failed) is not: the plugin window offers it from the port.
     fn request_install(&self, symname: &str, origin: &str) -> bool {
         let Some(release) = self.catalog_offer_for_symname(symname, self.cfg.offer_timeout) else {
             return false;
         };
-        let installed = self.store.state().plugins.contains_key(&release.id)
+        let state = self.store.state();
+        let installed = state.plugins.contains_key(&release.id)
             || self.cfg.modules.loaded().iter().any(|p| {
                 p.id == release.id || p.replaces.as_ref().is_some_and(|r| r.symname == symname)
             });
         if installed {
+            return false;
+        }
+        if let Some(in_use) = self.valid_catalog()
+            && self.replaces_installed_port(&in_use.catalog, &state, &release.id)
+        {
+            info!(plugin = %release.id, "a page asks for the replacement of an installed port; it is offered from the port");
             return false;
         }
         if lock(&self.installing).contains(&release.id) {

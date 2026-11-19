@@ -2,7 +2,8 @@
 //! the sandbox's repository with its delegation, its role and `publishers.json`: its plugin
 //! offered, installed with its publisher and updated; kept, withdrawn or turned off by the
 //! states of `publishers.json` and of its role; with updates off only revocations; how often
-//! the catalog is checked; and the kept catalog checked again offline.
+//! the catalog is checked; and the kept catalog checked again offline. A port acme replaces:
+//! [`replacement`].
 
 use oncl_update::PublisherPolicy;
 use oncl_update::catalog::MIRROR_BASE;
@@ -11,6 +12,8 @@ use serde_json::{Map, Value};
 
 use super::*;
 use crate::plugins::catalog::PUBLISHER_CHECK_EVERY;
+
+mod replacement;
 
 const ACME_ID: &str = "kz.acme.example";
 const ACME_MODULE: &str = "kz.acme.Example";
@@ -147,6 +150,17 @@ fn publish(
     policy: Option<&Value>,
     role: Option<(u64, Map<String, Value>)>,
 ) {
+    publish_with(sandbox, seq, Vec::new(), policy, role);
+}
+
+/// [`publish`] with `ports` in the owner's index.
+fn publish_with(
+    sandbox: &Sandbox,
+    seq: u64,
+    ports: Vec<PluginRelease>,
+    policy: Option<&Value>,
+    role: Option<(u64, Map<String, Value>)>,
+) {
     {
         let mut repo = sandbox.server.repo();
         match policy {
@@ -167,7 +181,7 @@ fn publish(
             None => repo.delegations = None,
         }
     }
-    sandbox.publish(seq, Vec::new());
+    sandbox.publish(seq, ports);
 }
 
 fn installed(sandbox: &Sandbox) -> Installed {
@@ -222,6 +236,17 @@ fn a_publishers_plugin_is_offered_installed_with_its_publisher_and_updated() {
             .collect::<Vec<_>>(),
         [(ACME_ID, v("1.0.0"))]
     );
+    // Named by its publisher, its source archive beside its package in the project's
+    // Releases (not the publisher's `fetch`), its license from the signed release.
+    let acme_origin = |version: &str| ReleaseOrigin::Publisher {
+        display: acme_display(),
+        source: Some(SourceArchive {
+            name: format!("{ACME_ID}-{version}.src.tar.gz"),
+            url: package_url_of(version).replace(".onclp", ".src.tar.gz"),
+            license: "Apache-2.0".to_owned(),
+        }),
+    };
+    assert_eq!(view.available[0].origin, acme_origin("1.0.0"));
 
     service.install_from_catalog(ACME_ID, None).unwrap();
     assert_eq!(
@@ -229,7 +254,8 @@ fn a_publishers_plugin_is_offered_installed_with_its_publisher_and_updated() {
         [PluginNotice::Installed { name: name() }]
     );
     let requests = sandbox.requests();
-    assert!(!requests[0].local);
+    assert_eq!(requests[0].origin_kind, acme_origin("1.0.0"));
+    assert_eq!(service.view().installed[0].origin, acme_origin("1.0.0"));
     let record = installed(&sandbox);
     assert_eq!(record.source, Source::Catalog);
     assert_eq!(record.publisher, Some(acme()));
@@ -695,4 +721,31 @@ fn an_expired_role_leaves_its_publisher_unavailable_in_the_catalog_rebuilt() {
     let view = service.view();
     assert!(view.available.is_empty(), "{:?}", view.available);
     assert!(matches!(view.catalog, CatalogView::Ready { .. }));
+}
+
+/// The user agrees to install acme's plugin after acme was revoked while the window was
+/// open: nothing is installed.
+#[test]
+fn agreeing_to_install_a_plugin_no_longer_offered_installs_nothing() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    let first = plain(&sandbox, "1.0.0");
+    publish(
+        &sandbox,
+        1,
+        Some(&policy(vec![entry("active")])),
+        Some((1, role(std::slice::from_ref(&first)))),
+    );
+    *lock(&sandbox.ui.answer) = None;
+    service.install_from_catalog(ACME_ID, None).unwrap();
+    assert_eq!(sandbox.requests().len(), 1);
+    publish(&sandbox, 2, Some(&policy(vec![entry("revoked")])), None);
+    service.check_now();
+    let decide = lock(&sandbox.ui.waiting).pop().expect("the window waits");
+    decide(true);
+    assert!(
+        matches!(&sandbox.notices()[..], [PluginNotice::Failed { error, .. }] if error.contains("no longer offers")),
+    );
+    assert!(sandbox.store().state().plugins.is_empty());
+    assert!(sandbox.modules.names().is_empty());
 }

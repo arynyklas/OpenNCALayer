@@ -429,6 +429,7 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
     {
         bail!("contact must be one line of 1 to {MAX_URL} characters");
     }
+    let mut replacing = BTreeSet::new();
     for (port, plugin) in &raw.supersedes {
         if !is_plugin_id(port) || !port.starts_with(PROJECT_PREFIX) {
             bail!("supersedes: {port:?} is not a port of the project ({PROJECT_PREFIX}…)");
@@ -441,6 +442,9 @@ pub fn parse_publisher(text: &str, dir_name: &str) -> anyhow::Result<Publisher> 
                 "supersedes: {plugin:?} is not a plugin id under {}",
                 raw.id_prefix
             );
+        }
+        if !replacing.insert(plugin) {
+            bail!("supersedes: {plugin} replaces more than one port");
         }
     }
     let mut revoked_versions = Vec::with_capacity(raw.revoked_versions.len());
@@ -1319,6 +1323,12 @@ mod tests {
                     + "[supersedes]\n\"io.github.arynyklas.openncalayer.port.x\" = \"kz.other.x\"\n",
                 "ecc",
                 "supersedes",
+            ),
+            (
+                good.clone()
+                    + "[supersedes]\n\"io.github.arynyklas.openncalayer.port.x\" = \"kz.ecc.x\"\n\"io.github.arynyklas.openncalayer.port.y\" = \"kz.ecc.x\"\n",
+                "ecc",
+                "more than one port",
             ),
             (
                 good.clone()

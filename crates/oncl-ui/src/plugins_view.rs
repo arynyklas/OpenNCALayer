@@ -3,7 +3,9 @@
 //! the list is read again; the daemon also has it read again when its plugins change
 //! ([`refresh_plugins_window`]). Removing a plugin is asked about first; an update that may
 //! do more than the installed version waits for «Разрешить обновление», its new
-//! capabilities listed. The rows' texts are composed here.
+//! capabilities listed; a port whose replacement by a publisher's plugin the user declined
+//! says «Доступна замена от издателя …» and offers it again («Заменить…»). The rows' texts
+//! are composed here.
 
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -18,6 +20,7 @@ use time::OffsetDateTime;
 use crate::foreground;
 use crate::prompter::select_desktop_language;
 use crate::ui::{AvailableRow, InstalledRow, PluginsWindow};
+use crate::view::{display_text, is_invisible};
 use crate::windows::Desktop;
 use crate::worker::{self, JobWindow, Slot, run, with};
 
@@ -59,6 +62,16 @@ pub trait PluginsServices: Send + Sync {
     /// None waits, another package waits than `expected_sha256`, the one the user was shown
     /// ([`PendingUpdate::package_sha256`]), or what failed.
     fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError>;
+    /// Asks again whether the publisher's plugin that replaces the installed port `port`
+    /// ([`InstalledPlugin::replacement`]) may replace it: downloaded, then asked in a window
+    /// of its own. Blocks for the download.
+    ///
+    /// # Errors
+    ///
+    /// Why the user is not asked: updates are off, the port is not installed, no
+    /// replacement is offered, the catalog or the package failed, or it is being asked
+    /// already.
+    fn replace_port(&self, port: &str) -> Result<(), PluginActionError>;
     /// Downloads the catalog again. Blocks for the download.
     fn refresh(&self);
 }
@@ -125,11 +138,14 @@ pub struct InstalledPlugin {
     pub name: LocalizedText,
     pub version: String,
     pub replaces: Option<ReplacedBundle>,
-    /// From a file the user chose, not from the catalog.
-    pub local: bool,
+    /// Who released it: the project, a publisher, or a file the user chose.
+    pub origin: PluginOrigin,
     pub state: PluginStatus,
     /// An update that may do more than this version, waiting for the user.
     pub pending_update: Option<PendingUpdate>,
+    /// A port a publisher's plugin replaces, the replacement declined once: the publisher's
+    /// display name («Доступна замена от издателя …», «Заменить…»).
+    pub replacement: Option<LocalizedText>,
 }
 
 /// An update waiting for the user: its version and what it may do that the installed
@@ -145,6 +161,8 @@ pub struct PendingUpdate {
     /// The sha256 (hex) of the package shown: only this one is installed on the user's
     /// answer.
     pub package_sha256: String,
+    /// Who released the update, with its own source archive.
+    pub origin: PluginOrigin,
 }
 
 /// Whether an installed plugin serves its modules.
@@ -165,10 +183,158 @@ pub struct AvailablePlugin {
     pub name: LocalizedText,
     pub version: String,
     pub replaces: Option<ReplacedBundle>,
+    /// Who releases it: the project or a publisher.
+    pub origin: PluginOrigin,
     /// A page called one of its modules.
     pub needed: bool,
     /// That page's origin, if it had one.
     pub needed_by: Option<String>,
+}
+
+/// Where a plugin comes from, as the install window and the plugin window say it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PluginOrigin {
+    /// A port of the project's own catalog: «Издатель: OpenNCALayer».
+    Project,
+    /// A plugin of a publisher of the catalog.
+    Publisher(PublisherOrigin),
+    /// Of the catalog, but who released it is not known: nobody is named (never the
+    /// project).
+    Unknown,
+    /// A file the user chose: in no catalog, nobody reviewed it.
+    LocalFile,
+}
+
+/// A publisher's plugin: who signed it and the source archive it was built from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublisherOrigin {
+    /// The publisher's display name, as the owner signs it in `publishers.json`.
+    pub display: LocalizedText,
+    /// The source archive of the release shown, if the catalog in use lists it.
+    pub source: Option<SourceArchive>,
+}
+
+/// The source archive of a publisher's release, in the project's Releases.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceArchive {
+    /// `<id>-<version>.src.tar.gz`.
+    pub file: String,
+    /// Its copy in the project's Releases, built from the signed release (never from the
+    /// publisher's `source.fetch`); opened only if it is one ([`is_source_link`]).
+    pub url: String,
+    /// The plugin's license, an SPDX expression.
+    pub license: String,
+}
+
+/// Where the copies of the publishers' source archives are: the project's Releases.
+const RELEASES: &str = concat!(env!("CARGO_PKG_REPOSITORY"), "/releases/download/pub-");
+
+/// Whether `url` is a source archive in the project's Releases: the only links the windows
+/// open for a plugin.
+pub(crate) fn is_source_link(url: &str) -> bool {
+    url.strip_prefix(RELEASES).is_some_and(|rest| {
+        rest.ends_with(".src.tar.gz")
+            && rest.split('/').count() == 2
+            && !rest.contains("..")
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"-._+/".contains(&b))
+    })
+}
+
+/// What a window says of a plugin's origin, in one language; empty strings for nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OriginTexts {
+    /// «Издатель: …»; empty for a file.
+    pub(crate) publisher: String,
+    /// That the project built a publisher's plugin and did not review its code.
+    pub(crate) note: String,
+    /// «Исходный код: {file} · {license}», the link's text.
+    pub(crate) source: String,
+    /// Where the link goes.
+    pub(crate) url: String,
+}
+
+/// What the windows say of `origin` in `l`. The publisher's name and the license are
+/// cleaned like any text the program did not write.
+pub(crate) fn origin_texts(origin: &PluginOrigin, l: Locale) -> OriginTexts {
+    let t = OriginWords::of(l);
+    match origin {
+        PluginOrigin::Project => OriginTexts {
+            publisher: t.publisher.replace("{name}", "OpenNCALayer"),
+            ..OriginTexts::default()
+        },
+        PluginOrigin::Publisher(publisher) => {
+            let (source, url) = publisher
+                .source
+                .as_ref()
+                .filter(|s| is_source_link(&s.url))
+                .map(|s| {
+                    (
+                        t.source
+                            .replace("{file}", &display_text(&s.file))
+                            // Whole (it is at most 256 bytes and wraps): a cut could hide a
+                            // trailing `AND LicenseRef-…`.
+                            .replace("{license}", &visible(&s.license)),
+                        s.url.clone(),
+                    )
+                })
+                .unwrap_or_default();
+            OriginTexts {
+                publisher: t
+                    .publisher
+                    .replace("{name}", &publisher_name(&publisher.display, l)),
+                note: t.note.to_owned(),
+                source,
+                url,
+            }
+        }
+        PluginOrigin::Unknown | PluginOrigin::LocalFile => OriginTexts::default(),
+    }
+}
+
+/// A publisher's display name in `l` as the windows show it: without invisible or
+/// direction-changing characters (`Open\u{200B}NCALayer` reads as what it is), at most
+/// [`crate::view::MAX_PAGE_TEXT`] characters, the limit of `publishers.json`.
+pub(crate) fn publisher_name(display: &LocalizedText, l: Locale) -> String {
+    display_text(display.get(l))
+}
+
+/// `text` without invisible or direction-changing characters, whole.
+fn visible(text: &str) -> String {
+    text.chars().filter(|c| !is_invisible(*c)).collect()
+}
+
+/// The words of [`origin_texts`] in one language. The Kazakh `note` and `source` are drafts
+/// for the translator (`docs/design/publishers.md`, open question 3).
+struct OriginWords {
+    /// `{name}`.
+    publisher: &'static str,
+    note: &'static str,
+    /// `{file}`, `{license}`.
+    source: &'static str,
+}
+
+impl OriginWords {
+    fn of(l: Locale) -> &'static OriginWords {
+        match l {
+            Locale::Ru => &OriginWords {
+                publisher: "Издатель: {name}",
+                note: "Плагин подписан издателем и собран OpenNCALayer из опубликованного исходного кода. Сам код OpenNCALayer не проверял.",
+                source: "Исходный код: {file} · {license}",
+            },
+            Locale::Kk => &OriginWords {
+                publisher: "Жариялаушы: {name}",
+                note: "Плагинге жариялаушы қол қойған, оны OpenNCALayer жарияланған бастапқы кодтан құрастырған. OpenNCALayer кодтың өзін тексерген жоқ.",
+                source: "Бастапқы код: {file} · {license}",
+            },
+            Locale::En => &OriginWords {
+                publisher: "Publisher: {name}",
+                note: "The publisher signed this plugin, and OpenNCALayer built it from the published source code. OpenNCALayer did not review the code.",
+                source: "Source code: {file} · {license}",
+            },
+        }
+    }
 }
 
 /// A text in the three languages of the windows.
@@ -264,8 +430,15 @@ fn create(desktop: &Rc<Desktop>) -> Result<(), PlatformError> {
     ui.on_remove(move |row| with(id, |open: &Open| ask_remove(open, row)));
     ui.on_confirm_remove(move |row| with(id, |open: &Open| remove(open, row)));
     ui.on_confirm_update(move |row| with(id, |open: &Open| confirm_update(open, row)));
+    ui.on_replace(move |row| with(id, |open: &Open| replace(open, row)));
     ui.on_install(move |row| with(id, |open: &Open| install(open, row)));
     ui.on_install_file(move || with(id, pick_file));
+    ui.on_open_installed_source(move |row| {
+        with(id, |open: &Open| open_row_source(open, row, true));
+    });
+    ui.on_open_available_source(move |row| {
+        with(id, |open: &Open| open_row_source(open, row, false));
+    });
     ui.on_refresh(move || with(id, refresh));
     ui.on_dismiss(move || {
         closing(id);
@@ -303,6 +476,7 @@ enum Action {
     Toggle,
     Remove,
     Update,
+    Replace,
 }
 
 /// Runs `action` on a worker thread, then reads the plugins and shows them with the
@@ -344,6 +518,7 @@ fn action_error_text(e: &PluginActionError, kind: Action, l: Locale) -> String {
         Action::Toggle => t.toggle_failed,
         Action::Remove => t.remove_failed,
         Action::Update => t.plugin_update_failed,
+        Action::Replace => t.replace_failed,
     };
     let why = match e {
         PluginActionError::InstalledAlready => t.installed_already.to_owned(),
@@ -362,24 +537,52 @@ fn action_error_text(e: &PluginActionError, kind: Action, l: Locale) -> String {
 
 /// Shows `view`.
 fn show(open: &Open, view: PluginsView) {
-    let l = open.desktop.locale.get();
-    let (catalog, error) = catalog_text(&view.catalog, l);
-    open.ui.set_catalog(catalog.into());
-    open.ui.set_catalog_error(error);
-    let installed: Vec<InstalledRow> = view.installed.iter().map(|p| installed_row(p, l)).collect();
-    open.ui
-        .set_installed(ModelRc::new(VecModel::from(installed)));
-    let available: Vec<AvailableRow> = view.available.iter().map(|p| available_row(p, l)).collect();
-    open.ui
-        .set_available(ModelRc::new(VecModel::from(available)));
+    fill(&open.ui, &view, open.desktop.locale.get());
     open.ui.set_removing(-1);
     *open.shown.borrow_mut() = view;
+}
+
+/// Sets the catalog's line and the rows of `view` in `l`.
+pub(crate) fn fill(ui: &PluginsWindow, view: &PluginsView, l: Locale) {
+    let (catalog, error) = catalog_text(&view.catalog, l);
+    ui.set_catalog(catalog.into());
+    ui.set_catalog_error(error);
+    let installed: Vec<InstalledRow> = view.installed.iter().map(|p| installed_row(p, l)).collect();
+    ui.set_installed(ModelRc::new(VecModel::from(installed)));
+    let available: Vec<AvailableRow> = view.available.iter().map(|p| available_row(p, l)).collect();
+    ui.set_available(ModelRc::new(VecModel::from(available)));
 }
 
 /// The installed plugin of row `row`.
 fn installed_at(open: &Open, row: i32) -> Option<InstalledPlugin> {
     let i = usize::try_from(row).ok()?;
     open.shown.borrow().installed.get(i).cloned()
+}
+
+/// Opens the source archive of row `row` of the installed plugins (`installed`) or of the
+/// available ones.
+fn open_row_source(open: &Open, row: i32, installed: bool) {
+    if let Some(url) = row_source_url(&open.shown.borrow(), row, installed) {
+        crate::about_view::open_source_link(&url);
+    }
+}
+
+/// The URL of the source archive of row `row` of `shown`: from the view the rows were made
+/// of, never from a text of the window.
+fn row_source_url(shown: &PluginsView, row: i32, installed: bool) -> Option<String> {
+    let i = usize::try_from(row).ok()?;
+    let origin = if installed {
+        &shown.installed.get(i)?.origin
+    } else {
+        &shown.available.get(i)?.origin
+    };
+    match origin {
+        PluginOrigin::Publisher(PublisherOrigin {
+            source: Some(source),
+            ..
+        }) => Some(source.url.clone()),
+        _ => None,
+    }
 }
 
 /// «Выключить» / «Включить».
@@ -482,7 +685,7 @@ fn update_request(
         replaces: plugin.replaces.clone(),
         replacing: Some(crate::install_plugin::InstalledVersion {
             version: plugin.version.clone(),
-            local: plugin.local,
+            origin: plugin.origin.clone(),
         }),
         capabilities: update
             .added
@@ -491,9 +694,9 @@ fn update_request(
             .cloned()
             .collect(),
         operations: update.operations.clone(),
-        update: true,
+        kind: crate::install_plugin::RequestKind::Update,
         window: None,
-        local: false,
+        origin_kind: update.origin.clone(),
         decide,
     }
 }
@@ -508,6 +711,22 @@ fn install_update(open: &Open, plugin_id: String, expected_sha256: String) {
         open,
         move |services| services.confirm_update(&plugin_id, &expected_sha256),
         Action::Update,
+        None,
+    );
+}
+
+/// «Заменить…» of a port whose replacement the user declined: the publisher's plugin is
+/// downloaded, then the user is asked again in the replacement window.
+fn replace(open: &Open, row: i32) {
+    let Some(plugin) = installed_at(open, row).filter(|p| p.replacement.is_some()) else {
+        return;
+    };
+    let l = open.desktop.locale.get();
+    show_message(&open.ui, Texts::of(l).downloading_replacement, false);
+    run_action(
+        open,
+        move |services| services.replace_port(&plugin.id),
+        Action::Replace,
         None,
     );
 }
@@ -683,13 +902,14 @@ fn replaces_text(replaces: &ReplacedBundle, l: Locale) -> String {
 fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
     let t = Texts::of(l);
     let mut details = vec![
-        if plugin.local {
+        if plugin.origin == PluginOrigin::LocalFile {
             t.local
         } else {
             t.from_catalog
         }
         .to_owned(),
     ];
+    let origin = origin_texts(&plugin.origin, l);
     if let Some(replaces) = &plugin.replaces {
         details.push(replaces_text(replaces, l));
     }
@@ -709,6 +929,11 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
                 .replace("{0}", &added.join("; "))
         })
         .unwrap_or_default();
+    let replacement = plugin
+        .replacement
+        .as_ref()
+        .map(|publisher| t.replacement.replace("{0}", &publisher_name(publisher, l)))
+        .unwrap_or_default();
     InstalledRow {
         title: title(&plugin.name, &plugin.version, l).into(),
         details: details.join(" · ").into(),
@@ -717,6 +942,10 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
         can_toggle: plugin.state != PluginStatus::Withdrawn,
         enabled: plugin.state != PluginStatus::Disabled,
         update: update.into(),
+        replacement: replacement.into(),
+        publisher: origin.publisher.into(),
+        note: origin.note.into(),
+        source: origin.source.into(),
     }
 }
 
@@ -727,8 +956,12 @@ fn available_row(plugin: &AvailablePlugin, l: Locale) -> AvailableRow {
         (true, Some(origin)) => t.needed_by.replace("{0}", origin),
         (true, None) => t.needed.to_owned(),
     };
+    let origin = origin_texts(&plugin.origin, l);
     AvailableRow {
         title: title(&plugin.name, &plugin.version, l).into(),
+        publisher: origin.publisher.into(),
+        note: origin.note.into(),
+        source: origin.source.into(),
         details: plugin
             .replaces
             .as_ref()
@@ -803,6 +1036,11 @@ struct Texts {
     /// `{0}`: the version.
     needs_core: &'static str,
     not_installed: &'static str,
+    /// `{0}`: the publisher. The Kazakh ones are drafts for the translator.
+    replacement: &'static str,
+    downloading_replacement: &'static str,
+    /// `{0}`: why.
+    replace_failed: &'static str,
 }
 
 impl Texts {
@@ -846,6 +1084,9 @@ impl Texts {
                 not_offered: "каталог оны ұсынбайды",
                 needs_core: "OpenNCALayer {0} немесе жаңарақ нұсқасы қажет",
                 not_installed: "ол орнатылмаған",
+                replacement: "{0} жариялаушысынан алмастыру қолжетімді",
+                downloading_replacement: "Алмастыратын плагин жүктелуде…",
+                replace_failed: "Портты алмастыру мүмкін болмады: {0}",
             },
             Locale::Ru => &Texts {
                 unavailable: "Каталог плагинов недоступен в этой сборке",
@@ -885,6 +1126,9 @@ impl Texts {
                 not_offered: "каталог его не предлагает",
                 needs_core: "нужен OpenNCALayer {0} или новее",
                 not_installed: "он не установлен",
+                replacement: "Доступна замена от издателя {0}",
+                downloading_replacement: "Плагин на замену загружается…",
+                replace_failed: "Не удалось заменить порт: {0}",
             },
             Locale::En => &Texts {
                 unavailable: "The plugin catalog is unavailable in this build",
@@ -924,6 +1168,9 @@ impl Texts {
                 not_offered: "the catalog does not offer it",
                 needs_core: "it needs OpenNCALayer {0} or newer",
                 not_installed: "it is not installed",
+                replacement: "A replacement from the publisher {0} is available",
+                downloading_replacement: "Downloading the replacement plugin…",
+                replace_failed: "Cannot replace the port: {0}",
             },
         }
     }
@@ -944,6 +1191,7 @@ pub(crate) mod fakes {
         SetEnabled(String, bool),
         Remove(String),
         ConfirmUpdate(String),
+        ReplacePort(String),
         Refresh,
     }
 
@@ -1000,6 +1248,11 @@ pub(crate) mod fakes {
             self.outcome()
         }
 
+        fn replace_port(&self, port: &str) -> Result<(), PluginActionError> {
+            self.log(Call::ReplacePort(port.to_owned()));
+            self.outcome()
+        }
+
         fn refresh(&self) {
             self.log(Call::Refresh);
         }
@@ -1043,7 +1296,7 @@ mod tests {
                         symname: "kz.gov.one".to_owned(),
                         version: "0.3.1".to_owned(),
                     }),
-                    local: false,
+                    origin: PluginOrigin::Project,
                     state: PluginStatus::Enabled,
                     pending_update: Some(PendingUpdate {
                         version: "1.1.0".to_owned(),
@@ -1053,25 +1306,29 @@ mod tests {
                         ],
                         operations: Vec::new(),
                         package_sha256: "ab".repeat(32),
+                        origin: PluginOrigin::Project,
                     }),
+                    replacement: None,
                 },
                 InstalledPlugin {
                     id: "kz.example.two".to_owned(),
                     name: name("Два"),
                     version: "0.2.0".to_owned(),
                     replaces: None,
-                    local: true,
+                    origin: PluginOrigin::LocalFile,
                     state: PluginStatus::Disabled,
                     pending_update: None,
+                    replacement: None,
                 },
                 InstalledPlugin {
                     id: "kz.example.three".to_owned(),
                     name: name("Три"),
                     version: "3.0.0".to_owned(),
                     replaces: None,
-                    local: false,
+                    origin: PluginOrigin::Project,
                     state: PluginStatus::Withdrawn,
                     pending_update: None,
+                    replacement: None,
                 },
             ],
             available: vec![AvailablePlugin {
@@ -1079,6 +1336,7 @@ mod tests {
                 name: name("Четыре"),
                 version: "4.0.0".to_owned(),
                 replaces: None,
+                origin: PluginOrigin::Project,
                 needed: true,
                 needed_by: Some("https://shop.kz".to_owned()),
             }],
@@ -1165,7 +1423,10 @@ mod tests {
                 .unwrap(),
             Box::new(|_| {}),
         );
-        assert!(request.update && !request.local);
+        assert!(
+            request.kind == crate::install_plugin::RequestKind::Update
+                && request.origin_kind == PluginOrigin::Project
+        );
         assert_eq!(request.version, "1.1.0");
         assert_eq!(request.replacing.as_ref().unwrap().version, "1.0.0");
         assert_eq!(request.operations.len(), 1);
@@ -1279,6 +1540,119 @@ mod tests {
         let available: Vec<AvailableRow> = ui.get_available().iter().collect();
         assert_eq!(available[0].title, "Четыре ru 4.0.0");
         assert_eq!(available[0].needed, "Нужен сайту https://shop.kz");
+    }
+
+    /// A publisher's plugin, installed and offered: its rows name the publisher and link its
+    /// source archive by the URL of the view; a port names the project only; a file names
+    /// no publisher and stays «локальный».
+    #[test]
+    fn a_publishers_plugin_names_its_publisher_and_links_its_source() {
+        let url = concat!(
+            env!("CARGO_PKG_REPOSITORY"),
+            "/releases/download/pub-acme-0909/kz.acme.market-1.2.0.src.tar.gz"
+        );
+        let acme = PluginOrigin::Publisher(PublisherOrigin {
+            display: LocalizedText {
+                ru: "ТОО «Акме»".to_owned(),
+                kk: "«Акме» ЖШС".to_owned(),
+                en: "Acme LLP".to_owned(),
+            },
+            source: Some(SourceArchive {
+                file: "kz.acme.market-1.2.0.src.tar.gz".to_owned(),
+                url: url.to_owned(),
+                license: "Apache-2.0".to_owned(),
+            }),
+        });
+        let mut shown = view();
+        shown.installed[2].origin = acme.clone();
+        shown.available[0].origin = acme;
+        let o = opened_with(Locale::Ru, shown.clone());
+        let ui = &o.open.ui;
+        let rows: Vec<InstalledRow> = ui.get_installed().iter().collect();
+        assert_eq!(rows[0].publisher, "Издатель: OpenNCALayer");
+        assert_eq!(rows[0].source, "");
+        assert_eq!(
+            (rows[1].publisher.as_str(), rows[1].details.as_str()),
+            ("", "локальный")
+        );
+        assert_eq!(rows[1].source, "");
+        assert_eq!(rows[2].publisher, "Издатель: ТОО «Акме»");
+        assert_eq!(rows[2].details, "из каталога");
+        assert!(rows[2].note.ends_with("Сам код OpenNCALayer не проверял."));
+        assert_eq!((rows[0].note.as_str(), rows[1].note.as_str()), ("", ""));
+        assert_eq!(
+            rows[2].source,
+            "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        let available: Vec<AvailableRow> = ui.get_available().iter().collect();
+        assert_eq!(available[0].publisher, "Издатель: ТОО «Акме»");
+        assert_eq!(available[0].note, rows[2].note);
+        assert_eq!(
+            available[0].source,
+            "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"
+        );
+        assert_eq!(row_source_url(&shown, 2, true).as_deref(), Some(url));
+        assert_eq!(row_source_url(&shown, 0, false).as_deref(), Some(url));
+        assert_eq!(row_source_url(&shown, 0, true), None);
+        assert_eq!(row_source_url(&shown, 1, true), None);
+        assert_eq!(row_source_url(&shown, 7, true), None);
+        assert_eq!(row_source_url(&shown, -1, false), None);
+    }
+
+    /// Р11: a port whose replacement the user declined says so in its row, with
+    /// «Заменить…» asking again; the other rows say nothing of it; a failure is told.
+    #[test]
+    fn a_declined_replacement_is_offered_again_from_the_row() {
+        let mut shown = view();
+        shown.installed[0].replacement = Some(LocalizedText {
+            ru: "ТОО «Акме»\u{200B}".to_owned(),
+            kk: "«Акме» ЖШС".to_owned(),
+            en: "Acme LLP".to_owned(),
+        });
+        let o = opened_with(Locale::Ru, shown.clone());
+        let ui = &o.open.ui;
+        let rows: Vec<InstalledRow> = ui.get_installed().iter().collect();
+        assert_eq!(
+            rows[0].replacement,
+            "Доступна замена от издателя ТОО «Акме»"
+        );
+        assert_eq!(
+            (rows[1].replacement.as_str(), rows[2].replacement.as_str()),
+            ("", "")
+        );
+        taken(&o.calls);
+        // Only a row with a replacement asks.
+        ui.invoke_replace(1);
+        worker::manual::run_all();
+        assert_eq!(taken(&o.calls), []);
+        ui.invoke_replace(0);
+        assert_eq!(ui.get_message(), "Плагин на замену загружается…");
+        worker::manual::run_all();
+        assert_eq!(
+            taken(&o.calls),
+            [Call::ReplacePort("kz.example.one".to_owned()), Call::View]
+        );
+        assert_eq!(ui.get_message(), "");
+        *o.fail.lock().unwrap() = Some(PluginActionError::UpdatesOff);
+        ui.invoke_replace(0);
+        worker::manual::run_all();
+        assert_eq!(
+            ui.get_message(),
+            "Не удалось заменить порт: обновления выключены: включите их в настройках"
+        );
+        assert!(ui.get_message_is_error());
+        for (l, line) in [
+            (
+                Locale::En,
+                "A replacement from the publisher Acme LLP is available",
+            ),
+            (
+                Locale::Kk,
+                "«Акме» ЖШС жариялаушысынан алмастыру қолжетімді",
+            ),
+        ] {
+            assert_eq!(installed_row(&shown.installed[0], l).replacement, line);
+        }
     }
 
     #[test]

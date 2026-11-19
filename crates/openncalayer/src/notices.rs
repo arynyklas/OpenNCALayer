@@ -351,6 +351,31 @@ impl TrayStatus {
                     None,
                 )
             }
+            PluginNotice::PortReplaced { port, name } => {
+                let (port, name) = (port.get(l), name.get(l));
+                (
+                    match l {
+                        Locale::Ru => "Порт заменён",
+                        Locale::Kk => "Порт алмастырылды",
+                        Locale::En => "Port replaced",
+                    }
+                    .to_owned(),
+                    match l {
+                        Locale::Ru => format!("Порт «{port}» заменён плагином издателя «{name}»."),
+                        Locale::Kk => {
+                            format!(
+                                "«{port}» порты жариялаушының «{name}» плагинімен алмастырылды."
+                            )
+                        }
+                        Locale::En => {
+                            format!(
+                                "The port «{port}» is replaced by the publisher's plugin «{name}»."
+                            )
+                        }
+                    },
+                    None,
+                )
+            }
             PluginNotice::Updated { name, version } => {
                 let name = name.get(l);
                 (
@@ -1167,6 +1192,14 @@ mod tests {
                     en: "Acme LLP".to_owned(),
                 },
             },
+            PluginNotice::PortReplaced {
+                port: oncl_plugin::Localized {
+                    ru: "Порт".to_owned(),
+                    kk: "Порт".to_owned(),
+                    en: "Port".to_owned(),
+                },
+                name: name.clone(),
+            },
         ];
         let t0 = Instant::now();
         let mut ru = TrayStatus::new(Locale::Ru, None);
@@ -1187,6 +1220,10 @@ mod tests {
         assert_eq!(
             ru.plugin_notification(&notices[5], t0).unwrap().body,
             "Издатель ТОО «Акме» отключён в каталоге OpenNCALayer, плагин «Пример» выключен."
+        );
+        assert_eq!(
+            ru.plugin_notification(&notices[6], t0).unwrap().body,
+            "Порт «Порт» заменён плагином издателя «Пример»."
         );
         for l in [Locale::Kk, Locale::En] {
             let mut status = TrayStatus::new(l, None);

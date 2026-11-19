@@ -461,6 +461,147 @@ fn state_of_0_1_1_reads_with_empty_declined() {
     assert!(!text.contains("declined_replacements"), "{text}");
 }
 
+/// A port replaced by a publisher's plugin (Р11): one save records the plugin, on or off as
+/// the port was, and forgets the port, its settings, its package and its declined offer.
+#[test]
+fn a_port_is_replaced_by_a_publishers_plugin() {
+    const MARKET: &str = "kz.acme.market";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (port, port_bytes) = example();
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    store.set_enabled(ID, false).unwrap();
+    store.set_declined_replacement(ID, Some(MARKET)).unwrap();
+    std::fs::create_dir_all(store.settings_dir()).unwrap();
+    std::fs::write(store.settings_path(ID), b"{}").unwrap();
+    let bytes = example_package_with(|m| m.replace(ID, MARKET));
+    let market = Package::read(&bytes).unwrap();
+    let acme = oncl_update::tuf::PublisherName::parse("acme").unwrap();
+
+    // Not the package's file, the port itself, or no port: nothing changes.
+    let short = &bytes[..bytes.len() - 1];
+    let err = store.replace(ID, &market, short, Some(&acme)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let err = store
+        .replace(ID, &port, &port_bytes, Some(&acme))
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    let err = store
+        .replace("kz.none", &market, &bytes, Some(&acme))
+        .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::NotFound);
+    assert!(store.state().plugins.contains_key(ID));
+
+    store.replace(ID, &market, &bytes, Some(&acme)).unwrap();
+    let state = Store::open(dir.path()).unwrap().state();
+    assert!(!state.plugins.contains_key(ID));
+    assert!(state.declined_replacements.is_empty());
+    let installed = &state.plugins[MARKET];
+    assert_eq!(installed.source, Source::Catalog);
+    assert_eq!(installed.publisher.as_ref(), Some(&acme));
+    assert!(!installed.enabled && !installed.withdrawn);
+    assert!(store.load_package(MARKET).is_ok());
+    assert!(!package_file(dir.path(), "0.1.0").exists());
+    assert!(!store.settings_path(ID).exists());
+    // A replacement installed already is never installed again over another port.
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    let err = store.replace(ID, &market, &bytes, Some(&acme)).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(store.state().plugins.contains_key(ID));
+}
+
+/// The state cannot be saved: the port stays installed with its files, and the
+/// replacement's package written for it is gone again.
+#[test]
+fn a_replacement_not_saved_leaves_the_port_as_it_was() {
+    const MARKET: &str = "kz.acme.market";
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (port, port_bytes) = example();
+    store
+        .install(&port, &port_bytes, Source::Catalog, None)
+        .unwrap();
+    let bytes = example_package_with(|m| m.replace(ID, MARKET));
+    let market = Package::read(&bytes).unwrap();
+    // The state file is a directory now: no save succeeds.
+    let state_file = dir.path().join("plugins/state.json");
+    std::fs::remove_file(&state_file).unwrap();
+    std::fs::create_dir(&state_file).unwrap();
+    std::fs::write(state_file.join("keep"), b"x").unwrap();
+    assert!(store.replace(ID, &market, &bytes, None).is_err());
+    let state = store.state();
+    assert!(state.plugins.contains_key(ID) && !state.plugins.contains_key(MARKET));
+    assert!(package_file(dir.path(), "0.1.0").is_file());
+    let market_file = dir
+        .path()
+        .join("plugins/packages/kz.acme.market-0.1.0.onclp");
+    assert!(!market_file.exists());
+}
+
+/// Files a crash left behind (a port replaced, a plugin removed) go once they are older than
+/// `PRUNE_AFTER`; the installed plugins' files, the built-in modules' settings and a fresh
+/// orphan (another process may be installing it) stay.
+#[test]
+fn files_no_plugin_owns_are_pruned() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
+    let long_ago = std::time::SystemTime::now() - Store::PRUNE_AFTER * 2;
+    let old = |path: &std::path::Path| {
+        std::fs::write(path, b"old").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+    };
+    let packages = dir.path().join("plugins/packages");
+    let orphan = packages.join("kz.gone.port-1.0.0.onclp");
+    old(&orphan);
+    let fresh = packages.join("kz.new.plugin-1.0.0.onclp");
+    std::fs::write(&fresh, b"new").unwrap();
+    let unrelated = packages.join("notes.txt");
+    old(&unrelated);
+    std::fs::create_dir_all(store.settings_dir()).unwrap();
+    old(&store.settings_path(ID));
+    old(&store.settings_path("kz.gone.port"));
+    let fresh_settings = store.settings_path("kz.new.plugin");
+    std::fs::write(&fresh_settings, b"{}").unwrap();
+    let builtin = store.settings_path("io.github.arynyklas.openncalayer.builtin.basics");
+    old(&builtin);
+    store.prune_files();
+    assert!(!orphan.exists() && !store.settings_path("kz.gone.port").exists());
+    assert!(
+        fresh.is_file() && fresh_settings.is_file(),
+        "a fresh file stays"
+    );
+    assert!(package_file(dir.path(), "0.1.0").is_file());
+    assert!(store.settings_path(ID).is_file() && builtin.is_file() && unrelated.is_file());
+}
+
+#[test]
+fn removing_a_port_forgets_its_declined_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let (package, bytes) = example();
+    store
+        .install(&package, &bytes, Source::Catalog, None)
+        .unwrap();
+    store
+        .set_declined_replacement(ID, Some("kz.acme.market"))
+        .unwrap();
+    store.remove(ID).unwrap();
+    assert!(store.state().declined_replacements.is_empty());
+}
+
 /// The state as 0.1.1 reads it: its structs, frozen, without the fields of later versions.
 mod v0_1_1 {
     use std::collections::{BTreeMap, BTreeSet};
