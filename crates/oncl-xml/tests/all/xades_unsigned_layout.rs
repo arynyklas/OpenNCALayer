@@ -3,8 +3,7 @@
 //! materialised: it may carry a multi-megabyte CRL). Each violation is refused with a
 //! typed error; the same documents are refused by the DOM-based implementation this
 //! replaced (`ONCL_DUMP_LAYOUT=<dir>` writes them for the differential run).
-#[path = "support/xades_pki.rs"]
-mod xades_pki;
+use crate::xades_pki::{Control, NOW, Offline, Pki};
 use oncl_pki::{
     evidence::AdesLevel,
     io::{Source, TemporaryStore},
@@ -13,7 +12,6 @@ use oncl_pki::{
 };
 use oncl_xml::{XmlVerifyProfile, verify_source};
 use std::{io::Cursor, sync::Arc};
-use xades_pki::{Control, NOW, Offline, Pki};
 
 const XADES: &str = "http://uri.etsi.org/01903/v1.3.2#";
 const TSVD_CLOSE: &str = "</xades141:TimeStampValidationData>";

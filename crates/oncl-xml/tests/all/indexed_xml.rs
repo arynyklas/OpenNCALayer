@@ -290,7 +290,7 @@ fn sequential_one_byte_reads_and_stable_source() {
 fn offset_over_4gib() {
     probe::run(std::env::temp_dir(), true).unwrap();
 }
-#[path = "support/indexed_probe.rs"]
+#[path = "../support/indexed_probe.rs"]
 mod probe;
 
 #[test]
