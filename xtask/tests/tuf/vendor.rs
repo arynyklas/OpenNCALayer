@@ -1152,3 +1152,22 @@ fn check_onboarding_keeps_builders_and_entries_against_the_base() {
     let err = onboard::check_onboarding(&root, &LAYOUT, Some("main")).unwrap_err();
     assert!(format!("{err:#}").contains("Р28"), "{err:#}");
 }
+
+#[test]
+fn tuf_check_warns_of_a_newest_role_that_breaks_todays_rules() {
+    // `ecc`'s role in this world has entries without `custom.oncl`: accepted once, they break
+    // today's rules, and a rule applies to new versions only.
+    let w = online_world();
+    let report = w.tree(t1());
+    assert!(report.problems.is_empty(), "{:?}", report.problems);
+    let warned: Vec<&String> = report
+        .warnings
+        .iter()
+        .filter(|p| p.code == "publisher-rules")
+        .map(|p| &p.message)
+        .collect();
+    assert!(
+        warned.iter().any(|m| m.starts_with("pub-ecc 1: check 6:")),
+        "{warned:?}"
+    );
+}

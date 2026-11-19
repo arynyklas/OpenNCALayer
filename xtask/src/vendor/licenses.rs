@@ -1,13 +1,18 @@
 //! Licences of a publisher's release (Р31): its own `source.license` (check 12) and the
 //! licence of every crate that ends up in its WebAssembly module (check 20) must be on the
 //! OSI's list, as SPDX publishes it (`isOsiApproved`): `xtask/assets/spdx/`. Also the
-//! `THIRD-PARTY.txt` of the copy in the project's Releases, from the crates `cargo metadata`
-//! resolves for `wasm32-unknown-unknown`.
+//! `THIRD-PARTY.txt` of the copy in the project's Releases: the crates `cargo metadata`
+//! resolves for `wasm32-unknown-unknown` and the full text of each one's licence files.
 //!
 //! An SPDX expression is on the list when it leaves a choice of OSI licences only: `A OR B`
-//! needs one of them, `A AND B` both, `A WITH E` an OSI `A` and an exception SPDX lists; a
-//! `LicenseRef-` is no OSI licence. The crates of the module are read leniently, as Cargo
-//! once allowed: `/` is `OR` and the operators may be lower case.
+//! needs one of them, `A AND B` both, `A WITH E` an OSI `A` and an exception SPDX lists. An
+//! expression naming a `LicenseRef-`, `DocumentRef-` or `AdditionRef-` or a deprecated SPDX
+//! id is refused whole, even as one choice of an `OR` (the owner's rule). The crates of the
+//! module are read leniently, as Cargo once allowed: `/` is `OR` and the operators may be
+//! lower case.
+//!
+//! The lists are pinned files, refreshed by a manual pull request (`docs/dev/publishers.md`,
+//! «Список лицензий OSI»); a change applies to new releases only.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -23,6 +28,18 @@ static OSI: LazyLock<BTreeSet<&'static str>> =
 /// The SPDX licence exception ids.
 static EXCEPTIONS: LazyLock<BTreeSet<&'static str>> =
     LazyLock::new(|| ids(include_str!("../../assets/spdx/exceptions.txt")));
+
+/// The deprecated SPDX licence and exception ids.
+static DEPRECATED: LazyLock<BTreeSet<&'static str>> =
+    LazyLock::new(|| ids(include_str!("../../assets/spdx/deprecated.txt")));
+
+/// Whether `word` (an id or an exception) is refused wherever it stands.
+fn refused(word: &str) -> bool {
+    ["LicenseRef-", "DocumentRef-", "AdditionRef-"]
+        .iter()
+        .any(|p| word.starts_with(p))
+        || DEPRECATED.contains(word)
+}
 
 fn ids(text: &'static str) -> BTreeSet<&'static str> {
     text.lines()
@@ -89,6 +106,7 @@ struct Eval<'t> {
     at: usize,
     depth: usize,
     not_osi: BTreeSet<String>,
+    refused: BTreeSet<String>,
 }
 
 impl Eval<'_> {
@@ -135,6 +153,9 @@ impl Eval<'_> {
             }
             Some(Token::Word(word)) => {
                 let base = word.strip_suffix('+').unwrap_or(&word);
+                if refused(base) {
+                    self.refused.insert(word.clone());
+                }
                 let mut osi = is_osi(base);
                 if !osi {
                     self.not_osi.insert(word.clone());
@@ -142,6 +163,10 @@ impl Eval<'_> {
                 if self.peek() == Some(&Token::With) {
                     self.at += 1;
                     match self.next().cloned() {
+                        Some(Token::Word(exception)) if refused(&exception) => {
+                            self.refused.insert(format!("WITH {exception}"));
+                            osi = false;
+                        }
                         Some(Token::Word(exception)) if EXCEPTIONS.contains(exception.as_str()) => {
                         }
                         Some(Token::Word(exception)) => {
@@ -176,6 +201,7 @@ pub fn check_osi(expression: &str, reading: Reading) -> Result<(), String> {
         at: 0,
         depth: 0,
         not_osi: BTreeSet::new(),
+        refused: BTreeSet::new(),
     };
     let osi = eval
         .or()
@@ -183,6 +209,14 @@ pub fn check_osi(expression: &str, reading: Reading) -> Result<(), String> {
     if eval.at != tokens.len() {
         return Err(format!(
             "{expression:?} is not an SPDX expression: more after the end"
+        ));
+    }
+    if !eval.refused.is_empty() {
+        let names: Vec<String> = eval.refused.into_iter().collect();
+        return Err(format!(
+            "{expression:?} names {}: a LicenseRef-, DocumentRef-, AdditionRef- or deprecated \
+             SPDX id is refused, even as one choice",
+            names.join(", ")
         ));
     }
     if osi {
@@ -210,6 +244,108 @@ pub struct WasmCrate {
     pub source: Option<String>,
     /// Its repository, if it says.
     pub repository: Option<String>,
+    /// Its `Cargo.toml` where `cargo metadata` read it (`/cargo/…` for a fetched crate,
+    /// `/build/src/…` for one of the sources).
+    pub manifest_path: String,
+}
+
+/// The licence files of the crates, by `(name, version)`: `(file name, text)`.
+pub type LicenceTexts = BTreeMap<(String, String), Vec<(String, String)>>;
+
+/// The largest licence file read.
+const MAX_LICENCE_FILE: u64 = 1 << 20;
+
+/// Whether `name` is a licence file's: `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`,
+/// `UNLICENSE*`, in any case.
+pub fn is_licence_file(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    ["LICENSE", "LICENCE", "COPYING", "NOTICE", "UNLICENSE"]
+        .iter()
+        .any(|stem| upper.starts_with(stem))
+}
+
+/// The licence files directly in `dir`: regular files only (no link is followed), at most
+/// 1 MiB each, by name.
+///
+/// # Errors
+///
+/// The directory or a file cannot be read.
+pub fn licence_files(dir: &std::path::Path) -> anyhow::Result<Vec<(String, String)>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !entry.file_type()?.is_file() || !is_licence_file(&name) {
+            continue;
+        }
+        let bytes = oncl_pack::read_limited(&entry.path(), MAX_LICENCE_FILE)?;
+        files.push((name, String::from_utf8_lossy(&bytes).into_owned()));
+    }
+    files.sort();
+    Ok(files)
+}
+
+/// Check 20, the texts: every crate of the module ships a licence file (fail closed: no
+/// standard text stands in for a missing one).
+///
+/// # Errors
+///
+/// A line per crate without one.
+pub fn check_texts(crates: &[WasmCrate], texts: &LicenceTexts) -> Result<(), Vec<String>> {
+    let problems: Vec<String> = crates
+        .iter()
+        .filter(|c| {
+            texts
+                .get(&(c.name.clone(), c.version.clone()))
+                .is_none_or(Vec::is_empty)
+        })
+        .map(|c| {
+            format!(
+                "{} {} ships no licence file (LICENSE*, LICENCE*, COPYING*, NOTICE*): its text \
+                 cannot go into THIRD-PARTY.txt",
+                c.name, c.version
+            )
+        })
+        .collect();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems)
+    }
+}
+
+/// The licence files of a crate of the sources at `crate_dir` (under `src/`): those of the
+/// nearest directory from the crate up to `src/` that has any.
+pub fn tree_licence_files(
+    tree: &oncl_pack::source::Tree,
+    crate_dir: &str,
+) -> Vec<(String, String)> {
+    let mut dir = crate_dir.trim_matches('/').to_owned();
+    loop {
+        let prefix = if dir.is_empty() {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        let files: Vec<(String, String)> = tree
+            .files()
+            .filter_map(|(path, file)| {
+                let name = path.strip_prefix(&prefix)?;
+                (!name.contains('/') && is_licence_file(name)).then(|| {
+                    (
+                        name.to_owned(),
+                        String::from_utf8_lossy(&file.data).into_owned(),
+                    )
+                })
+            })
+            .collect();
+        if !files.is_empty() || dir.is_empty() {
+            return files;
+        }
+        dir = dir
+            .rsplit_once('/')
+            .map_or(String::new(), |(up, _)| up.to_owned());
+    }
 }
 
 /// The crates of the module of the crate at `manifest_path` (as `cargo metadata` was given
@@ -287,6 +423,9 @@ pub fn wasm_crates(metadata: &Value, manifest_path: &str) -> anyhow::Result<Vec<
             license: text(p, "license"),
             source: text(p, "source"),
             repository: text(p, "repository"),
+            manifest_path: text(p, "manifest_path")
+                .unwrap_or_default()
+                .replace('\\', "/"),
         })
         .collect();
     crates.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
@@ -318,13 +457,13 @@ pub fn check_crates(crates: &[WasmCrate]) -> Result<(), Vec<String>> {
     }
 }
 
-/// `THIRD-PARTY.txt` of a release: the crates of its module, their licences and sources.
-pub fn third_party(id: &str, version: &str, crates: &[WasmCrate]) -> String {
+/// `THIRD-PARTY.txt` of a release: the crates of its module, their licences and sources,
+/// then the full text of each crate's licence files.
+pub fn third_party(id: &str, version: &str, crates: &[WasmCrate], texts: &LicenceTexts) -> String {
     let mut text = format!(
         "The crates in the WebAssembly module of {id} {version}, as `cargo metadata` resolves\n\
-         them for wasm32-unknown-unknown from its source archive, with their SPDX licences.\n\
-         The licence texts are in the crates' own sources (the source archive and the crates\n\
-         its Cargo.lock names).\n\n"
+         them for wasm32-unknown-unknown from its source archive, with their SPDX licences,\n\
+         then the licence files each crate ships.\n\n"
     );
     for c in crates {
         let source = c.source.as_deref().unwrap_or("path, in the source archive");
@@ -340,6 +479,22 @@ pub fn third_party(id: &str, version: &str, crates: &[WasmCrate]) -> String {
                 .map(|r| format!(" | {r}"))
                 .unwrap_or_default()
         );
+    }
+    for c in crates {
+        for (file, body) in texts
+            .get(&(c.name.clone(), c.version.clone()))
+            .into_iter()
+            .flatten()
+        {
+            let _ = write!(
+                text,
+                "\n==== {} {} — {file} ====\n\n{}",
+                c.name,
+                c.version,
+                body.trim_end()
+            );
+            text.push('\n');
+        }
     }
     text
 }
@@ -358,12 +513,16 @@ mod tests {
             "(MIT OR Apache-2.0) AND Unicode-3.0",
             "Apache-2.0 WITH LLVM-exception",
             "GPL-2.0-or-later",
-            "MIT OR LicenseRef-Proprietary",
+            "MIT OR CC-BY-4.0",
         ] {
             check_osi(good, Reading::Strict).unwrap_or_else(|e| panic!("{good}: {e}"));
         }
         for (bad, why) in [
             ("LicenseRef-Proprietary", "LicenseRef-Proprietary"),
+            ("MIT OR LicenseRef-Proprietary", "even as one choice"),
+            ("MIT OR GPL-2.0", "GPL-2.0"),
+            ("GPL-2.0+", "deprecated"),
+            ("Apache-2.0 WITH Nokia-Qt-exception-1.1", "deprecated"),
             ("MIT AND BUSL-1.1", "BUSL-1.1"),
             ("CC-BY-4.0", "CC-BY-4.0"),
             ("MIT/Apache-2.0", "MIT/Apache-2.0"),
@@ -416,12 +575,46 @@ mod tests {
         let names: Vec<&str> = crates.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["plugin", "serde"]);
         check_crates(&crates).unwrap();
-        let text = third_party("kz.a.b", "1.0.0", &crates);
+        let mut texts = LicenceTexts::new();
+        texts.insert(
+            ("serde".into(), "1.0.0".into()),
+            vec![(
+                "LICENSE-MIT".into(),
+                "MIT License\n\nCopyright serde\n".into(),
+            )],
+        );
+        // A crate of the module without a licence file fails check 20: no stand-in text.
+        let err = check_texts(&crates, &texts).unwrap_err();
+        assert!(err.len() == 1 && err[0].contains("plugin 1.0.0"), "{err:?}");
+        texts.insert(
+            ("plugin".into(), "1.0.0".into()),
+            vec![("LICENSE".into(), "MIT License\n".into())],
+        );
+        check_texts(&crates, &texts).unwrap();
+        let text = third_party("kz.a.b", "1.0.0", &crates, &texts);
         assert!(
             text.contains("serde 1.0.0 | MIT OR Apache-2.0 | registry+"),
             "{text}"
         );
         assert!(text.contains("plugin 1.0.0 | MIT | path"), "{text}");
+        assert!(
+            text.contains(
+                "==== serde 1.0.0 — LICENSE-MIT ====\n\nMIT License\n\nCopyright serde\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn licence_files_are_the_regular_files_so_named() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("LICENSE-APACHE"), "Apache").unwrap();
+        std::fs::write(dir.path().join("copying.txt"), "GPL").unwrap();
+        std::fs::write(dir.path().join("README.md"), "no").unwrap();
+        std::fs::create_dir(dir.path().join("LICENSES")).unwrap();
+        let files = licence_files(dir.path()).unwrap();
+        let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["LICENSE-APACHE", "copying.txt"]);
     }
 
     #[test]

@@ -232,7 +232,7 @@ docker volume rm oncl-verify-cargo
 | Команда | Job | Проверки | Выход |
 |---|---|---|---|
 | `vendor check-pr --base <main> --head <голова PR> --author <логин> --out <каталог>` | `publisher-check` | 1–9, 11–18, 23, 24 (сначала 1 и 2; при их провале остальные `skip`); `--author` обязателен, архивы скачиваются всегда | JSON на stdout и `verdict.json`; архивы `<id>-<версия>.src.tar.gz` в `--out` |
-| `vendor provenance --base … --head … --archives <каталог> --out <файл>` | `provenance` | 25 | отчёт JSON по каждой новой цели с `vcs`: `confirmed`, `unverified`, `mismatch` |
+| `vendor provenance --base … --head … --archives <каталог> --network <сеть> [--builder sha256:…] --out <файл>` | `provenance` | 25 | отчёт JSON по каждой новой цели с `vcs`: `confirmed`, `unverified`, `mismatch` |
 | `vendor rebuild --archive <файл> --path <крейт> --builder sha256:… --out <каталог>` | `rebuild` (matrix) | 17 (по выводу `cargo metadata`), 19, 20 | `rebuild.json`; пакет и `THIRD-PARTY.txt` только если все три прошли |
 | `vendor verdict --base … --head … --author … --archives … --rebuilt … --provenance … --out <каталог>` | `verdict` | весь вердикт: заново 1–9, 11–18, 23, 24 (над переданными архивами), 17, 19, 20 из каждого `rebuild.json`, 21, 22, 25 | `verdict.json`, `<id>-<версия>/BUILDINFO.json` прошедших пакетов |
 | `vendor src-diff [--old <архив> --old-sha256 <hex>] --new <архив> --out <файл>` | `mirror` | — | `<id>-<версия>.src.diff` |
@@ -267,7 +267,7 @@ docker volume rm oncl-verify-cargo
 | 3 | версия файла — следующая после последней на `main`: начните черновик заново (`rm target/vendor/<имя>/role.json`) |
 | 4 | подпишите ключом из `publisher.toml`, порог — `cosign` |
 | 5 | подпишите заново со сроком от 14 до 180 дней |
-| 6 | запись не проходит правила каталога: модули, префикс, `capabilities`, `min_core` не ниже 0.1.3, не больше 8 новых пакетов |
+| 6 | запись не проходит правила каталога: модули, префикс, `capabilities`, `min_core` не ниже 0.1.3 (первая версия с каталогом издателей, Р39), не больше 8 новых пакетов |
 | 7 | модуль или бандл уже обслуживает порт владельца или другой издатель |
 | 8, 24 | выпущенную запись менять нельзя, кроме `rollout`, `name`, `revoked` и канала `beta` → `stable` |
 | 9 | подождите час после прошлого выпуска |
@@ -280,4 +280,35 @@ docker volume rm oncl-verify-cargo
 | 23 | `url` — адрес копии, который вычисляет `vendor add` |
 | 25 | ревизия `vcs` даёт другой архив; уберите `vcs` или укажите правильную ревизию |
 
-Список лицензий OSI — `xtask/assets/spdx/osi-licenses.txt` (SPDX 3.29.0, `isOsiApproved`, без устаревших идентификаторов); для зависимостей `/` читается как `OR`, как его когда-то понимал Cargo.
+### Лицензии
+
+Список лицензий OSI — `xtask/assets/spdx/osi-licenses.txt` (SPDX 3.29.0, `isOsiApproved`, без устаревших), рядом `exceptions.txt` (исключения `WITH`) и `deprecated.txt` (устаревшие идентификаторы лицензий и исключений). Выражение с устаревшим идентификатором или с `LicenseRef-`, `DocumentRef-`, `AdditionRef-` отвергается целиком, даже как один из вариантов `OR`, и в `source.license`, и у зависимостей (Р40). Для зависимостей `/` читается как `OR`, как его когда-то понимал Cargo.
+
+Список обновляет ручной PR владельца, когда это нужно (новая версия SPDX, просьба издателя). Новые правила действуют только на новые выпуски; принятые остаются, а `tuf check` предупреждает о них (`publisher-rules`, Р42). Как обновить:
+
+1. Скачайте `json/licenses.json` и `json/exceptions.json` выпуска `vX.Y.Z` из <https://github.com/spdx/license-list-data> и запишите их sha256.
+2. `osi-licenses.txt`: `licenseId` всех лицензий с `isOsiApproved: true` и без `isDeprecatedLicenseId`, по одному в строке, по возрастанию.
+3. `exceptions.txt`: `licenseExceptionId` всех исключений без `isDeprecatedLicenseId`.
+4. `deprecated.txt`: идентификаторы лицензий и исключений с `isDeprecatedLicenseId: true`.
+5. В шапке каждого файла укажите версию списка и sha256 исходного JSON; в PR — что добавилось и что ушло. `cargo nextest run -p xtask -E 'test(/licenses/)'`.
+
+`THIRD-PARTY.txt` пересборки — список крейтов модуля с лицензиями и источниками, затем полный текст каждого файла `LICENSE*`, `LICENCE*`, `COPYING*`, `NOTICE*`, `UNLICENSE*` каждого крейта (Р41). Файлы скачанных крейтов копируются `docker cp` из тома Cargo через контейнер, который не запускается; у крейтов из архива — из архива (каталог крейта или ближайший выше, где они есть). Крейт без файла лицензии — провал проверки 20: стандартный текст SPDX его не заменяет, издатель выбирает версию с файлом или просит автора крейта добавить его.
+
+### Сеть проверки 25
+
+`vendor provenance` запускает git только в контейнере образа сборщика: пользователь 10001, корень только для чтения, без capabilities, `https` только, без перенаправлений (`http.followRedirects=false`), без учётных данных; голый репозиторий забирается `docker cp` и читается как данные. Политика адресов проверяется до запуска, но git разрешает имя сам, поэтому сеть контейнера (`--network`) должна сама не пускать никуда, кроме интернета (Р43). Workflow `publisher-pr.yml` (H) готовит её до job и удаляет после:
+
+```sh
+docker network create --driver bridge --opt com.docker.network.bridge.name=oncl-vcs \
+  --subnet 172.31.250.0/24 oncl-vcs
+# Только новые исходящие соединения в публичный интернет; ничего к раннеру и его сетям.
+for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 \
+           127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4; do
+  sudo iptables -I DOCKER-USER -i oncl-vcs -d "$net" -j DROP
+done
+sudo iptables -I INPUT -i oncl-vcs -j DROP          # и к самому раннеру
+sudo ip6tables -I DOCKER-USER -i oncl-vcs -j DROP   # без IPv6
+cargo xtask vendor provenance … --network oncl-vcs
+```
+
+Правило `DROP` для `172.16.0.0/12` закрывает и сети Docker самого раннера. DNS контейнер получает от встроенного резолвера Docker (через раннер), это единственный путь к нему. Без такой сети `--network bridge` даёт контейнеру доступ к сетям раннера: так запускать нельзя.

@@ -290,7 +290,8 @@ pub enum VendorCommand {
         #[arg(long)]
         jobs: Option<u32>,
     },
-    /// CI: check 25 for every new target naming a git revision; writes the report.
+    /// CI: check 25 for every new target naming a git revision, git in a container of the
+    /// builder image on --network; writes the report.
     Provenance {
         /// The base revision.
         #[arg(long)]
@@ -301,6 +302,12 @@ pub enum VendorCommand {
         /// The archives of `check-pr --out`.
         #[arg(long)]
         archives: PathBuf,
+        /// The container network git runs on: outbound internet only, nothing of the runner.
+        #[arg(long)]
+        network: String,
+        /// The builder's digest (sha256:…); the newest of publishers/builders.toml by default.
+        #[arg(long)]
+        builder: Option<String>,
         /// The report to write (JSON).
         #[arg(long)]
         out: PathBuf,
@@ -464,7 +471,7 @@ fn build_into(
     fs::write(out.join(&name), package)?;
     fs::write(
         out.join("THIRD-PARTY.txt"),
-        licenses::third_party(id, &version, &rebuilt.crates),
+        licenses::third_party(id, &version, &rebuilt.crates, &rebuilt.licences),
     )?;
     let info = BuildInfo {
         schema: mirror::SCHEMA,
@@ -862,11 +869,27 @@ pub fn run(command: VendorCommand) -> anyhow::Result<()> {
             base,
             head,
             archives,
+            network,
+            builder,
             out,
         } => {
+            if matches!(network.as_str(), "host" | "bridge" | "default") {
+                bail!(
+                    "--network {network} reaches the runner: make the egress-only network of \
+                     docs/dev/publishers.md («Сеть проверки 25»)"
+                );
+            }
             let loaded = pr::load_pr(&root, &base, &head, &layout, OffsetDateTime::now_utc())?;
             let work = tempfile::tempdir()?;
-            let report = pr::provenance_job(&loaded, &archives, work.path())?;
+            let listed = listed_builder(&root, builder.as_deref())?;
+            let image = listed.image();
+            let engine = Engine::from_env();
+            let sandbox = super::provenance::Sandbox {
+                engine: &engine,
+                image: &image,
+                network: &network,
+            };
+            let report = pr::provenance_job(&loaded, &sandbox, &archives, work.path())?;
             fs::write(&out, serde_json::to_string_pretty(&report)?)?;
             print_json(&report)
         }

@@ -1212,3 +1212,51 @@ pub fn binaries(tree: &Tree, binary_files: &[String], path: &TargetPath) -> Vec<
 
 #[cfg(test)]
 mod tests;
+
+/// What `tuf check` warns of (never an error: a rule change applies to new versions only):
+/// the checks 6, 12 and 23 that the newest role file of each active publisher in `roles`
+/// breaks under the rules of today, with `publishers` the registry directory.
+pub fn role_rule_warnings(
+    publishers: &std::path::Path,
+    roles: &BTreeMap<RoleName, crate::tuf::check::RoleFile>,
+) -> Vec<String> {
+    let Ok(registry) = Registry::read(publishers) else {
+        return Vec::new();
+    };
+    let builders = Builders::read(&publishers.join(crate::publishers::builders::FILE_NAME))
+        .unwrap_or_default();
+    let builtin = crate::index::builtin_modules().unwrap_or_default();
+    let mut warnings = Vec::new();
+    for publisher in registry.active() {
+        let Some(role) = roles.get(&publisher.role()) else {
+            continue;
+        };
+        let targets = Envelope::parse(&role.file, MAX_ROLE_FILE, "role")
+            .ok()
+            .and_then(|e| Targets::from_signed(&e.signed, Profile::Legacy).ok());
+        let Some(targets) = targets else {
+            warnings.push(format!(
+                "{} {}: the role does not read as a publisher's",
+                publisher.role(),
+                role.version
+            ));
+            continue;
+        };
+        let mut findings =
+            entries(publisher, &targets, &BTreeSet::new(), &builders, &builtin).findings;
+        for (path, target) in &targets.targets {
+            let source = oncl(target).and_then(|o| o.get("source"));
+            findings.extend(source_rules(source, &builders, path));
+        }
+        for f in findings {
+            warnings.push(format!(
+                "{} {}: check {}: {} (today's rules; the release stands)",
+                publisher.role(),
+                role.version,
+                f.check,
+                f.message
+            ));
+        }
+    }
+    warnings
+}

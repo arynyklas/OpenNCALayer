@@ -621,6 +621,7 @@ pub struct ProvenanceReport {
 /// An archive is missing or is not the signed one.
 pub fn provenance_job(
     pr: &PrRole,
+    sandbox: &super::provenance::Sandbox,
     archives: &Path,
     work: &Path,
 ) -> anyhow::Result<ProvenanceReport> {
@@ -651,7 +652,15 @@ pub fn provenance_job(
             bail!("{}", f.message);
         }
         let dir = work.join(format!("{}-{}", place.id, place.version));
-        let found = super::provenance::check(&vcs.url, &vcs.rev, &bytes, &dir, super::VCS_TIMEOUT);
+        std::fs::create_dir_all(&dir)?;
+        let found = super::provenance::check(
+            sandbox,
+            &vcs.url,
+            &vcs.rev,
+            &bytes,
+            &dir,
+            super::VCS_TIMEOUT,
+        );
         report.targets.insert(path.as_str().to_owned(), found);
     }
     Ok(report)

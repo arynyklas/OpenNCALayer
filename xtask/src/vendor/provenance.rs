@@ -1,18 +1,23 @@
 //! Check 25 (`docs/design/publishers.md`, «Проверки PR издателя»): the git revision a
-//! publisher names in `source.vcs`, fetched alone into a bare repository (no work tree is
-//! checked out, nothing of it runs) and made into the canonical archive by the same code as
-//! `oncl-pack source`. The same bytes as the signed archive: confirmed; the host or the
-//! revision unreachable: unverified, which does not stop the pull request; other bytes: the
-//! pull request is refused.
+//! publisher names in `source.vcs`, fetched alone into a bare repository and made into the
+//! canonical archive by the same code as `oncl-pack source`. The same bytes as the signed
+//! archive: confirmed; the host or the revision unreachable: unverified, which does not stop
+//! the pull request; other bytes: the pull request is refused.
+//!
+//! git runs only inside a container of the builder image ([`Sandbox`],
+//! [`super::docker::git_fetch`]): unprivileged, read-only, redirects off, `https` only, on a
+//! container network that reaches the internet and nothing of the runner (its addresses,
+//! private ranges, link-local metadata endpoints). Making that network is the workflow's
+//! (`docs/dev/publishers.md`, «Проверки CI»); the host policy ([`host_policy`]) is checked
+//! first, here. The bare repository is copied out with `docker cp` and read as data.
 
 use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, bail};
 use oncl_pack::source::Tree;
 use serde::{Deserialize, Serialize};
 
+use super::docker::{self, Engine};
 use super::fetch::host_policy;
 
 /// What check 25 found.
@@ -47,85 +52,40 @@ pub fn compare(tree: &Tree, archive: &[u8]) -> Provenance {
     }
 }
 
-fn git(dir: &Path) -> Command {
-    let mut command = Command::new("git");
-    command
-        .arg("-C")
-        .arg(dir)
-        .args([
-            "-c",
-            "protocol.allow=never",
-            "-c",
-            "protocol.https.allow=always",
-            "-c",
-            "http.followRedirects=false",
-            "-c",
-            "credential.helper=",
-            "-c",
-            "core.askPass=",
-        ])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env(
-            "GIT_CONFIG_GLOBAL",
-            if cfg!(windows) { "NUL" } else { "/dev/null" },
-        )
-        .stdin(Stdio::null());
-    command
+/// Where git runs for check 25.
+#[derive(Clone, Debug)]
+pub struct Sandbox<'a> {
+    /// Docker or Podman.
+    pub engine: &'a Engine,
+    /// The builder image, by digest (it has git).
+    pub image: &'a str,
+    /// The container network: outbound internet only, nothing of the runner.
+    pub network: &'a str,
 }
 
-/// Fetches `rev` of `url` into the new bare repository `dir` within `timeout`.
-///
-/// # Errors
-///
-/// The policy refuses `url`, or git fails or runs out of time.
-pub fn fetch(url: &str, rev: &str, dir: &Path, timeout: Duration) -> anyhow::Result<()> {
-    host_policy(url).map_err(|e| anyhow::anyhow!(e))?;
-    let format = if rev.len() == 64 { "sha256" } else { "sha1" };
-    std::fs::create_dir_all(dir)?;
-    let init = git(dir)
-        .args(["init", "-q", "--bare", &format!("--object-format={format}")])
-        .output()
-        .context("running git init")?;
-    if !init.status.success() {
-        bail!("git init: {}", String::from_utf8_lossy(&init.stderr).trim());
+/// Check 25: `rev` of `url` against the signed `archive`, fetched in `sandbox`, the bare
+/// repository copied into a new directory under `work`.
+pub fn check(
+    sandbox: &Sandbox,
+    url: &str,
+    rev: &str,
+    archive: &[u8],
+    work: &Path,
+    timeout: Duration,
+) -> Provenance {
+    if let Err(e) = host_policy(url) {
+        return Provenance::Unverified(e);
     }
-    let mut child = git(dir)
-        .args(["fetch", "-q", "--no-tags", "--depth=1", url, rev])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("running git fetch")?;
-    let start = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if status.success() {
-                return Ok(());
-            }
-            let mut err = String::new();
-            if let Some(mut stderr) = child.stderr.take() {
-                use std::io::Read as _;
-                let _ = stderr.read_to_string(&mut err);
-            }
-            bail!("git fetch {url} {rev}: {}", err.trim());
-        }
-        if start.elapsed() > timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "git fetch {url} {rev} took more than {} s",
-                timeout.as_secs()
-            );
-        }
-        std::thread::sleep(Duration::from_millis(200));
-    }
-}
-
-/// Check 25: `rev` of `url` against the signed `archive`, the repository fetched into a new
-/// directory under `work`.
-pub fn check(url: &str, rev: &str, archive: &[u8], work: &Path, timeout: Duration) -> Provenance {
     let dir = work.join("vcs.git");
-    if let Err(e) = fetch(url, rev, &dir, timeout) {
+    if let Err(e) = docker::git_fetch(
+        sandbox.engine,
+        sandbox.image,
+        sandbox.network,
+        url,
+        rev,
+        &dir,
+        timeout,
+    ) {
         return Provenance::Unverified(format!("{e:#}"));
     }
     match Tree::from_git(&dir, rev) {
@@ -167,9 +127,16 @@ mod tests {
     }
 
     #[test]
-    fn a_host_the_policy_refuses_is_unverified_without_a_connection() {
+    fn a_host_the_policy_refuses_is_unverified_without_a_container() {
         let dir = tempfile::tempdir().unwrap();
+        let engine = Engine("no-such-engine".to_owned());
+        let sandbox = Sandbox {
+            engine: &engine,
+            image: "img",
+            network: "net",
+        };
         let found = check(
+            &sandbox,
             "https://127.0.0.1/repo.git",
             &"a".repeat(40),
             b"",

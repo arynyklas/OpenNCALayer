@@ -24,6 +24,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
+use oncl_pack::source::Tree;
 use serde_json::Value;
 
 use super::licenses::{self, WasmCrate};
@@ -383,6 +384,8 @@ pub struct Rebuilt {
     pub package: Option<(String, Vec<u8>)>,
     /// The crates of the module, if `cargo metadata` read them.
     pub crates: Vec<WasmCrate>,
+    /// Their licence files.
+    pub licences: licenses::LicenceTexts,
 }
 
 /// The tail of a container's standard error, for a message.
@@ -390,6 +393,215 @@ fn tail(stderr: &[u8]) -> String {
     let text = String::from_utf8_lossy(stderr);
     let lines: Vec<&str> = text.lines().rev().take(12).collect();
     lines.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
+/// `docker create` of a container over the Cargo volume, never started: its files are copied
+/// out with `docker cp`, nothing of the sources runs.
+pub fn holder_args(image: &str, cargo: &str, name: &str) -> Vec<String> {
+    let mut args = vec![
+        "create".to_owned(),
+        "--name".to_owned(),
+        name.to_owned(),
+        "--network=none".to_owned(),
+    ];
+    args.extend(hardening());
+    args.extend([
+        "--mount".to_owned(),
+        volume(cargo, "/cargo", true),
+        image.to_owned(),
+    ]);
+    args
+}
+
+/// The licence files of each crate of the module: a crate of the sources from the archive
+/// `tree`, a fetched one from its directory in the Cargo volume, copied out of a container
+/// that never starts. A crate anywhere else gets none (and fails check 20).
+fn collect_texts(
+    engine: &Engine,
+    image: &str,
+    cargo: &str,
+    crates: &[WasmCrate],
+    tree: &Tree,
+    work: &Path,
+) -> anyhow::Result<licenses::LicenceTexts> {
+    let mut texts = licenses::LicenceTexts::new();
+    let holder = Container {
+        engine,
+        name: unique("licences"),
+    };
+    let created = engine
+        .command()
+        .args(holder_args(image, cargo, &holder.name))
+        .output()
+        .with_context(|| format!("starting {}", engine.0))?;
+    if !created.status.success() {
+        bail!(
+            "{} create failed: {}",
+            engine.0,
+            String::from_utf8_lossy(&created.stderr).trim()
+        );
+    }
+    for (n, c) in crates.iter().enumerate() {
+        let dir = c.manifest_path.rsplit_once('/').map_or("", |(d, _)| d);
+        let plain = !dir.split('/').any(|s| s == ".." || s == ".");
+        let files = if let Some(rel) = dir.strip_prefix("/build/src").filter(|_| plain) {
+            licenses::tree_licence_files(tree, rel)
+        } else if dir.starts_with("/cargo/") && plain {
+            let host = work.join("licences").join(n.to_string());
+            fs::create_dir_all(host.parent().unwrap_or(work))?;
+            let cp = engine
+                .command()
+                .args(["cp", &format!("{}:{dir}", holder.name)])
+                .arg(&host)
+                .output()
+                .with_context(|| format!("starting {}", engine.0))?;
+            if cp.status.success() && fs::symlink_metadata(&host)?.is_dir() {
+                licenses::licence_files(&host)?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+        texts.insert((c.name.clone(), c.version.clone()), files);
+    }
+    Ok(texts)
+}
+
+/// The git configuration of check 25's fetch: `https` only, no redirect, no credential.
+const GIT_SANDBOX: [&str; 10] = [
+    "-c",
+    "protocol.allow=never",
+    "-c",
+    "protocol.https.allow=always",
+    "-c",
+    "http.followRedirects=false",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "core.askPass=",
+];
+
+/// `run` of `git` in `image` on `network` (check 25): unprivileged, read-only, its only
+/// writable place the volume `work` at `/build`, `git_args` after the sandbox
+/// configuration.
+pub fn git_args(
+    image: &str,
+    network: &str,
+    work: &str,
+    name: &str,
+    git_args: &[&str],
+) -> Vec<String> {
+    let mut args = vec![
+        "run".to_owned(),
+        "--name".to_owned(),
+        name.to_owned(),
+        format!("--network={network}"),
+    ];
+    args.extend(hardening());
+    args.extend(
+        [
+            "--mount",
+            &volume(work, "/build", false),
+            "--env",
+            "GIT_TERMINAL_PROMPT=0",
+            "--env",
+            "GIT_CONFIG_NOSYSTEM=1",
+            "--env",
+            "GIT_CONFIG_GLOBAL=/dev/null",
+            "--entrypoint",
+            "git",
+            image,
+        ]
+        .map(str::to_owned),
+    );
+    args.extend(GIT_SANDBOX.map(str::to_owned));
+    args.extend(git_args.iter().map(|a| (*a).to_owned()));
+    args
+}
+
+/// Fetches `rev` of `url` in a container of `image` on `network` into a new bare repository,
+/// copied out to `dest` once the container ended (check 25).
+///
+/// # Errors
+///
+/// The engine fails, git fails or runs out of `timeout`.
+pub fn git_fetch(
+    engine: &Engine,
+    image: &str,
+    network: &str,
+    url: &str,
+    rev: &str,
+    dest: &Path,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    let format = if rev.len() == 64 {
+        "--object-format=sha256"
+    } else {
+        "--object-format=sha1"
+    };
+    let work = Volume::new(engine, unique("vcs"))?;
+    let init = Container {
+        engine,
+        name: unique("vcs-init"),
+    };
+    let ran = run(
+        engine,
+        &git_args(
+            image,
+            "none",
+            &work.name,
+            &init.name,
+            &["init", "-q", "--bare", format, "/build/vcs.git"],
+        ),
+        &init.name,
+        timeout,
+    )?;
+    if !ran.success {
+        bail!("git init: {}", tail(&ran.stderr));
+    }
+    let fetch = Container {
+        engine,
+        name: unique("vcs-fetch"),
+    };
+    let ran = run(
+        engine,
+        &git_args(
+            image,
+            network,
+            &work.name,
+            &fetch.name,
+            &[
+                "-C",
+                "/build/vcs.git",
+                "fetch",
+                "-q",
+                "--no-tags",
+                "--depth=1",
+                url,
+                rev,
+            ],
+        ),
+        &fetch.name,
+        timeout,
+    )?;
+    if !ran.success {
+        bail!("git fetch {url} {rev}: {}", tail(&ran.stderr));
+    }
+    let cp = engine
+        .command()
+        .args(["cp", &format!("{}:/build/vcs.git", fetch.name)])
+        .arg(dest)
+        .output()
+        .with_context(|| format!("starting {}", engine.0))?;
+    if !cp.status.success() {
+        bail!(
+            "{} cp of the repository failed: {}",
+            engine.0,
+            String::from_utf8_lossy(&cp.stderr).trim()
+        );
+    }
+    Ok(())
 }
 
 /// Puts `archive` alone into a fresh directory under `work`, as the containers' input.
@@ -508,6 +720,19 @@ pub fn rebuild(
         &mut out.checks,
     )?;
     out.crates = crates.unwrap_or_default();
+    if !out.crates.is_empty() {
+        let tree = Tree::from_archive(&oncl_pack::read_limited(
+            archive,
+            oncl_pack::source::MAX_ARCHIVE,
+        )?)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", archive.display()))?;
+        out.licences = collect_texts(engine, image, &cargo.name, &out.crates, &tree, work)?;
+        if let Err(problems) = licenses::check_texts(&out.crates, &out.licences) {
+            for p in problems {
+                out.checks.fail(20, p);
+            }
+        }
+    }
     if !out.checks.failures().is_empty() {
         out.checks
             .skip(19, "the sources or their licences failed a check");
@@ -674,6 +899,42 @@ mod tests {
             !fetch.contains("--network=none") && fetch.contains(" fetch --source"),
             "{fetch}"
         );
+    }
+
+    #[test]
+    fn licence_copies_and_the_git_sandbox_run_nothing_of_the_sources() {
+        let holder = holder_args("img@sha256:abc", "cargo-v", "h").join(" ");
+        assert!(
+            holder.starts_with("create --name h --network=none"),
+            "{holder}"
+        );
+        assert!(
+            holder.contains("type=volume,src=cargo-v,dst=/cargo,readonly"),
+            "{holder}"
+        );
+        let git = git_args(
+            "img@sha256:abc",
+            "oncl-vcs",
+            "work-v",
+            "g",
+            &["fetch", "https://example.com/r.git", "abc"],
+        )
+        .join(" ");
+        for wanted in [
+            "--network=oncl-vcs",
+            "--read-only",
+            "--cap-drop=ALL",
+            "--user 10001:10001",
+            "--entrypoint git img@sha256:abc",
+            "protocol.allow=never",
+            "protocol.https.allow=always",
+            "http.followRedirects=false",
+            "credential.helper=",
+            "GIT_TERMINAL_PROMPT=0",
+        ] {
+            assert!(git.contains(wanted), "{wanted}: {git}");
+        }
+        assert!(!git.contains("type=bind"), "{git}");
     }
 
     #[test]
