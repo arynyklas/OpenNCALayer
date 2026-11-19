@@ -677,9 +677,7 @@ impl PluginService {
                     pending_update: pending.get(id).cloned(),
                     replacement: replacements
                         .get(id)
-                        .filter(|q| {
-                            updates && state.declined_replacements.get(id) == Some(&q.id)
-                        })
+                        .filter(|q| updates && state.declined_replacements.get(id) == Some(&q.id))
                         .zip(index.as_deref())
                         .and_then(|(q, index)| {
                             q.publisher.as_ref().map(|p| publisher_display(index, p))
@@ -1350,19 +1348,25 @@ impl PluginService {
 
     /// The publishers' plugins `catalog` has to replace the ports `state` has installed from
     /// the catalog (Р11: [`oncl_update::Catalog::replacement`], an active publisher's
-    /// `supersedes`), by port. A port whose replacement is installed already has none.
+    /// `supersedes`), by port: never a version bad here or kept out by a module another
+    /// plugin serves. A port whose replacement is installed already has none.
     fn replacements<'c>(
         &self,
         catalog: &'c oncl_update::Catalog,
         state: &StoreState,
     ) -> BTreeMap<String, &'c PluginRelease> {
+        let mut bad = state.bad.clone();
+        for (id, versions) in lock(&self.conflicts).iter() {
+            bad.entry(id.clone())
+                .or_default()
+                .extend(versions.iter().cloned());
+        }
         state
             .plugins
             .iter()
             .filter(|(_, installed)| installed.source == Source::Catalog)
             .filter_map(|(port, _)| {
-                let release =
-                    catalog.replacement(port, &self.cfg.core, &state.install_id, &state.bad)?;
+                let release = catalog.replacement(port, &self.cfg.core, &state.install_id, &bad)?;
                 (!state.plugins.contains_key(&release.id)).then(|| (port.clone(), release))
             })
             .collect()
@@ -1515,9 +1519,9 @@ impl PluginService {
             self.refused(&release.id, &release.version, &e);
             return self.failed(name, e.to_string());
         }
-        if let Err(e) =
-            self.store
-                .replace(port, &package, bytes, release.publisher.as_ref())
+        if let Err(e) = self
+            .store
+            .replace(port, &package, bytes, release.publisher.as_ref())
         {
             warn!(port, plugin = %release.id, error = %e, "cannot record the port's replacement; the port stays");
             self.cfg.modules.unload(&release.id);
@@ -1544,7 +1548,10 @@ impl PluginService {
         if !self.store.state().plugins.contains_key(port) {
             return;
         }
-        info!(port, plugin, "the user declined the port's replacement; it is not offered again");
+        info!(
+            port,
+            plugin, "the user declined the port's replacement; it is not offered again"
+        );
         if let Err(e) = self.store.set_declined_replacement(port, Some(plugin)) {
             warn!(port, plugin, error = %e, "cannot record the declined replacement");
         }

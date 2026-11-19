@@ -91,7 +91,10 @@ pub enum RequestKind {
     Update,
     /// A publisher's plugin replacing the installed port `port` at `version` (Р11):
     /// «Заменить» removes the port and its settings, «Не сейчас» keeps it.
-    ReplacePort { port: LocalizedText, version: String },
+    ReplacePort {
+        port: LocalizedText,
+        version: String,
+    },
 }
 
 /// An installed plugin a new one replaces: its version and where it came from.
@@ -396,7 +399,7 @@ fn block(operation: &OperationConsent, l: Locale) -> BlockTexts {
 
 fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
     let t = Texts::of(l);
-    let (title, confirm, cancel, plugin, may) = match &request.kind {
+    let (title, confirm_text, cancel, plugin, may) = match &request.kind {
         RequestKind::Install => (t.title_install, t.confirm_install, "", t.plugin, t.may),
         RequestKind::Update => (
             t.title_update,
@@ -415,7 +418,7 @@ fn texts(request: &InstallPluginRequest, l: Locale) -> WindowTexts {
     };
     WindowTexts {
         title: title.to_owned(),
-        confirm: confirm.to_owned(),
+        confirm: confirm_text.to_owned(),
         cancel: cancel.to_owned(),
         operations_heading: if request.operations.is_empty() {
             String::new()
@@ -1550,7 +1553,11 @@ mod tests {
             "\"Пример плагина\" (название от самого плагина), версия 0.1.0"
         );
         assert_eq!(ru.origin.publisher, "Издатель: ТОО «Акме»");
-        assert!(ru.origin.note.ends_with("Сам код OpenNCALayer не проверял."));
+        assert!(
+            ru.origin
+                .note
+                .ends_with("Сам код OpenNCALayer не проверял.")
+        );
         assert_eq!(
             ru.origin.source,
             "Исходный код: kz.acme.market-1.2.0.src.tar.gz · Apache-2.0"

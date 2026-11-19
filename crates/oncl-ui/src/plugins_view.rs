@@ -932,10 +932,7 @@ fn installed_row(plugin: &InstalledPlugin, l: Locale) -> InstalledRow {
     let replacement = plugin
         .replacement
         .as_ref()
-        .map(|publisher| {
-            t.replacement
-                .replace("{0}", &publisher_name(publisher, l))
-        })
+        .map(|publisher| t.replacement.replace("{0}", &publisher_name(publisher, l)))
         .unwrap_or_default();
     InstalledRow {
         title: title(&plugin.name, &plugin.version, l).into(),
@@ -1615,7 +1612,10 @@ mod tests {
         let o = opened_with(Locale::Ru, shown.clone());
         let ui = &o.open.ui;
         let rows: Vec<InstalledRow> = ui.get_installed().iter().collect();
-        assert_eq!(rows[0].replacement, "Доступна замена от издателя ТОО «Акме»");
+        assert_eq!(
+            rows[0].replacement,
+            "Доступна замена от издателя ТОО «Акме»"
+        );
         assert_eq!(
             (rows[1].replacement.as_str(), rows[2].replacement.as_str()),
             ("", "")
@@ -1642,8 +1642,14 @@ mod tests {
         );
         assert!(ui.get_message_is_error());
         for (l, line) in [
-            (Locale::En, "A replacement from the publisher Acme LLP is available"),
-            (Locale::Kk, "«Акме» ЖШС жариялаушысынан алмастыру қолжетімді"),
+            (
+                Locale::En,
+                "A replacement from the publisher Acme LLP is available",
+            ),
+            (
+                Locale::Kk,
+                "«Акме» ЖШС жариялаушысынан алмастыру қолжетімді",
+            ),
         ] {
             assert_eq!(installed_row(&shown.installed[0], l).replacement, line);
         }
