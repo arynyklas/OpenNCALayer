@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::index::{check_asset_urls, index_path};
-use crate::plugin::read_limited;
+use oncl_pack::read_limited;
 
 /// The largest channel index, release list or upstream history index read.
 pub const MAX_INPUT: u64 = 8 * 1024 * 1024;

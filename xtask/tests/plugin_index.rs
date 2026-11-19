@@ -1,4 +1,5 @@
-//! `cargo xtask plugin pack`, `cargo xtask plugin pending` and `cargo xtask index add-plugin`.
+//! `cargo xtask plugin pack`, `cargo xtask plugin pending` and `cargo xtask index add-plugin`
+//! (the checks `pack` shares with the builder image are tested in `oncl-pack`).
 
 use std::fs;
 use std::io::{Cursor, Write};
@@ -115,34 +116,6 @@ fn pack_refuses_a_manifest_version_other_than_the_crates() {
         0,
         "nothing written"
     );
-}
-
-#[test]
-fn pack_rejects_min_core_below_imports() {
-    let manifest = |min_core: &str| {
-        oncl_plugin::Manifest::from_toml(&oncl_testkit::plugin::example_manifest().replace(
-            "min_core = \"0.1.0-alpha.3\"",
-            &format!("min_core = \"{min_core}\""),
-        ))
-        .unwrap()
-    };
-    let wasm = fs::read(oncl_testkit::plugin::example_wasm()).unwrap();
-    let compiled = oncl_plugin::Engine::new()
-        .compile(&manifest("0.1.0-alpha.3"), &wasm)
-        .unwrap();
-    assert!(!compiled.imports().is_empty());
-    xtask::plugin::check_min_core(&manifest("0.1.0-alpha.3"), compiled.imports()).unwrap();
-    xtask::plugin::check_min_core(&manifest("1.0.0"), compiled.imports()).unwrap();
-    let error = error_text(xtask::plugin::check_min_core(
-        &manifest("0.1.0-alpha.2"),
-        compiled.imports(),
-    ));
-    assert!(
-        error.contains("min_core 0.1.0-alpha.2 is below 0.1.0-alpha.3"),
-        "{error}"
-    );
-    // A module importing nothing needs no particular core.
-    xtask::plugin::check_min_core(&manifest("0.0.1"), &[]).unwrap();
 }
 
 #[test]

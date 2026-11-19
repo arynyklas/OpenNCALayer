@@ -4333,6 +4333,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "oncl-pack"
+version = "0.1.2-beta.1"
+dependencies = [
+ "anyhow",
+ "clap",
+ "flate2",
+ "oncl-pdk",
+ "oncl-pki",
+ "oncl-plugin",
+ "oncl-testkit",
+ "semver",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "oncl-pdf"
 version = "0.1.2-beta.1"
 dependencies = [
@@ -8411,6 +8429,7 @@ dependencies = [
  "oncl-flows",
  "oncl-gost",
  "oncl-ipc",
+ "oncl-pack",
  "oncl-pdk",
  "oncl-pki",
  "oncl-plugin",
