@@ -271,6 +271,13 @@ enum RegistryCommand {
         /// A copy of the `upstream` branch's `index.json` and `latest/facts.json`.
         #[arg(long)]
         upstream: Option<PathBuf>,
+        /// The publishers' registry [default: `publishers/` of the workspace, if there].
+        #[arg(long)]
+        publishers: Option<PathBuf>,
+        /// The TUF repository with the publishers' roles [default: `tuf/v1/` of the
+        /// workspace, if there].
+        #[arg(long)]
+        tuf: Option<PathBuf>,
         /// Output directory [default: target/site].
         #[arg(long)]
         out: Option<PathBuf>,
@@ -776,18 +783,24 @@ fn registry(command: RegistryCommand) -> anyhow::Result<()> {
             updates,
             releases,
             upstream,
+            publishers,
+            tuf,
             out,
             zola,
         } => {
-            let updates = updates.or_else(|| {
-                let dir = root.join(xtask::index::INDEX_DIR);
-                dir.is_dir().then_some(dir)
-            });
+            let existing = |path: Option<PathBuf>, default: &str| {
+                path.or_else(|| {
+                    let dir = root.join(default);
+                    dir.is_dir().then_some(dir)
+                })
+            };
             let inputs = xtask::registry::Inputs {
                 plugins: plugins.unwrap_or_else(|| root.join("plugins")),
-                updates,
+                updates: existing(updates, xtask::index::INDEX_DIR),
                 releases,
                 upstream,
+                publishers: existing(publishers, xtask::publishers::PUBLISHERS_DIR),
+                tuf: existing(tuf, xtask::tuf::REPO_DIR),
             };
             let out = out.unwrap_or_else(|| root.join("target/site"));
             xtask::registry::build(&root, &inputs, &out, zola.as_deref())?;
