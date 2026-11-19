@@ -1,10 +1,11 @@
 // «Установка плагина»: who asks, the plugin, the installed version it replaces, what it
 // replaces of the original, what it may do and, for a file the user chose, a warning;
-// «Установить» (enabled a moment after the window appears) or «Отмена». The texts are composed
-// in Rust.
+// «Установить» (enabled a moment after the window appears) or «Отмена». The same window
+// asks for an update («Обновить») and for a publisher's plugin replacing a port («Заменить»
+// or «Не сейчас», the port named above everything). The texts are composed in Rust.
 
 import { Button, Palette } from "std-widgets.slint";
-import { ActionBar, DialogScroll, EscapeScope, Metrics, NameText, PluginFrame, Subheading, Tone } from "common.slint";
+import { ActionBar, DialogScroll, EscapeScope, LinkButton, Metrics, NameText, PluginFrame, Subheading, Tone } from "common.slint";
 
 // One operation of the plugin for the manual-tools window. `heading` and `lines` are the
 // host's own words, built from checked fields only (an identifier, the kinds of key use and
@@ -21,7 +22,8 @@ export struct OperationBlock {
 
 export component InstallPluginWindow inherits Window {
     title: root.window-title;
-    always-on-top: true;
+    // On top, until the user opens the source link: the browser must come up in front.
+    always-on-top: root.on-top;
     min-width: Metrics.dialog-min-width;
     min-height: Metrics.min-height;
     max-width: 640px;
@@ -31,8 +33,12 @@ export component InstallPluginWindow inherits Window {
     in property <string> window-title: @tr("Plugin installation");
     // The confirming button names its action: «Установить» or «Обновить», never a plain OK.
     in property <string> confirm-text: @tr("Install");
+    // The declining button's text; empty: «Отмена».
+    in property <string> cancel-text;
     // «Сайт … просит установить плагин», or empty.
     in property <string> asker;
+    // A publisher's plugin replacing a port: what goes, above everything; or empty.
+    in property <string> intro;
     // The plugin's name and version.
     in property <string> plugin;
     // The installed version of the same plugin it replaces, or empty.
@@ -47,6 +53,14 @@ export component InstallPluginWindow inherits Window {
     in property <[OperationBlock]> operations;
     // Not from the catalog: the warning, or empty.
     in property <string> warning;
+    // «Издатель: …»; empty for a file.
+    in property <string> publisher;
+    // A publisher's plugin: the project built it and did not review its code; or empty.
+    in property <string> publisher-note;
+    // A publisher's plugin: «Исходный код: {file} · {licence}», a link; or empty.
+    in property <string> source;
+    // Cleared when the source link is opened.
+    in-out property <bool> on-top: true;
     // «Установить» works: set a moment after the window appears.
     in-out property <bool> can-install: false;
     // The buttons are inside the window, whatever the text and the scale.
@@ -61,6 +75,8 @@ export component InstallPluginWindow inherits Window {
     out property <bool> consent-in-view: may-text.absolute-position.y + may-text.height <= body.absolute-position.y + body.visible-height;
 
     callback answer(bool);
+    // The source archive, opened in the browser (its URL stays in Rust).
+    callback open-source();
 
     EscapeScope {
         escape => {
@@ -74,9 +90,26 @@ export component InstallPluginWindow inherits Window {
                     text: root.asker;
                 }
 
+                if root.intro != "": Text {
+                    text: root.intro;
+                    wrap: word-wrap;
+                    font-weight: 700;
+                }
+
                 Subheading {
                     text: root.plugin;
                     wrap: char-wrap;
+                }
+
+                // Who released it, right under its name.
+                if root.publisher != "": Text {
+                    text: root.publisher;
+                    wrap: word-wrap;
+                }
+
+                if root.publisher-note != "": Text {
+                    text: root.publisher-note;
+                    wrap: word-wrap;
                 }
 
                 // What the plugin may do comes first, with the warning above it: the host's
@@ -130,6 +163,18 @@ export component InstallPluginWindow inherits Window {
                     text: "• " + line;
                 }
 
+                // The source link after the consent: a long id and licence must not push what
+                // the plugin may do out of the first screenful.
+                if root.source != "": HorizontalLayout {
+                    alignment: start;
+                    LinkButton {
+                        text: root.source;
+                        clicked => {
+                            root.open-source();
+                        }
+                    }
+                }
+
                 if root.replacing != "": Text {
                     text: root.replacing;
                     wrap: word-wrap;
@@ -153,7 +198,7 @@ export component InstallPluginWindow inherits Window {
 
                 // The default: Enter alone does not install.
                 cancel-button := Button {
-                    text: @tr("Cancel");
+                    text: root.cancel-text != "" ? root.cancel-text : @tr("Cancel");
                     primary: true;
                     clicked => {
                         root.answer(false);

@@ -64,7 +64,44 @@ pub fn mirror_url(
     version: &Version,
     sha256: &Digest,
 ) -> String {
-    format!("{MIRROR_BASE}pub-{publisher}-{sha256}/{id}-{version}.onclp")
+    format!("{}{id}-{version}.onclp", mirror_release(publisher, sha256))
+}
+
+/// The project's release that holds the copies of a publisher's package of `sha256` and of
+/// its source archive: `<MIRROR_BASE>pub-<publisher>-<sha256>/`. The one formatter of both
+/// addresses.
+fn mirror_release(publisher: &PublisherName, sha256: &impl std::fmt::Display) -> String {
+    format!("{MIRROR_BASE}pub-{publisher}-{sha256}/")
+}
+
+/// The source archive of a publisher's release as the windows link it: its copy in the
+/// project's Releases and the license the signed release declares.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceArchive {
+    /// `<id>-<version>.src.tar.gz`.
+    pub name: String,
+    /// The copy in the release of the package ([`mirror_url`]), built from the signed
+    /// fields alone, never from `source.fetch`.
+    pub url: String,
+    /// The license, an SPDX expression.
+    pub license: String,
+}
+
+impl SourceArchive {
+    /// The archive of the publisher's `release` built from `source`; `None` for a release of
+    /// the owner's index.
+    pub(crate) fn of(release: &PluginRelease, source: &ReleaseSource) -> Option<SourceArchive> {
+        let publisher = release.publisher.as_ref()?;
+        let name = format!("{}-{}.src.tar.gz", release.id, release.version);
+        Some(SourceArchive {
+            url: format!(
+                "{}{name}",
+                mirror_release(publisher, &release.package.sha256)
+            ),
+            name,
+            license: source.license.clone(),
+        })
+    }
 }
 
 /// Whether `url` is an anonymous `https://` URL of at most [`MAX_URL`] bytes: a host, no

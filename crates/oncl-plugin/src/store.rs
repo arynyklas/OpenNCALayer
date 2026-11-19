@@ -151,6 +151,10 @@ impl StoreState {
 }
 
 impl Store {
+    /// How old a file no installed plugin owns must be before [`Store::prune_files`]
+    /// removes it.
+    pub const PRUNE_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
     /// The store in `<data_dir>/plugins/`, created if missing. A missing `state.json` starts
     /// a fresh state, saved at once (its install id is kept); one that is not a state
     /// (damaged) is replaced by a fresh state (logged).
@@ -247,8 +251,8 @@ impl Store {
         Ok(())
     }
 
-    /// Uninstalls `id`: the state, then its settings file (a failure only logged), then its
-    /// package file.
+    /// Uninstalls `id`: the state (with the replacement the user declined for it, if it is a
+    /// port), then its settings file (a failure only logged), then its package file.
     ///
     /// # Errors
     ///
@@ -261,12 +265,138 @@ impl Store {
         let Some(removed) = next.plugins.remove(id) else {
             return Err(not_installed(id));
         };
+        next.declined_replacements.remove(id);
         self.save(&next)?;
         *state = next;
         remove_file(&self.settings_path(id));
         match std::fs::remove_file(self.package_path(id, &removed.version)) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
+        }
+    }
+
+    /// Replaces the installed port `port` by `package`, a publisher's plugin of the catalog
+    /// whose file is `bytes`, released by `publisher` (Р11). The package file is written,
+    /// then one save records the plugin (on or off as the port was, not withdrawn) and
+    /// forgets the port and the replacement declined for it; the port's settings and
+    /// package files go after that (a failure only logged).
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::NotFound`] if `port` is not installed;
+    /// [`io::ErrorKind::AlreadyExists`] if `package`'s plugin is (a port and its replacement
+    /// are never both installed); [`io::ErrorKind::InvalidInput`] if `bytes` is not
+    /// `package`'s file or `package` is `port`; any I/O error writing the package or the
+    /// state (nothing changes then).
+    pub fn replace(
+        &self,
+        port: &str,
+        package: &Package,
+        bytes: &[u8],
+        publisher: Option<&PublisherName>,
+    ) -> io::Result<()> {
+        let sha256 = Sha256::of(bytes);
+        if sha256.0 != package.sha256 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the bytes are not the package's file",
+            ));
+        }
+        let id = &package.manifest.id;
+        if id == port {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a plugin does not replace itself",
+            ));
+        }
+        let version = &package.manifest.version;
+        let mut state = lock(&self.state);
+        if state.plugins.contains_key(id) {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("the plugin {id} is installed already"),
+            ));
+        }
+        let mut next = state.clone();
+        let Some(removed) = next.plugins.remove(port) else {
+            return Err(not_installed(port));
+        };
+        next.declined_replacements.remove(port);
+        next.plugins.insert(
+            id.clone(),
+            Installed {
+                version: version.clone(),
+                sha256,
+                source: Source::Catalog,
+                enabled: removed.enabled,
+                withdrawn: false,
+                publisher: publisher.cloned(),
+            },
+        );
+        let file = self.package_path(id, version);
+        std::fs::create_dir_all(self.dir.join("packages"))?;
+        write_atomically(&file, bytes, Access::Default)?;
+        if let Err(e) = self.save(&next) {
+            remove_file(&file);
+            return Err(e);
+        }
+        *state = next;
+        remove_file(&self.settings_path(port));
+        remove_file(&self.package_path(port, &removed.version));
+        Ok(())
+    }
+
+    /// Removes the package and settings files no installed plugin owns: what a crash left
+    /// between a save of the state and the removal of the files it no longer names (a port
+    /// replaced, a plugin removed, an old version). The built-in modules' settings stay, and
+    /// so does a file changed within [`Store::PRUNE_AFTER`] (or whose time cannot be read):
+    /// another process (`oncl plugin install`) may have written it and not yet saved the
+    /// state that names it. Call it before any plugin is installed in this run. Each failure
+    /// is only logged.
+    pub fn prune_files(&self) {
+        let now = std::time::SystemTime::now();
+        let state = lock(&self.state);
+        let packages: BTreeSet<PathBuf> = state
+            .plugins
+            .iter()
+            .map(|(id, installed)| self.package_path(id, &installed.version))
+            .collect();
+        let settings: BTreeSet<PathBuf> = state
+            .plugins
+            .keys()
+            .map(|id| self.settings_path(id))
+            .collect();
+        for (dir, ext, keep) in [
+            (self.dir.join("packages"), PACKAGE_EXT, &packages),
+            (self.settings_dir(), "json", &settings),
+        ] {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let builtin = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with(crate::BUILTIN_ID_PREFIX));
+                let recent = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .is_none_or(|at| {
+                        !now.duration_since(at)
+                            .is_ok_and(|age| age >= Store::PRUNE_AFTER)
+                    });
+                if path.extension().is_some_and(|e| e == ext)
+                    && path.is_file()
+                    && !builtin
+                    && !recent
+                    && !keep.contains(&path)
+                {
+                    tracing::info!(path = %path.display(), "a plugin file no plugin owns is removed");
+                    remove_file(&path);
+                }
+            }
         }
     }
 

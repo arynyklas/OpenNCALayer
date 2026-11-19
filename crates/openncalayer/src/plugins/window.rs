@@ -5,16 +5,19 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use oncl_plugin::{Localized, Replaces, Source};
+use oncl_plugin::{Localized, Replaces};
 use oncl_ui::plugins_view::{
-    AvailablePlugin, CatalogLine, InstalledPlugin, LocalizedText, PendingUpdate, PluginStatus,
-    ReplacedBundle,
+    AvailablePlugin, CatalogLine, InstalledPlugin, LocalizedText, PendingUpdate, PluginOrigin,
+    PluginStatus, PublisherOrigin, ReplacedBundle, SourceArchive,
 };
 use oncl_ui::{
     InstallPluginRequest, InstalledVersion, PluginActionError, PluginsServices, PluginsView,
+    RequestKind,
 };
 
-use super::{CatalogView, InstallRequest, InstallUi, PluginService, PluginState, ServiceView};
+use super::{
+    CatalogView, InstallRequest, InstallUi, PluginService, PluginState, ReleaseOrigin, ServiceView,
+};
 
 /// Asks the user in the install confirmation window ([`oncl_ui::ask_install_plugin`]).
 pub struct WindowInstallUi;
@@ -35,15 +38,21 @@ pub fn install_request(
         name: text(&request.name),
         version: request.version.to_string(),
         replaces: request.replaces.as_ref().map(bundle),
-        replacing: request.replacing.map(|(version, source)| InstalledVersion {
+        replacing: request.replacing.map(|(version, from)| InstalledVersion {
             version: version.to_string(),
-            local: source == Source::Local,
+            origin: origin(from),
         }),
         capabilities: request.capabilities.lines(),
         operations: request.operations,
-        update: false,
+        kind: match request.replaces_port {
+            Some((port, version)) => RequestKind::ReplacePort {
+                port: text(&port),
+                version: version.to_string(),
+            },
+            None => RequestKind::Install,
+        },
         window: None,
-        local: request.local,
+        origin_kind: origin(request.origin_kind),
         decide,
     }
 }
@@ -82,6 +91,10 @@ impl PluginsServices for WindowServices {
 
     fn confirm_update(&self, id: &str, expected_sha256: &str) -> Result<(), PluginActionError> {
         self.service()?.confirm_update(id, expected_sha256)
+    }
+
+    fn replace_port(&self, port: &str) -> Result<(), PluginActionError> {
+        self.service()?.replace_port(port)
     }
 
     fn refresh(&self) {
@@ -127,7 +140,7 @@ pub fn plugins_view(view: ServiceView) -> PluginsView {
                 name: text(&p.name),
                 version: p.version.to_string(),
                 replaces: p.replaces.as_ref().map(bundle),
-                local: p.source == Source::Local,
+                origin: origin(p.origin),
                 state: match p.state {
                     PluginState::Enabled => PluginStatus::Enabled,
                     PluginState::Disabled => PluginStatus::Disabled,
@@ -139,7 +152,9 @@ pub fn plugins_view(view: ServiceView) -> PluginsView {
                     added: update.lines(),
                     operations: update.operations,
                     package_sha256: update.package_sha256,
+                    origin: origin(update.origin),
                 }),
+                replacement: p.replacement.as_ref().map(text),
                 id: p.id,
             })
             .collect(),
@@ -150,11 +165,29 @@ pub fn plugins_view(view: ServiceView) -> PluginsView {
                 name: text(&p.name),
                 version: p.version.to_string(),
                 replaces: p.replaces.as_ref().map(bundle),
+                origin: origin(p.origin),
                 needed: p.needed_by.is_some(),
                 needed_by: p.needed_by.flatten(),
                 id: p.id,
             })
             .collect(),
+    }
+}
+
+/// `from` as the windows show it.
+fn origin(from: ReleaseOrigin) -> PluginOrigin {
+    match from {
+        ReleaseOrigin::Project => PluginOrigin::Project,
+        ReleaseOrigin::Publisher { display, source } => PluginOrigin::Publisher(PublisherOrigin {
+            display: text(&display),
+            source: source.map(|s| SourceArchive {
+                file: s.name,
+                url: s.url,
+                license: s.license,
+            }),
+        }),
+        ReleaseOrigin::Unknown => PluginOrigin::Unknown,
+        ReleaseOrigin::LocalFile => PluginOrigin::LocalFile,
     }
 }
 
@@ -190,6 +223,30 @@ mod tests {
         }
     }
 
+    const SOURCE_URL: &str = "https://github.com/arynyklas/OpenNCALayer/releases/download/pub-acme-ab/kz.acme.b-2.0.0.src.tar.gz";
+
+    fn acme() -> ReleaseOrigin {
+        ReleaseOrigin::Publisher {
+            display: name(),
+            source: Some(oncl_update::catalog::SourceArchive {
+                name: "kz.acme.b-2.0.0.src.tar.gz".to_owned(),
+                url: SOURCE_URL.to_owned(),
+                license: "MIT".to_owned(),
+            }),
+        }
+    }
+
+    fn acme_shown() -> PluginOrigin {
+        PluginOrigin::Publisher(PublisherOrigin {
+            display: text(&name()),
+            source: Some(SourceArchive {
+                file: "kz.acme.b-2.0.0.src.tar.gz".to_owned(),
+                url: SOURCE_URL.to_owned(),
+                license: "MIT".to_owned(),
+            }),
+        })
+    }
+
     #[test]
     fn the_request_lists_what_the_plugin_may_do() {
         let request = InstallRequest {
@@ -200,7 +257,7 @@ mod tests {
                 symname: "kz.example.echo".to_owned(),
                 version: "1.0.0".to_owned(),
             }),
-            replacing: Some((Version::new(1, 0, 0), Source::Local)),
+            replacing: Some((Version::new(1, 0, 0), ReleaseOrigin::LocalFile)),
             capabilities: Capabilities {
                 keys: true,
                 dialogs: false,
@@ -221,7 +278,8 @@ mod tests {
                 builtin: false,
             },
             operations: Vec::new(),
-            local: true,
+            origin_kind: ReleaseOrigin::LocalFile,
+            replaces_port: None,
         };
         let shown = install_request(request, Box::new(|_| {}));
         assert_eq!(shown.origin.as_deref(), Some("https://shop.kz"));
@@ -232,7 +290,7 @@ mod tests {
             shown.replacing,
             Some(InstalledVersion {
                 version: "1.0.0".to_owned(),
-                local: true,
+                origin: PluginOrigin::LocalFile,
             })
         );
         assert_eq!(
@@ -252,7 +310,45 @@ mod tests {
                 CapabilityLine::Shared,
             ]
         );
-        assert!(shown.local);
+        assert_eq!(shown.origin_kind, PluginOrigin::LocalFile);
+        assert_eq!(shown.kind, RequestKind::Install);
+    }
+
+    /// Р11: a publisher's plugin replacing a port is asked as one, the port named.
+    #[test]
+    fn a_port_replacement_is_asked_as_one() {
+        let request = InstallRequest {
+            origin: None,
+            name: name(),
+            version: Version::new(2, 0, 0),
+            replaces: None,
+            replacing: None,
+            capabilities: Capabilities::default(),
+            operations: Vec::new(),
+            origin_kind: acme(),
+            replaces_port: Some((
+                Localized {
+                    ru: "Порт".to_owned(),
+                    kk: "Порт".to_owned(),
+                    en: "Port".to_owned(),
+                },
+                Version::new(1, 0, 0),
+            )),
+        };
+        let shown = install_request(request, Box::new(|_| {}));
+        assert_eq!(
+            shown.kind,
+            RequestKind::ReplacePort {
+                port: LocalizedText {
+                    ru: "Порт".to_owned(),
+                    kk: "Порт".to_owned(),
+                    en: "Port".to_owned(),
+                },
+                version: "1.0.0".to_owned(),
+            }
+        );
+        assert_eq!(shown.origin_kind, acme_shown());
+        assert_eq!(shown.replacing, None);
     }
 
     #[test]
@@ -271,16 +367,17 @@ mod tests {
                     name: name(),
                     version: Version::new(1, 0, 0),
                     replaces: None,
-                    source: Source::Local,
+                    origin: ReleaseOrigin::LocalFile,
                     state: PluginState::Error("broken".to_owned()),
                     pending_update: None,
+                    replacement: Some(name()),
                 },
                 InstalledView {
                     id: "kz.b".to_owned(),
                     name: name(),
                     version: Version::new(2, 0, 0),
                     replaces: None,
-                    source: Source::Catalog,
+                    origin: acme(),
                     state: PluginState::Withdrawn,
                     pending_update: Some(PendingView {
                         version: Version::new(2, 1, 0),
@@ -293,7 +390,9 @@ mod tests {
                         },
                         operations: Vec::new(),
                         package_sha256: "ab".repeat(32),
+                        origin: ReleaseOrigin::Project,
                     }),
+                    replacement: None,
                 },
             ],
             available: vec![
@@ -302,6 +401,7 @@ mod tests {
                     name: name(),
                     version: Version::new(3, 0, 0),
                     replaces: None,
+                    origin: acme(),
                     needed_by: Some(None),
                 },
                 AvailableView {
@@ -309,6 +409,7 @@ mod tests {
                     name: name(),
                     version: Version::new(4, 0, 0),
                     replaces: None,
+                    origin: ReleaseOrigin::Project,
                     needed_by: None,
                 },
             ],
@@ -322,14 +423,18 @@ mod tests {
                 error: Some("timed out".to_owned()),
             }
         );
-        assert!(shown.installed[0].local);
+        assert_eq!(shown.installed[0].origin, PluginOrigin::LocalFile);
         assert_eq!(
             shown.installed[0].state,
             PluginStatus::Error("broken".to_owned())
         );
-        assert!(!shown.installed[1].local);
+        assert_eq!(shown.installed[1].origin, acme_shown());
+        assert_eq!(shown.available[0].origin, acme_shown());
+        assert_eq!(shown.available[1].origin, PluginOrigin::Project);
         assert_eq!(shown.installed[1].state, PluginStatus::Withdrawn);
         assert_eq!(shown.installed[0].pending_update, None);
+        assert_eq!(shown.installed[0].replacement, Some(text(&name())));
+        assert_eq!(shown.installed[1].replacement, None);
         assert_eq!(
             shown.installed[1].pending_update,
             Some(PendingUpdate {
@@ -337,6 +442,7 @@ mod tests {
                 added: vec![CapabilityLine::Files],
                 operations: Vec::new(),
                 package_sha256: "ab".repeat(32),
+                origin: PluginOrigin::Project,
             })
         );
         assert!(shown.available[0].needed && shown.available[0].needed_by.is_none());
@@ -349,6 +455,10 @@ mod tests {
         );
         assert_eq!(
             off.remove("kz.a"),
+            Err(PluginActionError::Failed("access denied".to_owned()))
+        );
+        assert_eq!(
+            off.replace_port("kz.a"),
             Err(PluginActionError::Failed("access denied".to_owned()))
         );
     }

@@ -240,6 +240,26 @@ fn custom_oncl_maps_onto_a_plugin_release() {
 }
 
 #[test]
+fn a_publisher_release_links_its_source_archive_beside_its_package() {
+    let catalog = ecc_catalog(&[entry(MARKET, "1.2.0")]);
+    let release = catalog.releases().next().unwrap();
+    let archive = catalog.source_archive(release).expect("its source archive");
+    assert_eq!(archive.license, "Apache-2.0");
+    assert_eq!(archive.name, "kz.ecc.market-1.2.0.src.tar.gz");
+    // The release of the package, not `source.fetch`.
+    assert_eq!(
+        archive.url,
+        format!(
+            "https://github.com/arynyklas/OpenNCALayer/releases/download/pub-ecc-{}/kz.ecc.market-1.2.0.src.tar.gz",
+            package_hex()
+        )
+    );
+    let owner = Catalog::owner(index(vec![port(PORT, "1.0.0", SIGNER, MARKET)]));
+    let port = owner.releases().next().unwrap();
+    assert_eq!(owner.source_archive(port), None);
+}
+
+#[test]
 fn unreadable_delegations_leave_the_publishers_unavailable_and_the_owners_revocations_in_force() {
     let mut revoking = ecc_entry();
     revoking["revoked_versions"] =
@@ -1059,11 +1079,26 @@ fn publishers_json_refuses_what_lies_outside_a_prefix() {
         refused(vec![superseding_ecc(), twice]),
         CatalogError::Supersedes { .. }
     ));
+    // One plugin replacing two ports: a client replaces one port by one plugin.
+    let both = with(|p| p["supersedes"] = json!({ PORT: MARKET, OTHER_PORT: MARKET }));
+    assert!(matches!(
+        refused(vec![both]),
+        CatalogError::Supersedes { .. }
+    ));
 }
 
 #[test]
 fn publishers_json_refuses_unacceptable_display_names_and_homepages() {
-    for name in ["", " ", "ECC\u{7}", "OpenNCALayer", "ECC openncalayer"] {
+    for name in [
+        "",
+        " ",
+        "ECC\u{7}",
+        "OpenNCALayer",
+        "ECC openncalayer",
+        "Open\u{200B}NCALayer",
+        "Open NCALayer",
+        "Open-NCA\u{2060}Layer",
+    ] {
         let publisher = with(|p| p["display"]["kk"] = json!(name));
         assert!(
             matches!(refused(vec![publisher]), CatalogError::Display(_)),

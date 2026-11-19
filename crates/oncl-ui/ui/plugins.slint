@@ -1,9 +1,10 @@
 // «Плагины»: the catalog's state, the installed plugins (turn off or on, remove after a
-// question, allow an update that may do more), the plugins the catalog offers (install), a
-// plugin from a file, and a new download of the catalog. The rows' texts are composed in Rust.
+// question, allow an update that may do more, replace a port by a publisher's plugin the user
+// declined once), the plugins the catalog offers (install), a plugin from a file, and a new
+// download of the catalog. The rows' texts are composed in Rust.
 
 import { Button } from "std-widgets.slint";
-import { ActionBar, BusyRow, DialogScroll, EscapeScope, Hint, Metrics, NameText, StatusArea, Subheading, Tone } from "common.slint";
+import { ActionBar, BusyRow, DialogScroll, EscapeScope, Hint, LinkButton, Metrics, NameText, StatusArea, Subheading, Tone } from "common.slint";
 
 export struct InstalledRow {
     // The name and version.
@@ -18,11 +19,25 @@ export struct InstalledRow {
     enabled: bool,
     // An update waiting for permission and what more it may do, or empty.
     update: string,
+    // «Доступна замена от издателя …» (a port, the replacement declined once), or empty.
+    replacement: string,
+    // «Издатель: …», or empty for a file.
+    publisher: string,
+    // A publisher's plugin: its code was not reviewed; or empty.
+    note: string,
+    // A publisher's plugin: «Исходный код: … · licence», a link; or empty.
+    source: string,
 }
 
 export struct AvailableRow {
     title: string,
     details: string,
+    // «Издатель: …», or empty when nobody is known.
+    publisher: string,
+    // A publisher's plugin: its code was not reviewed; or empty.
+    note: string,
+    // A publisher's plugin: «Исходный код: … · licence», a link; or empty.
+    source: string,
     // «Нужен сайту …», or empty.
     needed: string,
 }
@@ -53,8 +68,12 @@ export component PluginsWindow inherits Window {
     callback remove(int);
     callback confirm-remove(int);
     callback confirm-update(int);
+    callback replace(int);
     callback install(int);
     callback install-file();
+    // The source archive of the row's plugin, opened in the browser.
+    callback open-installed-source(int);
+    callback open-available-source(int);
     callback refresh();
     callback dismiss();
 
@@ -128,6 +147,23 @@ export component PluginsWindow inherits Window {
                         wrap: word-wrap;
                     }
 
+                    if row.publisher != "": Text {
+                        text: row.publisher;
+                        wrap: word-wrap;
+                    }
+                    if row.note != "": Text {
+                        text: row.note;
+                        wrap: word-wrap;
+                    }
+                    if row.source != "": HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: row.source;
+                            clicked => {
+                                root.open-installed-source(i);
+                            }
+                        }
+                    }
                     Text {
                         text: row.state;
                         wrap: word-wrap;
@@ -140,6 +176,11 @@ export component PluginsWindow inherits Window {
                         wrap: word-wrap;
                         color: Tone.link();
                     }
+                    if row.replacement != "": Text {
+                        text: row.replacement;
+                        wrap: word-wrap;
+                        color: Tone.link();
+                    }
                     HorizontalLayout {
                         spacing: Metrics.gap;
                         alignment: start;
@@ -148,6 +189,14 @@ export component PluginsWindow inherits Window {
                             enabled: !root.busy;
                             clicked => {
                                 root.confirm-update(i);
+                            }
+                        }
+
+                        if row.replacement != "": Button {
+                            text: @tr("Replace…");
+                            enabled: !root.busy;
+                            clicked => {
+                                root.replace(i);
                             }
                         }
 
@@ -183,11 +232,28 @@ export component PluginsWindow inherits Window {
                         font-weight: 700;
                     }
 
-                    Text {
+                    if row.details != "": Text {
                         text: row.details;
                         wrap: word-wrap;
                     }
+                    if row.publisher != "": Text {
+                        text: row.publisher;
+                        wrap: word-wrap;
+                    }
+                    if row.note != "": Text {
+                        text: row.note;
+                        wrap: word-wrap;
+                    }
 
+                    if row.source != "": HorizontalLayout {
+                        alignment: start;
+                        LinkButton {
+                            text: row.source;
+                            clicked => {
+                                root.open-available-source(i);
+                            }
+                        }
+                    }
                     if row.needed != "": Text {
                         text: row.needed;
                         wrap: word-wrap;
