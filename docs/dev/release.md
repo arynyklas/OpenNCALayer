@@ -59,6 +59,16 @@
    После `vm-smoke` агент лаборатории сверяет сборку того же тега с оригиналом (артефакт `conformance-<вариант>`, раздел 7) и пишет на коммит тега второй статус, `conformance`. Без зелёного `conformance` новая версия не попадёт в `stable`: его требует проверка PR индекса (раздел 3, шаг 3). Предварительной версии, которая идёт только в `beta`, этот статус не нужен.
 4. Задание `index` скачивает ассеты релиза, выполняет `cargo xtask index add --channel <канал> --tag v<версия>` для каждого канала версии (для pre-release это `beta`, для релиза `stable` и `beta`; у каждого индекса свой следующий `seq`, прежние записи сохраняются) и открывает PR «chore(updates): add …» из ветки `updates/v<версия>`. Вариант `osx` попадает в индексы вместе с остальными; универсальную сборку проверяет `mac-smoke.yml` на Mac с Apple Silicon и с Intel (раздел 11). Метаданные TUF в этом PR ещё не обновлены, их подписывает мейнтейнер (раздел 3). Пока цели TUF расходятся с индексами, `tuf check` PR не пропустит.
 
+5. Дописать коммит тега в [`publishers/sdk-revisions.toml`](../../publishers/sdk-revisions.toml): это список выпущенных SDK, от которых могут зависеть плагины издателей (SDK в crates.io не публикуется, `docs/design/publishers.md`, Р44). Так делается для каждого тега `v*`, в том числе с суффиксом. На ветке PR индекса `updates/v<версия>` (или отдельным PR):
+
+   ```sh
+   git fetch origin --tags
+   cargo xtask sdk revision add v<версия>
+   git add publishers/sdk-revisions.toml && git commit -S -m "chore(publishers): SDK v<версия>"
+   ```
+
+   Команда берёт коммит тега из локального клона, сверяет версию `[workspace.package]` в его `Cargo.toml` с тегом и дописывает запись в конец файла. Если тег уже в списке, она отказывает. Задание `index` (`vendor check-onboarding --base`) проверяет, что прежние записи не изменились и что каждый тег из списка указывает на свой коммит. Пока записи нет, проверка 17 отвергает плагин, который зависит от этого SDK.
+
 ## 3. Метаданные TUF в PR
 
 На ветке PR, у себя на машине:
@@ -208,7 +218,7 @@ Workflow запускается:
 | `tuf/v1/metadata/<N>.pub-<издатель>.json` | роли издателей, все версии; их PR сливает бот | git |
 | `tuf/v1/targets/indexes/<sha256>.<канал>.json`, `tuf/v1/targets/<sha256>.publishers.json` | копия индекса под своим хешем; правила издателей (с первой записью в `publishers/`) | git |
 | `tuf/v1.toml` | режим снимка (`snapshot = "online"` после перевода снимка в CI; без файла снимок офлайн) | git |
-| `publishers/<имя>/publisher.toml`, `publishers/builders.toml` | реестр издателей и допустимые образы сборщика; пишет только владелец | git |
+| `publishers/<имя>/publisher.toml`, `publishers/builders.toml`, `publishers/sdk-revisions.toml` | реестр издателей, допустимые образы сборщика и коммиты выпущенного SDK; пишет только владелец | git |
 | `crates/oncl-update/keys/root.json` | корень доверия клиента: копия `metadata/1.root.json` байт в байт (клиент встраивает его при сборке) | git |
 | `metadata/timestamp.json`, онлайн `metadata/<N>.snapshot.json` | подписывает CI при публикации Pages | **не в git**, только в артефакте Pages |
 

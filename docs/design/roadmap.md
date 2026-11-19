@@ -198,7 +198,7 @@ flowchart LR
 - Нет подписи кода (SignPath, Apple notarization) и публикации расширения в Chrome Web Store и Edge.
 - Нет пакетов deb и rpm, APT/RPM-репозитория и MSI для установки на всю машину.
 - Профиля шифрования ГОСТ нет, а шифрование CMS доступно только в библиотеке ([`../dev/platform-interop.md`](../dev/platform-interop.md)).
-- Публикация SDK в crates.io и пакета в WinGet не выполнялась ([`platform.md`](platform.md)).
+- SDK в crates.io не публикуется, он берётся из git по тегу (Р44 в [`publishers.md`](publishers.md#решения-владельца)). Пакет в WinGet не публиковался ([`platform.md`](platform.md)).
 
 ## 6. Внешние аккаунты
 

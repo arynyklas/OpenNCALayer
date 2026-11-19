@@ -7,25 +7,26 @@
 самообновления, графическая сессия ему не нужна.
 
 Версия до 1.0 (`0.1.0-alpha.*`). Между альфа-версиями возможны несовместимые изменения, они
-перечислены в заметках о миграции в [`docs/dev/sdk.md`](../../docs/dev/sdk.md). Крейты не
-опубликованы в crates.io, поэтому подключайте их по git или по path (ниже); `cargo add` с версией
-из реестра не сработает. Свободны ли имена `oncl-*` в crates.io, не проверялось.
+перечислены в заметках о миграции в [`docs/dev/sdk.md`](../../docs/dev/sdk.md). Крейты в
+crates.io не публикуются, поэтому подключайте их по git с тегом выпуска или по path (ниже);
+`cargo add` с версией из реестра не сработает.
 
-## Использование до выпуска в реестр
+## Подключение
 
-По path, из рабочей копии репозитория на проверенном вами теге или коммите:
+По git, с тегом выпуска (`Cargo.lock` закрепит его коммит):
+
+```toml
+[dependencies]
+oncl-core = { git = "https://github.com/arynyklas/OpenNCALayer", tag = "v0.1.3", features = ["full"] }
+oncl-pki = { git = "https://github.com/arynyklas/OpenNCALayer", tag = "v0.1.3" }
+```
+
+или по path, из рабочей копии репозитория на проверенном вами теге:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 oncl-pki = { path = "OpenNCALayer/crates/oncl-pki" }
-```
-
-или по git, закреплённому на коммите:
-
-```toml
-[dependencies]
-oncl-core = { git = "https://github.com/arynyklas/OpenNCALayer", rev = "<коммит>", features = ["full"] }
 ```
 
 Минимальный SDK (`default-features = false`, то же, что по умолчанию) включает CMS/CAdES,

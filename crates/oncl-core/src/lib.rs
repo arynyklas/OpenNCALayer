@@ -20,8 +20,9 @@
 //!
 //! # Embedding
 //!
-//! The SDK needs no display session, daemon, listener, collector or updater. Depend on it by
-//! git or path until a registry release exists (see `README.md`), with `features = ["full"]`
+//! The SDK needs no display session, daemon, listener, collector or updater. It is not on a
+//! registry: depend on it by git at a release tag, or by path (see `README.md`), with
+//! `features = ["full"]`
 //! or only the features you use (`tokens`, `xml`, `pdf`, `jose`, `plugins`). The host supplies
 //! the grant, key sources and the audit `KeyUseGuard`, trust anchors, an
 //! `oncl_pki::http::HttpTransport`, the clock and cancellation; nothing is taken from a

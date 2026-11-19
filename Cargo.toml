@@ -29,7 +29,8 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 # pins the exact workspace version: `cargo package` needs a `version` next to each `path`, and
 # it must be bumped together with `[workspace.package]`. These crates (and only these) set
 # `publish = true` in their manifests so that `cargo package` can verify the chain offline;
-# nothing uploads them: a registry release is a separate decision (docs/dev/sdk.md section 7).
+# nothing uploads them: the SDK is never published to a registry, consumers and plugins take it
+# from this repository by a release tag (docs/dev/sdk.md section 1, docs/design/publishers.md Р44).
 # A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
 oncl-flows = { path = "crates/oncl-flows", version = "=0.1.2-beta.1" }

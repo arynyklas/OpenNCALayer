@@ -1,19 +1,28 @@
-# Rust SDK: встраивание, возможности, стабильность, готовность к публикации
+# Rust SDK: встраивание, возможности, стабильность, поставка
 
 `oncl-core` является встраиваемым SDK OpenNCALayer. Он выполняет типизированные потоковые подпись, проверку, валидацию, инспекцию и метки времени над файлами и потоками байт. Доверие, ключи, часы, сеть, аудит и лимиты ресурсов задаёт приложение, в которое встроен SDK. Интерфейса, демона, слушающего порта, сборщика телеметрии, установщика и самообновления в нём нет, графическая сессия не нужна. CLI `oncl` и HTTP-сервис `oncl-server` используют тот же движок, но в зависимости SDK не входят.
 
 Здесь описан контракт SDK в поставляемом виде. Устройство платформы описано в [`../design/platform.md`](../design/platform.md), краткое введение в README крейта: [`../../crates/oncl-core/README.md`](../../crates/oncl-core/README.md).
 
-## 1. Подключение (релиза в реестре нет)
+## 1. Подключение (только из git)
 
-В crates.io ничего не опубликовано, поэтому `cargo add` с версией из реестра не сработает. Свободны ли имена крейтов `oncl-*` в crates.io, не проверялось. Зависеть нужно от проверенного тега или коммита по path или git.
+SDK в crates.io не публикуется и публиковаться не будет (решение владельца, Р44 в [`../design/publishers.md`](../design/publishers.md#решения-владельца)), поэтому `cargo add` с версией из реестра не сработает. Крейты SDK берутся из репозитория OpenNCALayer по тегу выпуска:
 
-Все сторонние зависимости SDK берутся из crates.io, `[patch.crates-io]` не нужен:
+```toml
+[dependencies]
+oncl-core = { git = "https://github.com/arynyklas/OpenNCALayer", tag = "v0.1.3", features = ["full"] }
+```
+
+`Cargo.lock` закрепляет коммит тега (`source = "git+https://github.com/arynyklas/OpenNCALayer?tag=v0.1.3#<коммит>"`). Крейты SDK наследуют поля из `[workspace]` корневого `Cargo.toml` репозитория, Cargo читает его из того же коммита. `cargo fetch` клонирует репозиторий целиком (на `v0.1.2` около 43 МБ в `$CARGO_HOME/git`), после этого сборка работает офлайн (`--offline`, `--frozen`). Из рабочей копии на проверенном теге можно подключить и по path:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 ```
+
+Все сторонние зависимости SDK берутся из crates.io, `[patch.crates-io]` не нужен: `[patch]` нашего workspace на потребителя не действует.
+
+Плагин издателя берёт `oncl-pdk` так же, по тегу. Проверка 17 принимает только коммиты выпущенных тегов из [`publishers/sdk-revisions.toml`](../../publishers/sdk-revisions.toml) ([`publishers.md`](publishers.md), «SDK плагина»).
 
 `cargo xtask sdk smoke` (раздел 7) собирает такого потребителя только из распакованных пакетов исходников, а не из workspace.
 
@@ -296,9 +305,9 @@ Core выполняет три шага в указанном порядке (`d
 
 Что добавлено в `oncl-plugin` (feature `distribution`): `TryFrom<&DeclaredCapabilities> for Capabilities` (правила таблицы `[capabilities]` манифеста, без `builtin`); `PluginModules::builtin_modules`; у `Store` методы `set_publisher`, `set_declined_replacement`, `replace` (порт заменяется плагином издателя одной записью состояния, файлы порта удаляются после неё; уже установленный плагин не заменяет порт, `AlreadyExists`), `prune_files` (удаляет пакеты и настройки, которых нет у установленных плагинов и которые не менялись дольше `Store::PRUNE_AFTER`, 10 минут; настройки встроенных модулей остаются), `save_publishers`, `load_publishers`, `save_role`, `load_role` и `prune_roles` (файлы `<data>/plugins/catalog/publishers.json` и `<data>/plugins/catalog/roles/pub-<имя>.json`). `Store::remove` порта забывает и отказ от его замены.
 
-## 7. Готовность к публикации
+## 7. Цепочка SDK и проверка пакетов
 
-Цепочка SDK в порядке публикации (каждый крейт после тех, от которых он зависит):
+Цепочка SDK в порядке зависимостей (каждый крейт после тех, от которых он зависит):
 
 `oncl-gost` → `oncl-registry` → `oncl-pki` → `oncl-pdf` → `oncl-protocol` → `oncl-pdk` →
 `oncl-xml` → `oncl-token` → `oncl-flows` → `oncl-update` → `oncl-plugin` → `oncl-core`
@@ -313,12 +322,10 @@ Core выполняет три шага в указанном порядке (`d
 
 Что не проверено и не заявляется:
 
-- Загрузка в реестр не выполнялась, это отдельное решение. Форков в цепочке больше нет: `oncl-gost` и `oncl-pki` берут `streebog` и `hmac` из crates.io, а Streebog и HMAC для секретного ввода — код самого `oncl-gost` (`src/streebog_secret.rs`, `src/secret_hmac.rs`).
-- Доступность и принадлежность имён крейтов в реестре не проверены.
-- `cargo publish --dry-run` против настоящего реестра, загрузка и проверки после неё выполняются только при отдельно согласованной публикации.
+- В реестр SDK не загружается (Р44): `publish = true` нужен только `cargo package`, потребители берут SDK из git (раздел 1). Форков в цепочке больше нет: `oncl-gost` и `oncl-pki` берут `streebog` и `hmac` из crates.io, а Streebog и HMAC для секретного ввода — код самого `oncl-gost` (`src/streebog_secret.rs`, `src/secret_hmac.rs`).
 - Проверка потребителя работает только на платформе, где запущена; матрица Linux/macOS/Win7 проверяется отдельно (приёмочный прогон «1 ГиБ / 1 ГиБ» пройден, см. раздел 5).
 
-Команды: `cargo xtask sdk closure`, `cargo xtask sdk smoke [--keep]`, `cargo xtask sdk licenses [--check]`.
+Команды: `cargo xtask sdk closure`, `cargo xtask sdk smoke [--keep]`, `cargo xtask sdk licenses [--check]`, `cargo xtask sdk revision add v<версия>` (шаг выпуска: коммит тега в `publishers/sdk-revisions.toml`, [`release.md`](release.md), раздел 2).
 
 `cargo test -p xtask --test sdk_delivery` работает без сети и без сборки, только через `cargo metadata` и `cargo tree`. Он проверяет, что множество крейтов с `publish = true` равно `xtask::sdk_delivery::CHAIN` и цепочка идёт в порядке зависимостей; что ни один набор features `oncl-core` не содержит Slint, winit, tokio, axum, hyper, velopack или другого запрещённого крейта; что `THIRD-PARTY.txt` актуален (устаревшая копия обнаруживается); что крейт из зависимостей, отсутствующий в карте реестра, даёт ошибку с его именем, а не пропускается молча.
 
