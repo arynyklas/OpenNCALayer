@@ -150,7 +150,7 @@ struct AssetLine {
 }
 
 /// The releases of the JSON Lines file `path`: drafts and tags other than `v<semver>`
-/// (`plugins-*`) are left out.
+/// (`plugins-*`, and `pub-*`, the copies of publishers' packages) are left out.
 ///
 /// # Errors
 ///
@@ -528,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn releases_skip_drafts_and_plugin_tags() {
+    fn releases_skip_drafts_plugin_and_publisher_tags() {
         let releases = read_releases(&fixtures().join("releases.jsonl")).unwrap();
         let versions: Vec<String> = releases.iter().map(|r| r.version.to_string()).collect();
         assert_eq!(versions, ["0.3.0-beta.1", "0.2.0"]);

@@ -1,0 +1,559 @@
+name: Publisher PR
+
+# A third-party publisher's release (docs/design/publishers.md, «Автослияние PR издателя» and
+# «Jobs `publisher-pr.yml`»; the commands: docs/dev/publishers.md, «Проверки CI»): a pull
+# request that adds one file `tuf/v1/metadata/<V>.pub-<publisher>.json` signed by the
+# publisher. The bot checks it, rebuilds every new package from its source archive in the
+# reference builder, copies the rebuilt package and the archive into an immutable release
+# `pub-<publisher>-<sha256>` of this repository, merges the pull request and starts Pages.
+# Nobody reviews it: what is merged is what the checks of `xtask vendor` let through.
+#
+# `pull_request_target` (the only workflow with it, Р34): the run takes this file and every
+# line of code it builds from `main`, never from the pull request, so a pull request that
+# changes this file or xtask is checked by the code of `main` and refused by check 1. Since
+# 2026-12-02 GitHub blocks the event in public repositories unless an Actions policy allows
+# it; the owner allows it for this file only (docs/dev/release.md, section 1).
+#
+# The rules every job keeps (`xtask/tests/workflows_publishers.rs` pins them):
+#
+# - Every checkout is `main` as the event saw it (`github.sha`), without credentials on disk.
+#   The pull request's head is fetched into a ref and read as data by `git cat-file`; it is
+#   never checked out, built or run.
+# - xtask is built from that checkout in each job that runs it, without a build cache, before
+#   anything of the pull request (its head, an archive, an artifact) is on the runner.
+# - A value the pull request decides (the author, the head, a publisher's name, an id, a
+#   version, a crate path, a builder) reaches a command through `env:` only, never through
+#   `${{ … }}` inside `run:`. xtask checked their grammar already; the scripts check it again
+#   before using one as a file name or an argument.
+# - No secrets, no environment, no cache. A job holds the permissions its own steps need and
+#   no more. The publisher's code runs in `rebuild` only, inside the builder's container
+#   without the network, in a job that holds nothing (`permissions: {}`).
+# - Nothing a job is handed is trusted: `verdict` re-reads the role from git and hashes the
+#   archives and the packages itself, and decides alone (its `ok`); `mirror` hashes every
+#   file again before it goes into a release and checks the draft before publishing it.
+#
+# Jobs, in order: `publisher-check` (checks 1–9, 11–18, 23, 24; downloads the archives),
+# `provenance` (check 25) and `rebuild` (checks 19, 20; a matrix over the new packages, at most
+# 8), `verdict` (all of them again, 21, 22; BUILDINFO.json and .src.diff), `mirror` (the
+# releases, before the merge: a role on `main` never names a copy that does not exist yet),
+# `merge` (after the required checks of the head; then Pages signs the snapshot and the
+# timestamp).
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+    paths:
+      - "tuf/v1/metadata/*.pub-*.json"
+
+permissions: {}
+
+# One run per pull request: a new push cancels the run of the old head. A draft release left
+# by a cancelled `mirror` is deleted and made again by the next run.
+concurrency:
+  group: publisher-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Checks 1 and 2 first (the one new role file, an author of the publisher); with either
+  # failed, nothing else runs. Then the rest of the static checks and the archives, downloaded
+  # from `source.fetch` and read as data. Its outputs only drive the matrix of `rebuild`.
+  publisher-check:
+    if: github.repository == 'arynyklas/OpenNCALayer' && github.event.pull_request.draft == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      targets: ${{ steps.check.outputs.targets }}
+      count: ${{ steps.check.outputs.count }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build xtask
+        run: cargo build --locked -p xtask
+      - name: Fetch the head of the pull request as data
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! [[ "$PR" =~ ^[1-9][0-9]*$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::unexpected pull request $PR or head $HEAD_SHA"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "+refs/pull/$PR/head:refs/oncl/head"
+          got="$(git rev-parse --verify 'refs/oncl/head^{commit}')"
+          if [ "$got" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request moved on to $got; its own run checks that head"
+            exit 1
+          fi
+      - name: Check the pull request
+        id: check
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          out="$RUNNER_TEMP/check"
+          target/debug/xtask vendor check-pr --base "$GITHUB_SHA" --head "$HEAD_SHA" --author "$AUTHOR" --out "$out"
+          jq -e --arg head "$HEAD_SHA" '.ok == true and .head == $head' "$out/verdict.json" > /dev/null
+          targets="$(jq -c '[.new_targets[] | {archive, path: .source.path, builder: .source.builder}]' "$out/verdict.json")"
+          count="$(jq '.new_targets | length' "$out/verdict.json")"
+          if [ "$count" -gt 8 ]; then
+            echo "::error::$count new packages; check 6 allows 8"
+            exit 1
+          fi
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: archives
+          path: ${{ runner.temp }}/check
+          if-no-files-found: error
+          retention-days: 7
+
+  # Check 25: for each new package naming a git revision (`source.vcs`), git fetches it in a
+  # container of the builder image on the bridge `oncl-vcs`, which reaches the internet and
+  # nothing of the runner (docs/dev/publishers.md, «Сеть проверки 25»), and the bare
+  # repository is read as data. No code of the publisher runs here.
+  provenance:
+    needs: publisher-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions: {}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: ./.github/actions/docker-disk
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build xtask
+        run: cargo build --locked -p xtask
+      - name: Fetch the head of the pull request as data
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! [[ "$PR" =~ ^[1-9][0-9]*$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::unexpected pull request $PR or head $HEAD_SHA"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "+refs/pull/$PR/head:refs/oncl/head"
+          got="$(git rev-parse --verify 'refs/oncl/head^{commit}')"
+          if [ "$got" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request moved on to $got; its own run checks that head"
+            exit 1
+          fi
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: archives
+          path: ${{ runner.temp }}/archives
+      - name: The network of git, the internet only
+        run: |
+          docker network create --driver bridge --opt com.docker.network.bridge.name=oncl-vcs \
+            --subnet 172.31.250.0/24 oncl-vcs
+          # Only new outgoing connections to the public internet; nothing to the runner and its networks.
+          for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 \
+                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4; do
+            sudo iptables -I DOCKER-USER -i oncl-vcs -d "$net" -j DROP
+          done
+          sudo iptables -I INPUT -i oncl-vcs -j DROP
+          sudo ip6tables -I DOCKER-USER -i oncl-vcs -j DROP
+          sudo iptables -S DOCKER-USER
+      - name: Check 25
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/provenance"
+          target/debug/xtask vendor provenance --base "$GITHUB_SHA" --head "$HEAD_SHA" \
+            --archives "$RUNNER_TEMP/archives" --network oncl-vcs \
+            --out "$RUNNER_TEMP/provenance/provenance.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: provenance
+          path: ${{ runner.temp }}/provenance
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove the network of git
+        if: always()
+        run: |
+          sudo iptables -D INPUT -i oncl-vcs -j DROP || true
+          sudo ip6tables -D DOCKER-USER -i oncl-vcs -j DROP || true
+          for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 169.254.0.0/16 \
+                     127.0.0.0/8 0.0.0.0/8 224.0.0.0/4 240.0.0.0/4; do
+            sudo iptables -D DOCKER-USER -i oncl-vcs -d "$net" -j DROP || true
+          done
+          docker network rm oncl-vcs || true
+
+  # Checks 20 and 19 of one new package: `xtask vendor rebuild` pulls the builder by the digest
+  # of `publishers/builders.toml` on `main`, fetches the crates with the network (no code of
+  # the archive runs), reads the licences in a container that does not start, then builds
+  # twice in a container `--network=none --read-only --cap-drop=ALL` as user 10001 without a
+  # host directory to write to, and takes the package out with `docker cp`. The job holds no
+  # token, no secret, no cache: the build scripts and macros of the publisher run here.
+  rebuild:
+    needs: publisher-check
+    if: needs.publisher-check.outputs.count != '0'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.publisher-check.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/docker-disk
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build xtask
+        run: cargo build --locked -p xtask
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: archives
+          path: ${{ runner.temp }}/archives
+      - name: Rebuild in the builder
+        timeout-minutes: 60
+        env:
+          ARCHIVE: ${{ matrix.target.archive }}
+          CRATE_PATH: ${{ matrix.target.path }}
+          BUILDER: ${{ matrix.target.builder }}
+        run: |
+          if ! [[ "$ARCHIVE" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*\.src\.tar\.gz$ && "$BUILDER" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::unexpected archive $ARCHIVE or builder $BUILDER"
+            exit 1
+          fi
+          target/debug/xtask vendor rebuild --archive "$RUNNER_TEMP/archives/$ARCHIVE" \
+            --path="$CRATE_PATH" --builder "$BUILDER" --out "$RUNNER_TEMP/rebuilt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rebuilt-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/rebuilt
+          if-no-files-found: error
+          retention-days: 7
+
+  # The decision, alone: `xtask vendor verdict` reads the role from git again, runs checks 1–9,
+  # 11–18, 23 and 24 again over the archives it was handed (hashed again), takes 17, 19 and
+  # 20 from each rebuild's report, makes 21 and 22 on the packages by hashes it computes, 25
+  # from the report of `provenance`; `ok` is true only if every one passed. It writes
+  # BUILDINFO.json of each package; the .src.diff against the previous version's archive (from
+  # its copy in this repository's Releases) is made here too, so `mirror` builds and runs
+  # nothing. The outputs `mirror` and `merge` read are this job's, made from what it derived.
+  verdict:
+    needs: [publisher-check, provenance, rebuild]
+    if: >-
+      ${{ !cancelled() && needs.publisher-check.result == 'success' &&
+      needs.provenance.result == 'success' &&
+      (needs.rebuild.result == 'success' ||
+      (needs.rebuild.result == 'skipped' && needs.publisher-check.outputs.count == '0')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      ok: ${{ steps.derived.outputs.ok }}
+      publisher: ${{ steps.derived.outputs.publisher }}
+      role_version: ${{ steps.derived.outputs.role_version }}
+      targets: ${{ steps.derived.outputs.targets }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - name: Build xtask
+        run: cargo build --locked -p xtask
+      - name: Fetch the head of the pull request as data
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! [[ "$PR" =~ ^[1-9][0-9]*$ && "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::unexpected pull request $PR or head $HEAD_SHA"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "+refs/pull/$PR/head:refs/oncl/head"
+          got="$(git rev-parse --verify 'refs/oncl/head^{commit}')"
+          if [ "$got" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request moved on to $got; its own run checks that head"
+            exit 1
+          fi
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: archives
+          path: ${{ runner.temp }}/in/archives
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: provenance
+          path: ${{ runner.temp }}/in/provenance
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        if: needs.publisher-check.outputs.count != '0'
+        with:
+          pattern: rebuilt-*
+          path: ${{ runner.temp }}/in/rebuilt
+      - name: The verdict
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          in="$RUNNER_TEMP/in"
+          mkdir -p "$in/rebuilt"
+          target/debug/xtask vendor verdict --base "$GITHUB_SHA" --head "$HEAD_SHA" --author "$AUTHOR" \
+            --archives "$in/archives" --rebuilt "$in/rebuilt" \
+            --provenance "$in/provenance/provenance.json" --out "$RUNNER_TEMP/verdict"
+          jq -e --arg head "$HEAD_SHA" '.ok == true and .head == $head' "$RUNNER_TEMP/verdict/verdict.json" > /dev/null
+      - name: The .src.diff of each new package
+        run: |
+          out="$RUNNER_TEMP/verdict"
+          prefix="https://github.com/$GITHUB_REPOSITORY/releases/download/pub-"
+          while IFS=$'\t' read -r -u 3 id version url sha256; do
+            stem="$id-$version"
+            if ! [[ "$stem" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ ]]; then
+              echo "::error::unexpected package $stem"
+              exit 1
+            fi
+            if [ ! -f "$out/$stem/BUILDINFO.json" ]; then
+              echo "::error::the verdict wrote no BUILDINFO.json for $stem"
+              exit 1
+            fi
+            # A first version has no previous archive and no .src.diff.
+            [ -n "$url" ] || continue
+            if [[ "$url" != "$prefix"* || ! "$sha256" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error::unexpected previous archive $url ($sha256) of $stem"
+              exit 1
+            fi
+            previous="$RUNNER_TEMP/previous-$stem.src.tar.gz"
+            curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+              --max-filesize 67108864 --max-time 300 --retry 3 --output "$previous" "$url"
+            target/debug/xtask vendor src-diff --old "$previous" --old-sha256 "$sha256" \
+              --new "$RUNNER_TEMP/in/archives/$stem.src.tar.gz" --out "$out/$stem/$stem.src.diff"
+          done 3< <(jq -r '.new_targets[] | [.id, .version, (.previous.archive_url // ""), (.previous.archive_sha256 // "")] | @tsv' "$out/verdict.json")
+      - name: The outputs of the verdict
+        id: derived
+        run: |
+          verdict="$RUNNER_TEMP/verdict/verdict.json"
+          {
+            echo "ok=$(jq -c '.ok' "$verdict")"
+            echo "publisher=$(jq -r '.publisher' "$verdict")"
+            echo "role_version=$(jq -r '.role_version' "$verdict")"
+            echo "targets=$(jq -c '[.new_targets[] | {id, version, length, sha256, tag, package, archive, archive_sha256: .source.archive_sha256, archive_length: .source.archive_length, diff: (.previous != null)}]' "$verdict")"
+          } | tee -a "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: verdict
+          path: ${{ runner.temp }}/verdict
+          if-no-files-found: error
+          retention-days: 7
+
+  # The copies (docs/design/publishers.md, «Копии пакетов в наших Releases»): one immutable
+  # release `pub-<publisher>-<sha256>` per new package, published complete before the merge.
+  # For each: the files hashed again against what `verdict` derived; a published release with
+  # the same package and archive is kept, with other bytes the run stops; a draft left by an
+  # interrupted run is deleted; then a draft with the files, the build attestation of the
+  # package, the draft's files downloaded through the API and compared, publication. No
+  # checkout, no cargo; `gh release upload` into a published release never happens.
+  mirror:
+    needs: verdict
+    if: needs.verdict.outputs.ok == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        if: needs.verdict.outputs.targets != '[]'
+        with:
+          name: archives
+          path: ${{ runner.temp }}/in/archives
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        if: needs.verdict.outputs.targets != '[]'
+        with:
+          pattern: rebuilt-*
+          path: ${{ runner.temp }}/in/rebuilt
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        if: needs.verdict.outputs.targets != '[]'
+        with:
+          name: verdict
+          path: ${{ runner.temp }}/in/verdict
+      - name: Draft the releases
+        id: drafts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGETS: ${{ needs.verdict.outputs.targets }}
+          PUBLISHER: ${{ needs.verdict.outputs.publisher }}
+          ROLE_VERSION: ${{ needs.verdict.outputs.role_version }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          hex() { sha256sum "$1" | cut -d' ' -f1; }
+          root="$RUNNER_TEMP/mirror"
+          in="$RUNNER_TEMP/in"
+          mkdir -p "$root/files" "$root/attest" "$root/existing"
+          : > "$root/created"
+          if ! [[ "$PUBLISHER" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$ && "$ROLE_VERSION" =~ ^[1-9][0-9]*$ ]]; then
+            fail "unexpected publisher $PUBLISHER or role version $ROLE_VERSION"
+          fi
+          jq -e 'type == "array" and length <= 8' <<< "$TARGETS" > /dev/null || fail "unexpected targets"
+          # Read from descriptor 3: no command in the loop takes the list from standard input.
+          while IFS=$'\t' read -r -u 3 id version length sha256 tag package archive archive_sha256 archive_length diff; do
+            stem="$id-$version"
+            if ! [[ "$stem" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$sha256" =~ ^[0-9a-f]{64}$ \
+              && "$archive_sha256" =~ ^[0-9a-f]{64}$ && "$length" =~ ^[0-9]+$ && "$archive_length" =~ ^[0-9]+$ ]]; then
+              fail "unexpected values of $stem"
+            fi
+            if [ "$tag" != "pub-$PUBLISHER-$sha256" ] || [ "$package" != "$stem.onclp" ] || [ "$archive" != "$stem.src.tar.gz" ]; then
+              fail "unexpected names for $stem: $tag, $package, $archive"
+            fi
+            mapfile -t found < <(find "$in/rebuilt" -type f -name "$package")
+            [ "${#found[@]}" -eq 1 ] || fail "${#found[@]} rebuilt files $package"
+            files=(
+              "${found[0]}"
+              "$(dirname "${found[0]}")/THIRD-PARTY.txt"
+              "$in/archives/$archive"
+              "$in/verdict/$stem/BUILDINFO.json"
+            )
+            if [ "$diff" = true ]; then
+              files+=("$in/verdict/$stem/$stem.src.diff")
+            fi
+            dir="$root/files/$tag"
+            mkdir -p "$dir"
+            for file in "${files[@]}"; do
+              if [ ! -f "$file" ] || [ -L "$file" ]; then
+                fail "$file is missing or not a regular file"
+              fi
+              cp -- "$file" "$dir/"
+            done
+            # The bytes that go out are the signed ones, hashed here.
+            if [ "$(hex "$dir/$package")" != "$sha256" ] || [ "$(stat -c %s "$dir/$package")" != "$length" ]; then
+              fail "$package is not the signed package"
+            fi
+            if [ "$(hex "$dir/$archive")" != "$archive_sha256" ] || [ "$(stat -c %s "$dir/$archive")" != "$archive_length" ]; then
+              fail "$archive is not the signed archive"
+            fi
+            if view="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft 2> "$root/view.err")"; then
+              if [ "$(jq -r '.isDraft' <<< "$view")" = true ]; then
+                echo "$tag: a draft left by an interrupted run, deleted"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+              else
+                got="$root/existing/$tag"
+                mkdir -p "$got"
+                gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$got" --pattern "$package" --pattern "$archive" \
+                  || fail "$tag is published without $package or $archive: it needs a look by hand"
+                if [ "$(hex "$got/$package")" = "$sha256" ] && [ "$(hex "$got/$archive")" = "$archive_sha256" ]; then
+                  echo "$tag: published already with this package and archive"
+                  continue
+                fi
+                fail "$tag is published with other bytes: it needs a look by hand"
+              fi
+            elif ! grep -q 'release not found' "$root/view.err"; then
+              cat "$root/view.err"
+              fail "cannot tell whether $tag exists"
+            fi
+            notes="Копия пакета $package издателя $PUBLISHER: пересборка CI OpenNCALayer из архива исходников $archive этого выпуска. Роль: tuf/v1/metadata/$ROLE_VERSION.pub-$PUBLISHER.json, PR: $PR_URL. Проверка: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID."
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --prerelease --latest=false \
+              --target "$GITHUB_SHA" --title "$PUBLISHER: $id $version" --notes "$notes" "$dir"/*
+            cp -- "$dir/$package" "$root/attest/"
+            echo "$tag" >> "$root/created"
+          done 3< <(jq -r '.[] | [.id, .version, .length, .sha256, .tag, .package, .archive, .archive_sha256, .archive_length, .diff] | @tsv' <<< "$TARGETS")
+          echo "created=$(wc -l < "$root/created")" >> "$GITHUB_OUTPUT"
+      - name: Build provenance of the packages
+        if: steps.drafts.outputs.created != '0'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/mirror/attest/*.onclp
+      - name: Check the drafts and publish them
+        if: steps.drafts.outputs.created != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          fail() { echo "::error::$*"; exit 1; }
+          root="$RUNNER_TEMP/mirror"
+          while IFS= read -r -u 3 tag; do
+            dir="$root/files/$tag"
+            view="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,assets)"
+            [ "$(jq -r '.isDraft' <<< "$view")" = true ] || fail "$tag is not a draft any more"
+            expected="$(find "$dir" -type f -printf '%f\n' | LC_ALL=C sort)"
+            listed="$(jq -r '.assets[].name' <<< "$view" | LC_ALL=C sort)"
+            [ "$listed" = "$expected" ] || fail "the draft $tag has the files [$listed], not [$expected]"
+            got="$root/check/$tag"
+            mkdir -p "$got"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$got"
+            while IFS= read -r name; do
+              cmp -s -- "$dir/$name" "$got/$name" || fail "the draft's $name is not the file uploaded"
+            done <<< "$expected"
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false
+            state="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isImmutable)"
+            jq -e '.isDraft == false and .isImmutable == true' <<< "$state" > /dev/null \
+              || fail "$tag is published but not immutable ($state): enable release immutability (docs/dev/release.md, section 1)"
+            echo "$tag: published"
+          done 3< "$root/created"
+
+  # The merge, after the copies exist: the required checks of the head (the status `check` of
+  # ci.yml) for at most 30 minutes, then a squash merge of exactly the head that was checked,
+  # then Pages (a merge with GITHUB_TOKEN starts no `push` workflow). No checkout, no cargo.
+  merge:
+    needs: [verdict, mirror]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - name: Wait for the required checks
+        timeout-minutes: 32
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          end=$((SECONDS + 1800))
+          # The required checks appear once CI runs on the head: the first pull request from a
+          # fork waits for the owner to approve the run.
+          until [ -n "$(gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --required --json name --jq '.[].name' 2> /dev/null)" ]; do
+            if [ "$SECONDS" -ge "$end" ]; then
+              echo "::error::no required check on the head after 30 minutes; run this job again once CI runs"
+              exit 1
+            fi
+            sleep 30
+          done
+          left=$((end - SECONDS))
+          if [ "$left" -lt 1 ]; then
+            echo "::error::the required checks did not finish in 30 minutes"
+            exit 1
+          fi
+          timeout "$left" gh pr checks "$PR" --repo "$GITHUB_REPOSITORY" --required --watch --fail-fast --interval 30
+      - name: Merge
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUBLISHER: ${{ needs.verdict.outputs.publisher }}
+          ROLE_VERSION: ${{ needs.verdict.outputs.role_version }}
+        run: |
+          gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --match-head-commit "$HEAD_SHA" \
+            --subject "publisher $PUBLISHER: role version $ROLE_VERSION" \
+            --body "Merged by $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - name: Publish with Pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run pages.yml --repo "$GITHUB_REPOSITORY" --ref main
