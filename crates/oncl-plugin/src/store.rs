@@ -151,6 +151,10 @@ impl StoreState {
 }
 
 impl Store {
+    /// How old a file no installed plugin owns must be before [`Store::prune_files`]
+    /// removes it.
+    pub const PRUNE_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
     /// The store in `<data_dir>/plugins/`, created if missing. A missing `state.json` starts
     /// a fresh state, saved at once (its install id is kept); one that is not a state
     /// (damaged) is replaced by a fresh state (logged).
@@ -344,9 +348,13 @@ impl Store {
 
     /// Removes the package and settings files no installed plugin owns: what a crash left
     /// between a save of the state and the removal of the files it no longer names (a port
-    /// replaced, a plugin removed, an old version). The built-in modules' settings stay. Call
-    /// it before any plugin is installed in this run. Each failure is only logged.
+    /// replaced, a plugin removed, an old version). The built-in modules' settings stay, and
+    /// so does a file changed within [`Store::PRUNE_AFTER`] (or whose time cannot be read):
+    /// another process (`oncl plugin install`) may have written it and not yet saved the
+    /// state that names it. Call it before any plugin is installed in this run. Each failure
+    /// is only logged.
     pub fn prune_files(&self) {
+        let now = std::time::SystemTime::now();
         let state = lock(&self.state);
         let packages: BTreeSet<PathBuf> = state
             .plugins
@@ -371,9 +379,18 @@ impl Store {
                     .file_name()
                     .and_then(|n| n.to_str())
                     .is_some_and(|n| n.starts_with(crate::BUILTIN_ID_PREFIX));
+                let recent = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .is_none_or(|at| {
+                        !now.duration_since(at)
+                            .is_ok_and(|age| age >= Store::PRUNE_AFTER)
+                    });
                 if path.extension().is_some_and(|e| e == ext)
                     && path.is_file()
                     && !builtin
+                    && !recent
                     && !keep.contains(&path)
                 {
                     tracing::info!(path = %path.display(), "a plugin file no plugin owns is removed");

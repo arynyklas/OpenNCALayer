@@ -542,8 +542,9 @@ fn a_replacement_not_saved_leaves_the_port_as_it_was() {
     assert!(!market_file.exists());
 }
 
-/// Files a crash left behind (a port replaced, a plugin removed) go; the installed
-/// plugins' files and the built-in modules' settings stay.
+/// Files a crash left behind (a port replaced, a plugin removed) go once they are older than
+/// `PRUNE_AFTER`; the installed plugins' files, the built-in modules' settings and a fresh
+/// orphan (another process may be installing it) stay.
 #[test]
 fn files_no_plugin_owns_are_pruned() {
     let dir = tempfile::tempdir().unwrap();
@@ -552,18 +553,36 @@ fn files_no_plugin_owns_are_pruned() {
     store
         .install(&package, &bytes, Source::Catalog, None)
         .unwrap();
+    let long_ago = std::time::SystemTime::now() - Store::PRUNE_AFTER * 2;
+    let old = |path: &std::path::Path| {
+        std::fs::write(path, b"old").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(long_ago)
+            .unwrap();
+    };
     let packages = dir.path().join("plugins/packages");
     let orphan = packages.join("kz.gone.port-1.0.0.onclp");
-    std::fs::write(&orphan, b"old").unwrap();
+    old(&orphan);
+    let fresh = packages.join("kz.new.plugin-1.0.0.onclp");
+    std::fs::write(&fresh, b"new").unwrap();
     let unrelated = packages.join("notes.txt");
-    std::fs::write(&unrelated, b"x").unwrap();
+    old(&unrelated);
     std::fs::create_dir_all(store.settings_dir()).unwrap();
-    std::fs::write(store.settings_path(ID), b"{}").unwrap();
-    std::fs::write(store.settings_path("kz.gone.port"), b"{}").unwrap();
+    old(&store.settings_path(ID));
+    old(&store.settings_path("kz.gone.port"));
+    let fresh_settings = store.settings_path("kz.new.plugin");
+    std::fs::write(&fresh_settings, b"{}").unwrap();
     let builtin = store.settings_path("io.github.arynyklas.openncalayer.builtin.basics");
-    std::fs::write(&builtin, b"{}").unwrap();
+    old(&builtin);
     store.prune_files();
     assert!(!orphan.exists() && !store.settings_path("kz.gone.port").exists());
+    assert!(
+        fresh.is_file() && fresh_settings.is_file(),
+        "a fresh file stays"
+    );
     assert!(package_file(dir.path(), "0.1.0").is_file());
     assert!(store.settings_path(ID).is_file() && builtin.is_file() && unrelated.is_file());
 }
