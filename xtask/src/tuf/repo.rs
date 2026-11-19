@@ -1,10 +1,10 @@
 //! The repository as a directory: which files are there ([`Listing`]), reading them for the
-//! client ([`DirFetcher`]) and writing new ones.
+//! client ([`DirFetcher`]) and writing new ones; and its snapshot mode ([`SnapshotMode`]),
+//! in the file beside it.
 //!
-//! Two repositories share the layout of consistent snapshots ([`Layout`]): `tuf/v1`, whose
-//! top-level targets list the update indexes and nothing else, and `tuf/v2`, which also has
-//! the target `publishers.json` and the files of the publishers' delegated roles,
-//! `metadata/<N>.pub-<name>.json`.
+//! The layout is that of consistent snapshots: the top-level metadata, the update indexes,
+//! and once there are publishers, the target `publishers.json` and the files of the
+//! publishers' delegated roles, `metadata/<N>.pub-<name>.json`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -13,34 +13,74 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use oncl_update::Channel;
-use oncl_update::tuf::{Fetcher, Profile, Response, RoleName, TufError};
+use oncl_update::tuf::{Fetcher, Response, RoleName, TufError};
+use serde::Deserialize;
 
-/// Which of the two repositories a directory is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum Layout {
-    /// `tuf/v1`: no delegations; the repository of every client released before them.
-    V1,
-    /// `tuf/v2`: its own chain of roots, top-level targets with delegations to the
-    /// publishers, and their roles.
-    V2,
+/// Who signs the snapshot (`docs/design/publishers.md`, "Онлайн-снимок"): `snapshot` in
+/// the file beside the repository ([`config_path`]), `offline` without the file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapshotMode {
+    /// The owner signs it with `tuf update`, for 30 days, and it is committed.
+    #[default]
+    Offline,
+    /// CI signs it with `tuf snapshot` on every publication, for 7 days; it is never
+    /// committed. Set by the rotation of the root that moves the snapshot key into CI.
+    Online,
 }
 
-impl Layout {
-    /// The profile the client reads the repository in.
-    pub fn profile(self) -> Profile {
+impl SnapshotMode {
+    /// `offline` or `online`.
+    pub fn as_str(self) -> &'static str {
         match self {
-            Layout::V1 => Profile::Legacy,
-            Layout::V2 => Profile::Delegating,
+            SnapshotMode::Offline => "offline",
+            SnapshotMode::Online => "online",
         }
     }
+}
 
-    /// `tuf/v1` or `tuf/v2`.
-    pub fn name(self) -> &'static str {
-        match self {
-            Layout::V1 => "tuf/v1",
-            Layout::V2 => "tuf/v2",
-        }
-    }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Config {
+    snapshot: SnapshotMode,
+}
+
+/// The file of the snapshot mode of the repository `dir`: `<dir>.toml` beside it
+/// (`tuf/v1.toml` for `tuf/v1`).
+pub fn config_path(dir: &Path) -> PathBuf {
+    let mut name = dir.file_name().unwrap_or_default().to_os_string();
+    name.push(".toml");
+    dir.with_file_name(name)
+}
+
+/// The snapshot mode in the file `path`: [`SnapshotMode::Offline`] if there is none.
+///
+/// # Errors
+///
+/// If the file cannot be read or is not exactly `snapshot = "offline"|"online"`.
+pub fn read_mode(path: &Path) -> anyhow::Result<SnapshotMode> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(SnapshotMode::Offline),
+        Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
+    };
+    let config: Config = toml::from_str(&text).with_context(|| {
+        format!(
+            "{} is not `snapshot = \"offline\"` or `snapshot = \"online\"`",
+            path.display()
+        )
+    })?;
+    Ok(config.snapshot)
+}
+
+/// The text of the file of `mode`.
+pub fn mode_file(mode: SnapshotMode) -> String {
+    format!(
+        "# Who signs the snapshot of tuf/v1: `offline` (the owner, `cargo xtask tuf update`) or\n\
+         # `online` (CI, `cargo xtask tuf snapshot`). docs/design/publishers.md, Р8.\n\
+         snapshot = \"{}\"\n",
+        mode.as_str()
+    )
 }
 
 /// What a path of the repository is.
@@ -56,15 +96,14 @@ pub enum Kind {
     Timestamp,
     /// `targets/indexes/<sha256>.<channel>.json`.
     Target,
-    /// `metadata/<N>.pub-<name>.json`: a version of a publisher's delegated role
-    /// (`tuf/v2` only).
+    /// `metadata/<N>.pub-<name>.json`: a version of a publisher's delegated role.
     Delegated {
         /// The version.
         version: u64,
         /// The role.
         role: RoleName,
     },
-    /// `targets/<sha256>.publishers.json` (`tuf/v2` only).
+    /// `targets/<sha256>.publishers.json`.
     Publishers,
     /// Anything else.
     Stray,
@@ -134,7 +173,7 @@ pub struct Listing {
     pub timestamp: bool,
     /// The files of `targets/`.
     pub target_files: BTreeSet<String>,
-    /// The versions of each delegated role (`tuf/v2`).
+    /// The versions of each delegated role.
     pub delegated: BTreeMap<RoleName, BTreeSet<u64>>,
     /// Every other file.
     pub strays: Vec<String>,
@@ -143,58 +182,41 @@ pub struct Listing {
 }
 
 impl Listing {
-    /// The listing of the relative paths `files` of `tuf/v1`.
+    /// The listing of the relative paths `files`.
     pub fn of(files: impl IntoIterator<Item = String>) -> Listing {
-        Listing::of_layout(files, Layout::V1)
-    }
-
-    /// The listing of the relative paths `files` of a repository of `layout`: in `tuf/v1`
-    /// the files only `tuf/v2` has are strays.
-    pub fn of_layout(files: impl IntoIterator<Item = String>, layout: Layout) -> Listing {
         let mut listing = Listing::default();
         for path in files {
-            match (classify(&path), layout) {
-                (Kind::Root(v), _) => {
+            match classify(&path) {
+                Kind::Root(v) => {
                     listing.roots.insert(v);
                 }
-                (Kind::Targets(v), _) => {
+                Kind::Targets(v) => {
                     listing.targets.insert(v);
                 }
-                (Kind::Snapshot(v), _) => {
+                Kind::Snapshot(v) => {
                     listing.snapshots.insert(v);
                 }
-                (Kind::Timestamp, _) => listing.timestamp = true,
-                (Kind::Target, _) | (Kind::Publishers, Layout::V2) => {
+                Kind::Timestamp => listing.timestamp = true,
+                Kind::Target | Kind::Publishers => {
                     listing.target_files.insert(path.clone());
                 }
-                (Kind::Delegated { version, role }, Layout::V2) => {
+                Kind::Delegated { version, role } => {
                     listing.delegated.entry(role).or_default().insert(version);
                 }
-                (Kind::Delegated { .. } | Kind::Publishers, Layout::V1) | (Kind::Stray, _) => {
-                    listing.strays.push(path.clone());
-                }
+                Kind::Stray => listing.strays.push(path.clone()),
             }
             listing.all.insert(path);
         }
         listing
     }
 
-    /// The listing of the directory `dir` of `tuf/v1`.
+    /// The listing of the directory `dir`.
     ///
     /// # Errors
     ///
     /// If a directory cannot be read.
     pub fn read(dir: &Path) -> anyhow::Result<Listing> {
-        Listing::read_layout(dir, Layout::V1)
-    }
-
-    /// The listing of the directory `dir` of a repository of `layout`.
-    ///
-    /// # Errors
-    ///
-    /// If a directory cannot be read.
-    pub fn read_layout(dir: &Path, layout: Layout) -> anyhow::Result<Listing> {
-        Ok(Listing::of_layout(walk(dir)?, layout))
+        Ok(Listing::of(walk(dir)?))
     }
 
     /// The highest root, targets and snapshot versions, 0 for none.
@@ -373,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn the_files_of_tuf_v2_are_classified_and_are_strays_in_tuf_v1() {
+    fn the_files_of_the_publishers_are_classified() {
         let hash = "ab".repeat(32);
         let role = RoleName::parse("pub-ecc").unwrap();
         assert_eq!(
@@ -398,21 +420,36 @@ mod tests {
         ] {
             assert_eq!(classify(stray), Kind::Stray, "{stray}");
         }
-        let files = || {
-            [
-                "metadata/1.root.json".to_owned(),
-                "metadata/4.pub-ecc.json".to_owned(),
-                "metadata/3.pub-ecc.json".to_owned(),
-                publishers.clone(),
-            ]
-        };
-        let v2 = Listing::of_layout(files(), Layout::V2);
-        assert!(v2.strays.is_empty());
-        assert_eq!(v2.newest_roles(), BTreeMap::from([(role, 4)]));
-        assert!(v2.target_files.contains(&publishers));
-        let v1 = Listing::of(files());
-        assert_eq!(v1.strays.len(), 3, "{:?}", v1.strays);
-        assert!(v1.delegated.is_empty() && v1.target_files.is_empty());
+        let listing = Listing::of([
+            "metadata/1.root.json".to_owned(),
+            "metadata/4.pub-ecc.json".to_owned(),
+            "metadata/3.pub-ecc.json".to_owned(),
+            publishers.clone(),
+        ]);
+        assert!(listing.strays.is_empty());
+        assert_eq!(listing.newest_roles(), BTreeMap::from([(role, 4)]));
+        assert!(listing.target_files.contains(&publishers));
+    }
+
+    #[test]
+    fn the_snapshot_mode_is_read_beside_the_repository() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("v1");
+        let config = config_path(&repo);
+        assert_eq!(config, dir.path().join("v1.toml"));
+        assert_eq!(read_mode(&config).unwrap(), SnapshotMode::Offline);
+        for mode in [SnapshotMode::Offline, SnapshotMode::Online] {
+            fs::write(&config, mode_file(mode)).unwrap();
+            assert_eq!(read_mode(&config).unwrap(), mode);
+        }
+        for bad in [
+            "snapshot = \"later\"\n",
+            "",
+            "snapshot = \"online\"\nother = 1\n",
+        ] {
+            fs::write(&config, bad).unwrap();
+            assert!(read_mode(&config).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

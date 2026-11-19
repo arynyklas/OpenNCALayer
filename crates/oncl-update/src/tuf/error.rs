@@ -297,8 +297,8 @@ pub enum DelegationError {
         /// Its `expires`.
         expires: OffsetDateTime,
     },
-    /// A kept file of the role is checked, but no version of it was accepted, or the saved
-    /// snapshot lists another version than the one accepted.
+    /// A kept file of the role is checked, but no version of it was accepted, or (for
+    /// `TufClient::verify_cached_current_role`) the saved snapshot lists another version.
     #[error("no version of it was accepted, or not the one the snapshot lists")]
     NotAccepted,
     /// A kept file of the role is checked, but the saved top-level targets do not delegate

@@ -528,7 +528,8 @@ fn a_kept_role_holds_offline_only_at_the_version_the_snapshot_lists() {
         .unwrap()
         .file()
         .to_vec();
-    c.verify_cached_role(&role("pub-ecc"), &kept, T0).unwrap();
+    c.verify_cached_current_role(&role("pub-ecc"), &kept, T0)
+        .unwrap();
     // Version 2 is signed by a key the delegation does not name: refused online, and the
     // version 1 kept no longer holds offline either.
     let mut forged = publisher("ecc", 50);
@@ -542,8 +543,10 @@ fn a_kept_role_holds_offline_only_at_the_version_the_snapshot_lists() {
             .unwrap()
             .is_err()
     );
+    // The plain check (the maintainer's tools) still takes the version accepted.
+    c.verify_cached_role(&role("pub-ecc"), &kept, T0).unwrap();
     let e = c
-        .verify_cached_role(&role("pub-ecc"), &kept, T0)
+        .verify_cached_current_role(&role("pub-ecc"), &kept, T0)
         .unwrap_err();
     assert!(
         matches!(

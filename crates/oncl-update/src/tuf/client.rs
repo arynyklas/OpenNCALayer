@@ -978,6 +978,35 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
         bytes: &[u8],
         now: OffsetDateTime,
     ) -> Result<VerifiedRole, TufError> {
+        self.cached_role(role, bytes, now, false)
+    }
+
+    /// [`TufClient::verify_cached_role`], and the version accepted must be the one the saved
+    /// snapshot lists: a newer version the last [`TufClient::delegated`] refused leaves the
+    /// role untrusted offline too, not trusted at the version accepted before. What a client
+    /// that uses a kept role in place of the repository's checks it with.
+    ///
+    /// # Errors
+    ///
+    /// Those of [`TufClient::verify_cached_role`]; [`DelegationError::NotAccepted`] also if
+    /// the saved snapshot lists another version of the role, or none.
+    pub fn verify_cached_current_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+    ) -> Result<VerifiedRole, TufError> {
+        self.cached_role(role, bytes, now, true)
+    }
+
+    /// [`TufClient::verify_cached_role`], the snapshot's version required if `current`.
+    fn cached_role(
+        &self,
+        role: &RoleName,
+        bytes: &[u8],
+        now: OffsetDateTime,
+        current: bool,
+    ) -> Result<VerifiedRole, TufError> {
         let Some((root, targets, state)) = self.cached_targets(now)? else {
             return Err(delegation_error(role, DelegationError::NotAccepted));
         };
@@ -998,7 +1027,7 @@ impl<F: Fetcher, S: Store> TufClient<F, S> {
             .snapshot
             .as_ref()
             .and_then(|snapshot| snapshot.meta.get(&role.meta_name()).copied());
-        if listed != Some(accepted.version) {
+        if current && listed != Some(accepted.version) {
             return Err(delegation_error(role, DelegationError::NotAccepted));
         }
         // Only the file accepted: another file of the same version, even one signed by the

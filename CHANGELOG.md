@@ -7,7 +7,7 @@
 ### Добавлено
 
 - Каталог плагинов читает плагины сторонних издателей: предлагает и ставит их, обновляет и отзывает по правилам издателя и OpenNCALayer. Разрешения из записи каталога сверяются с пакетом, пакет с другими разрешениями не ставится. Если издателя отключили в каталоге, его плагины выключаются с уведомлением. Пока установлен плагин издателя, каталог проверяется раз в 1–3 часа.
-- Библиотека для Rust: `TufClient::verify_cached_top_level`, `CatalogBuilder::delegations_unavailable` и `PublisherPolicy::TARGET` в `oncl-update`, цели и роли издателей в `tuf::testing::Repo`, `PluginModules::builtin_modules` в `oncl-plugin`.
+- Библиотека для Rust: `TufClient::verify_cached_top_level` и `TufClient::verify_cached_current_role` (сохранённая роль только в версии, которую перечисляет сохранённый снимок), `CatalogBuilder::delegations_unavailable` и `PublisherPolicy::TARGET` в `oncl-update`, цели и роли издателей в `tuf::testing::Repo`, `PluginModules::builtin_modules` в `oncl-plugin`.
 - Настройка «Проверять отзывы плагинов» в окне «Настройки…» → «Обновления» (`updates.check_revocations` в `settings.json`, по умолчанию включена). При выключенных обновлениях она решает, проверяет ли OpenNCALayer каталог плагинов по расписанию; если снять и её, программа по расписанию к каталогу не обращается, а отзывы применяются только по кнопкам «Проверить сейчас» и «Обновить каталог» и к каталогу, скачанному по просьбе сайта. В `docs/user/updates.md` добавлен раздел «Сетевые запросы».
 
 ### Изменено

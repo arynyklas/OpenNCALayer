@@ -7,7 +7,7 @@
 #   /mnt/d/oncl-tuf-venv/bin/python xtask/assets/tuf-oracle/gen.py
 #
 # Writes crates/oncl-update/tests/fixtures/tuf/{valid,<attack>}/ (+ keys.json) and the delegated
-# repositories {delegated-*,cross-repo}/, then runs python-tuf's ngclient.Updater over a local
+# repositories delegated-*/, then runs python-tuf's ngclient.Updater over a local
 # http.server against every repository and prints a
 # verdict table. Everything is deterministic: the keys are SYNTHETIC test keys derived from fixed
 # seeds, Ed25519 signatures are deterministic, and the clock of the check is fixed (NOW below).
@@ -360,8 +360,9 @@ ATTACKS = [
 
 # ------------------------------------------------------------- delegated vectors
 #
-# A second repository, as `tuf/v2` is laid out (docs/design/publishers.md): its own root (new
-# root, snapshot and timestamp keys; the `targets` key shared with the valid repository), a
+# A second repository, as `tuf/v1` is laid out once it delegates (docs/design/publishers.md):
+# its own root (new root, snapshot and timestamp keys, named v2-* after a dropped design; the
+# `targets` key shared with the valid repository), a
 # top-level targets that always has `delegations`, and the delegated roles `pub-alpha` and
 # `pub-beta` of two third-party publishers, each delegated `plugins/<name>/*/*`, terminating,
 # threshold 1. The snapshot lists every metadata file with version, length and sha256.
@@ -697,13 +698,6 @@ DVECTORS = [
 ]
 
 
-def cross_repo(valid: dict[str, bytes]) -> dict[str, bytes]:
-    """The files of the valid (v1) repository behind the root of the delegated (v2) one."""
-    files = {k: v for k, v in valid.items() if not k.endswith(".root.json")}
-    files["metadata/1.root.json"] = V2_ROOT
-    return files
-
-
 def run_delegated(repo: Path, cache: Path, dl: Path, probes: list[str]) -> dict:
     """refresh, the top-level targets, then get_targetinfo of every probe path."""
     srv = serve(repo)
@@ -749,8 +743,8 @@ def check_delegated(repo: Path, prior: str | None, probes: list[str]) -> dict:
         return run_delegated(repo, cache, tmp / "dl", probes)
 
 
-def write_delegated(out: Path, valid: dict[str, bytes]) -> list[tuple[str, bool, str]]:
-    """Writes the delegated vectors and cross-repo; returns (name, as expected, python-tuf said)."""
+def write_delegated(out: Path) -> list[tuple[str, bool, str]]:
+    """Writes the delegated vectors; returns (name, as expected, python-tuf said)."""
     results = []
     base = DRepo().render()
     for v in DVECTORS:
@@ -775,20 +769,6 @@ def write_delegated(out: Path, valid: dict[str, bytes]) -> list[tuple[str, bool,
             "python_tuf": got,
         }, indent=2) + "\n")
         results.append((v.name, same, json.dumps(got, sort_keys=True)))
-    files = cross_repo(valid)
-    write_repo(out / "cross-repo", files)
-    got = check_delegated(out / "cross-repo", None, [])
-    (out / "cross-repo" / "expected.json").write_text(json.dumps({
-        "name": "cross-repo",
-        "attack": "the files of the valid (tuf/v1) repository served behind the root of delegated-valid "
-                  "(tuf/v2): its timestamp is signed by a key the v2 root does not trust",
-        "now": iso(NOW),
-        "trust_anchor": DELEGATED_ANCHOR,
-        "prior_state": None,
-        "contract": {"refresh": "refused at the timestamp: signature, before anything is saved", "roles": {}},
-        "python_tuf": got,
-    }, indent=2) + "\n")
-    results.append(("cross-repo", got["refresh"] == "UnsignedMetadataError", json.dumps(got, sort_keys=True)))
     return results
 
 
@@ -957,7 +937,7 @@ def main() -> int:
         if verdict != (divergence or "REJECT"):
             ok = False
 
-    delegated = write_delegated(out, valid)
+    delegated = write_delegated(out)
     ok = ok and all(same for _, same, _ in delegated)
 
     w = max(len(r[0]) for r in results)

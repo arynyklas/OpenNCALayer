@@ -1,10 +1,10 @@
 //! The command line of `cargo xtask tuf` (`docs/dev/release.md` says when each is run).
 //!
-//! Two repositories (`docs/design/publishers.md`): `tuf/v1`, the default of every command,
-//! and `tuf/v2`, chosen with `--repo v2`. `tuf update` and `tuf check` work on both by
-//! default (`--repo both`): `--out`/`--dir` name `tuf/v1`, `--v2-out`/`--v2-dir` name
-//! `tuf/v2`, by default the directory `v2` beside the one of `tuf/v1`; a `tuf/v2` that is not
-//! there yet is skipped.
+//! One repository, `tuf/v1`. Its snapshot mode is the file `tuf/v1.toml`
+//! ([`super::repo::SnapshotMode`]): `--config` names it, by default the file beside
+//! `--out` for `update` and `root` (which write the repository), and the workspace's
+//! `tuf/v1.toml` for `check` (also run on the copy Pages publishes), `snapshot` and
+//! `timestamp`.
 //!
 //! Exit codes: 0 when the command did what it says (`tuf check` also when it found only
 //! warnings, or no repository yet); 1 when it refused, failed, or `tuf check` found
@@ -17,29 +17,18 @@ use clap::Subcommand;
 use oncl_update::tuf::HttpFetcher;
 use time::OffsetDateTime;
 
-use super::check::{self, Expiry, TimestampMode};
-use super::check_v2::{self, Stage};
+use super::check::{self, Expiry, Stage};
 use super::published::{self, Published};
-use super::repo::Layout;
+use super::repo::{self, SnapshotMode};
 use super::timestamp::KeySource;
 use super::{
-    ANCHOR, PassphraseSource, Problem, REPO_DIR, V2_ANCHOR, V2_REPO_DIR, init, parse_time, root,
-    show_time, snapshot, timestamp, update,
+    ANCHOR, CONFIG, PassphraseSource, Problem, REPO_DIR, init, parse_time, root, show_time,
+    snapshot, timestamp, update,
 };
 use crate::publishers::PUBLISHERS_DIR;
 
-/// Which repositories a command works on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum Repos {
-    /// `tuf/v1` only.
-    V1,
-    /// `tuf/v2` only.
-    V2,
-    /// `tuf/v1`, and `tuf/v2` if it is there.
-    Both,
-}
-
-/// `cargo xtask tuf …`: the operator's side of the TUF repositories of the update indexes.
+/// `cargo xtask tuf …`: the operator's side of the TUF repository of the update indexes and
+/// the publishers' plugins.
 #[derive(Subcommand)]
 pub enum TufCommand {
     /// The owner's ceremony: make the root, targets, snapshot and timestamp keys, root
@@ -47,21 +36,15 @@ pub enum TufCommand {
     /// root, targets and snapshot keys are written encrypted with one passphrase (asked
     /// twice, at least 12 characters; one passphrase for the three is the owner's choice);
     /// the timestamp key is one unencrypted line, for the GitHub secret
-    /// `TUF_TIMESTAMP_KEY`. Nothing existing is overwritten. With `--repo v2`: the ceremony
-    /// of `tuf/v2`, a new root key (encrypted), online snapshot and timestamp keys
-    /// (`v2-snapshot.key`, `v2-timestamp.key`: one line each, for the GitHub secrets
-    /// `TUF_V2_SNAPSHOT_KEY` and `TUF_V2_TIMESTAMP_KEY`) and the targets key of `tuf/v1`;
-    /// a trust anchor is written only with `--anchor`.
+    /// `TUF_TIMESTAMP_KEY`. The snapshot starts offline. Nothing existing is overwritten.
     Init {
         /// The directory of the secret keys: outside the repository, or git-ignored.
         #[arg(long)]
         keys: PathBuf,
-        /// The repository directory [default: `tuf/v1` (`tuf/v2` with `--repo v2`) of the
-        /// workspace].
+        /// The repository directory [default: `tuf/v1` of the workspace].
         #[arg(long)]
         out: Option<PathBuf>,
-        /// The trust anchor file [default: `crates/oncl-update/keys/root.json`; none with
-        /// `--repo v2`].
+        /// The trust anchor file [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
         /// The signing time, RFC 3339 or Unix seconds [default: now].
@@ -71,21 +54,15 @@ pub enum TufCommand {
         /// (automation and tests).
         #[arg(long)]
         passphrase_file: Option<PathBuf>,
-        /// The repository.
-        #[arg(long, value_enum, default_value_t = Layout::V1)]
-        repo: Layout,
-        /// With `--repo v2`: `tuf/v1`, whose targets key `tuf/v2` shares [default: `v1`
-        /// beside the repository directory].
-        #[arg(long)]
-        v1: Option<PathBuf>,
     },
-    /// Sign new targets and snapshot over `updates/v1/{stable,beta}.json` (those that
-    /// exist): copies the indexes under their hashes and writes `metadata/<N+1>.targets.json`
-    /// and `<N+1>.snapshot.json`, valid for 30 days. With nothing changed it says "up to
-    /// date" and writes nothing; `--refresh` signs new versions anyway, to push the expiry
-    /// forward. Never touches the timestamp. In `tuf/v2` (if it is there) it signs new
-    /// top-level targets over the same indexes and `publishers.json`, delegating to the
-    /// active publishers of `publishers/`, and no snapshot (CI signs that one).
+    /// Sign new top-level targets over `updates/v1/{stable,beta}.json` (those that exist)
+    /// and, once `publishers/` has an entry, over `publishers.json`, delegating to the active
+    /// publishers: copies the target files under their hashes and writes
+    /// `metadata/<N+1>.targets.json` and, while the snapshot is offline,
+    /// `<N+1>.snapshot.json`, valid for 30 days. A publisher moved to `retired` and
+    /// `revoke_all` are settled into its `publisher.toml` first. With nothing changed it
+    /// says "up to date" and writes nothing; `--refresh` signs new versions anyway, to push
+    /// the expiry forward. Never touches the timestamp.
     Update {
         /// The directory of the secret keys.
         #[arg(long)]
@@ -93,19 +70,16 @@ pub enum TufCommand {
         /// The directory of the indexes [default: `updates/v1` of the workspace].
         #[arg(long)]
         index: Option<PathBuf>,
-        /// The directory of `tuf/v1` [default: `tuf/v1` of the workspace].
+        /// The repository directory [default: `tuf/v1` of the workspace].
         #[arg(long)]
         out: Option<PathBuf>,
-        /// The directory of `tuf/v2` [default: `v2` beside `tuf/v1`].
-        #[arg(long)]
-        v2_out: Option<PathBuf>,
         /// The registry of the publishers [default: `publishers` of the workspace].
         #[arg(long)]
         publishers: Option<PathBuf>,
-        /// The repositories.
-        #[arg(long, value_enum, default_value_t = Repos::Both)]
-        repo: Repos,
-        /// Sign new versions even if the indexes did not change (the monthly job).
+        /// The snapshot mode [default: the `.toml` file beside the repository directory].
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Sign new versions even if nothing changed (the monthly job).
         #[arg(long)]
         refresh: bool,
         /// The signing time, RFC 3339 or Unix seconds [default: now].
@@ -115,18 +89,18 @@ pub enum TufCommand {
         #[arg(long)]
         passphrase_file: Option<PathBuf>,
     },
-    /// Sign the snapshot of a copy of `tuf/v2` for publication, with the online key
-    /// (version: Unix seconds, or one more than the published one; valid for 7 days). The
-    /// copy is verified first, every delegated role's newest file included; the published
-    /// snapshot (`--previous`, required unless `--first-publication`) is verified, kept
-    /// beside the new one, and the new one may drop or lower nothing it listed. Run by Pages:
-    /// the file is never committed. The key is never printed.
+    /// Sign the snapshot of a copy of `tuf/v1` for publication with the online key, once the
+    /// snapshot is online (version: Unix seconds, or one more than the published one; valid
+    /// for 7 days). The copy is verified first, every delegated role's newest file
+    /// included; the published snapshot (`--previous`) is verified, kept beside the new one,
+    /// and the new one may drop or lower nothing it listed. If the published site cannot be
+    /// read or verified, nothing is signed. Run by Pages: the file is never committed. The
+    /// key is never printed.
     Snapshot {
-        /// The repository directory (a copy of `tuf/v2` for publication).
+        /// The repository directory (a copy of `tuf/v1` for publication).
         #[arg(long)]
         out: PathBuf,
-        /// The trust anchor of `tuf/v2` [default: `tuf/v2/metadata/1.root.json` of the
-        /// workspace].
+        /// The trust anchor [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
         /// The indexes the targets must be [default: `updates/v1` of the workspace].
@@ -135,14 +109,14 @@ pub enum TufCommand {
         /// The registry of the publishers [default: `publishers` of the workspace].
         #[arg(long)]
         publishers: Option<PathBuf>,
-        /// The published `tuf/v2`, `https://…/tuf/v2/`, whose snapshot the new one extends;
+        /// The snapshot mode [default: `tuf/v1.toml` of the workspace].
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// The published `tuf/v1`, `https://…/tuf/v1/`, whose snapshot the new one extends;
         /// its timestamp must be there.
-        #[arg(long, required_unless_present = "first_publication")]
-        previous: Option<String>,
-        /// The first publication of `tuf/v2`: there is no published snapshot to extend.
-        #[arg(long, conflicts_with = "previous")]
-        first_publication: bool,
-        /// The environment variable that holds the key line [default: TUF_V2_SNAPSHOT_KEY].
+        #[arg(long)]
+        previous: String,
+        /// The environment variable that holds the key line [default: TUF_SNAPSHOT_KEY].
         #[arg(long, conflicts_with = "key_file")]
         key_env: Option<String>,
         /// A key file instead of the environment.
@@ -152,29 +126,30 @@ pub enum TufCommand {
         #[arg(long, value_parser = parse_time)]
         now: Option<OffsetDateTime>,
     },
-    /// Sign `metadata/timestamp.json` for the newest committed snapshot in `--out`, with the
+    /// Sign `metadata/timestamp.json` for the newest snapshot in `--out` (the owner's while
+    /// the snapshot is offline, the one `tuf snapshot` signed once it is online), with the
     /// online key (version: Unix seconds, valid for 7 days). Verifies the repository first
-    /// and refuses a snapshot, targets or root that has expired or expires within a day. Run
-    /// by Pages on the copy that is published: the file is never committed. The key is
-    /// never printed. With `--repo v2`: over the snapshot `tuf snapshot` signed.
+    /// and refuses a snapshot, targets or root that has expired or expires within a day.
+    /// Run by Pages on the copy that is published: the file is never committed. The key is
+    /// never printed.
     Timestamp {
         /// The repository directory (a copy for publication).
         #[arg(long)]
         out: PathBuf,
         /// The trust anchor the repository is verified from [default:
-        /// `crates/oncl-update/keys/root.json`; `tuf/v2/metadata/1.root.json` with `--repo
-        /// v2`].
+        /// `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
         /// The indexes the targets must be [default: `updates/v1` of the workspace].
         #[arg(long)]
         index: Option<PathBuf>,
-        /// With `--repo v2`: the registry of the publishers [default: `publishers` of the
-        /// workspace].
+        /// The registry of the publishers [default: `publishers` of the workspace].
         #[arg(long)]
         publishers: Option<PathBuf>,
-        /// The environment variable that holds the key line [default: TUF_TIMESTAMP_KEY;
-        /// TUF_V2_TIMESTAMP_KEY with `--repo v2`].
+        /// The snapshot mode [default: `tuf/v1.toml` of the workspace].
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// The environment variable that holds the key line [default: TUF_TIMESTAMP_KEY].
         #[arg(long, conflicts_with = "key_file")]
         key_env: Option<String>,
         /// A key file instead of the environment.
@@ -183,34 +158,37 @@ pub enum TufCommand {
         /// The signing time, RFC 3339 or Unix seconds [default: now].
         #[arg(long, value_parser = parse_time)]
         now: Option<OffsetDateTime>,
-        /// The repository.
-        #[arg(long, value_enum, default_value_t = Layout::V1)]
-        repo: Layout,
     },
     /// The next root (version N+1, valid for 365 days), signed by the keys of the root in
     /// force: a renewal when no `--rotate-*` is given, else a rotation of those roles'
     /// keys (the new root key signs too). New keys are written next to the old as
-    /// `<role>.v<N>.key` (`v2-<role>.v<N>.key` in `tuf/v2`). In `tuf/v2` the snapshot key
-    /// is an online key too, and the targets keys are always those of `tuf/v1`'s root in
-    /// force: the shared targets key is rotated in `tuf/v1`, then `tuf/v2` follows.
+    /// `<role>.v<N>.key`. `--rotate-snapshot --online` moves the snapshot key into CI: the
+    /// new key is an online line for the GitHub secret `TUF_SNAPSHOT_KEY`, and the snapshot
+    /// mode file gets `snapshot = "online"`.
     Root {
         /// The directory of the secret keys.
         #[arg(long)]
         keys: PathBuf,
-        /// The repository directory [default: `tuf/v1` (`tuf/v2` with `--repo v2`) of the
-        /// workspace].
+        /// The repository directory [default: `tuf/v1` of the workspace].
         #[arg(long)]
         out: Option<PathBuf>,
+        /// The snapshot mode [default: the `.toml` file beside the repository directory].
+        #[arg(long)]
+        config: Option<PathBuf>,
         /// Replace the root key.
         #[arg(long)]
         rotate_root: bool,
-        /// Replace the targets key (then `tuf update` signs new versions); `tuf/v1` only.
+        /// Replace the targets key (then `tuf update` signs new versions).
         #[arg(long)]
         rotate_targets: bool,
-        /// Replace the snapshot key (then `tuf update` signs new versions; in `tuf/v2`,
-        /// replace the GitHub secret).
+        /// Replace the snapshot key (offline: then `tuf update` signs new versions; online:
+        /// then replace the GitHub secret).
         #[arg(long)]
         rotate_snapshot: bool,
+        /// With `--rotate-snapshot`: the new snapshot key is an online key, and the snapshot
+        /// goes online.
+        #[arg(long, requires = "rotate_snapshot")]
+        online: bool,
         /// Replace the timestamp key (then replace the GitHub secret).
         #[arg(long)]
         rotate_timestamp: bool,
@@ -220,49 +198,35 @@ pub enum TufCommand {
         /// Read the passphrase from the first line of this file instead of asking.
         #[arg(long)]
         passphrase_file: Option<PathBuf>,
-        /// The repository.
-        #[arg(long, value_enum, default_value_t = Layout::V1)]
-        repo: Layout,
-        /// With `--repo v2`: `tuf/v1`, whose targets key `tuf/v2` shares [default: `v1`
-        /// beside the repository directory].
-        #[arg(long)]
-        v1: Option<PathBuf>,
     },
-    /// Verify a repository offline with the client's code over the directory: the chain of
-    /// roots from the trust anchor, the newest snapshot and targets, every file listed, no
-    /// stray file, the targets equal to the indexes in the tree, history unchanged against
-    /// `--base`, expiry. With neither the directory nor the anchor it says "no TUF
-    /// repository yet" and succeeds. In `tuf/v2` also the delegations and `publishers.json`
-    /// against `publishers/`, the newest file of every role, every version of every role, and
-    /// with a snapshot the guard of the online snapshot; the two repositories share no key
-    /// but the targets key and list the same indexes. Findings are `error[<code>]` (exit 1)
+    /// Verify the repository offline with the client's code over the directory: the chain of
+    /// roots from the trust anchor, the newest snapshot (unless it is online and this is the
+    /// committed tree) and targets, every file listed, the newest file of every role, no
+    /// stray file, the targets equal to the indexes in the tree, `publishers.json` and the
+    /// delegations equal to what `publishers/` makes, no entry of `publishers/` removed,
+    /// history unchanged against `--base`, expiry. With neither the directory nor the anchor
+    /// it says "no TUF repository yet" and succeeds. Findings are `error[<code>]` (exit 1)
     /// and `warning[<code>]`; the codes are in `docs/dev/release.md`.
     Check {
-        /// The directory of `tuf/v1` [default: `tuf/v1` of the workspace].
+        /// The repository directory [default: `tuf/v1` of the workspace].
         #[arg(long)]
         dir: Option<PathBuf>,
-        /// The directory of `tuf/v2` [default: `v2` beside `tuf/v1`].
-        #[arg(long)]
-        v2_dir: Option<PathBuf>,
         /// The directory of the indexes [default: `updates/v1` of the workspace].
         #[arg(long)]
         index: Option<PathBuf>,
         /// The registry of the publishers [default: `publishers` of the workspace].
         #[arg(long)]
         publishers: Option<PathBuf>,
-        /// The trust anchor of `tuf/v1` [default: `crates/oncl-update/keys/root.json`].
+        /// The trust anchor [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
-        /// The trust anchor of `tuf/v2` [default: its own `metadata/1.root.json`].
+        /// The snapshot mode [default: `tuf/v1.toml` of the workspace].
         #[arg(long)]
-        v2_anchor: Option<PathBuf>,
-        /// The repositories.
-        #[arg(long, value_enum, default_value_t = Repos::Both)]
-        repo: Repos,
+        config: Option<PathBuf>,
         /// The time to judge expiry at, RFC 3339 or Unix seconds [default: now].
         #[arg(long, value_parser = parse_time)]
         now: Option<OffsetDateTime>,
-        /// Targets and snapshot with fewer days left are expiring.
+        /// Targets and an offline snapshot with fewer days left are expiring.
         #[arg(long, default_value_t = 10)]
         min_days: i64,
         /// The root with fewer days left is expiring.
@@ -272,24 +236,21 @@ pub enum TufCommand {
         #[arg(long)]
         fail_on_expiring: bool,
         /// The git revision whose repository this one extends: published files may not
-        /// change or go, no version may go back.
+        /// change or go, no version may go back, no entry of `publishers/` may go.
         #[arg(long)]
         base: Option<String>,
         /// The directory is the committed tree: there must be no timestamp (the default
-        /// requires one, as in a repository about to be published), and in `tuf/v2` no
-        /// snapshot.
+        /// requires one, as in a repository about to be published).
         #[arg(long)]
         no_timestamp: bool,
     },
     /// The client over HTTPS against the published site (the smoke check after a
-    /// deployment): the whole chain, and every index target. With `--repo v2` also
-    /// `publishers.json` and every delegated role.
+    /// deployment): the whole chain, every target, and every delegated role.
     VerifyPublished {
-        /// The base URL of the repository, `https://…/tuf/v1/` (`…/tuf/v2/`).
+        /// The base URL of the repository, `https://…/tuf/v1/`.
         #[arg(long)]
         url: String,
-        /// The trust anchor [default: `crates/oncl-update/keys/root.json`;
-        /// `tuf/v2/metadata/1.root.json` with `--repo v2`].
+        /// The trust anchor [default: `crates/oncl-update/keys/root.json`].
         #[arg(long)]
         anchor: Option<PathBuf>,
         /// A repository that is not published yet (no timestamp) is not a failure.
@@ -298,9 +259,6 @@ pub enum TufCommand {
         /// The time to judge expiry at [default: now].
         #[arg(long, value_parser = parse_time)]
         now: Option<OffsetDateTime>,
-        /// The repository.
-        #[arg(long, value_enum, default_value_t = Layout::V1)]
-        repo: Layout,
     },
 }
 
@@ -319,10 +277,9 @@ fn workspace(path: Option<PathBuf>, default: &str) -> PathBuf {
     path.unwrap_or_else(|| oncl_testkit::workspace_root().join(default))
 }
 
-/// The directory `name` beside `dir` (`tuf/v2` beside `tuf/v1`).
-fn sibling(dir: &Path, name: &str) -> PathBuf {
-    dir.parent()
-        .map_or_else(|| PathBuf::from(name), |parent| parent.join(name))
+/// The snapshot mode of `config`, or of the file beside the repository `dir`.
+fn mode_beside(config: Option<PathBuf>, dir: &Path) -> anyhow::Result<SnapshotMode> {
+    repo::read_mode(&config.unwrap_or_else(|| repo::config_path(dir)))
 }
 
 fn passphrase(file: Option<PathBuf>) -> PassphraseSource {
@@ -333,78 +290,62 @@ fn now_or(now: Option<OffsetDateTime>) -> OffsetDateTime {
     now.unwrap_or_else(OffsetDateTime::now_utc)
 }
 
-fn print_init(made: &init::Initialized) {
-    println!("tuf init: key ids");
-    for (name, id) in &made.key_ids {
-        println!("  {name}: {id}");
-    }
-    println!("tuf init: secret keys (keep them offline, never in the repository)");
-    for file in &made.key_files {
-        println!("  {}", file.display());
-    }
-    windows_key_warning("tuf init");
-    println!("tuf init: wrote {}", made.root.display());
-}
-
-fn print_v2_update(outcome: &update::V2Outcome) {
+fn print_update(outcome: &update::Outcome) {
     match outcome {
-        update::V2Outcome::UpToDate { targets } => println!(
-            "tuf update: tuf/v2: up to date (targets {targets} lists the indexes and the \
-             publishers); nothing written"
-        ),
-        update::V2Outcome::Written(w) => {
-            println!("tuf update: tuf/v2: {}", w.reason);
-            for file in &w.files {
-                println!("tuf update: wrote {}", file.display());
-            }
-            println!(
-                "tuf update: tuf/v2: targets {} delegating to {} publisher(s), valid until {}; \
-                 CI signs its snapshot when Pages is published",
-                w.targets,
-                w.delegated,
-                show_time(w.expires)
-            );
-        }
-    }
-}
-
-fn print_v1_update(outcome: &update::Outcome) {
-    match outcome {
-        update::Outcome::UpToDate { targets, snapshot } => println!(
-            "tuf update: up to date (targets {targets}, snapshot {snapshot} list the \
-             indexes); nothing written"
-        ),
+        update::Outcome::UpToDate { targets, snapshot } => match snapshot {
+            Some(snapshot) => println!(
+                "tuf update: up to date (targets {targets}, snapshot {snapshot} list the \
+                 indexes and the publishers); nothing written"
+            ),
+            None => println!(
+                "tuf update: up to date (targets {targets} lists the indexes and the \
+                 publishers); nothing written"
+            ),
+        },
         update::Outcome::Written(w) => {
             println!("tuf update: {}", w.reason);
+            for s in &w.settled {
+                println!("tuf update: settled {}", s.path.display());
+                for r in &s.added {
+                    println!(
+                        "tuf update:   {} revokes {} {} (date {})",
+                        s.name, r.id, r.version, r.date
+                    );
+                }
+            }
             for file in &w.files {
                 println!("tuf update: wrote {}", file.display());
             }
-            println!(
-                "tuf update: targets {}, snapshot {}, valid until {}",
-                w.targets,
-                w.snapshot,
-                show_time(w.expires)
-            );
+            let delegated = w
+                .delegated
+                .map_or_else(String::new, |n| format!(" delegating to {n} publisher(s)"));
+            match w.snapshot {
+                Some(snapshot) => println!(
+                    "tuf update: targets {}{delegated}, snapshot {snapshot}, valid until {}",
+                    w.targets,
+                    show_time(w.expires)
+                ),
+                None => println!(
+                    "tuf update: targets {}{delegated}, valid until {}; the snapshot is online: \
+                     CI signs it when Pages is published",
+                    w.targets,
+                    show_time(w.expires)
+                ),
+            }
         }
     }
 }
 
-/// Prints the findings of one repository (`label` before each message, empty for
-/// `tuf/v1`), and counts its problems.
-fn print_report(
-    label: &str,
-    notes: &[String],
-    warnings: &[Problem],
-    problems: &[Problem],
-) -> usize {
+/// Prints the findings, and counts the problems.
+fn print_report(notes: &[String], warnings: &[Problem], problems: &[Problem]) -> usize {
     for note in notes {
-        println!("tuf check: {label}{note}");
+        println!("tuf check: {note}");
     }
     for w in warnings {
-        println!("tuf check: warning[{}]: {label}{}", w.code, w.message);
+        println!("tuf check: warning[{}]: {}", w.code, w.message);
     }
     for p in problems {
-        eprintln!("tuf check: error[{}]: {label}{}", p.code, p.message);
+        eprintln!("tuf check: error[{}]: {}", p.code, p.message);
     }
     problems.len()
 }
@@ -429,12 +370,7 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             anchor,
             now,
             passphrase_file: file,
-            repo: Layout::V1,
-            v1,
         } => {
-            if v1.is_some() {
-                bail!("--v1 is for --repo v2");
-            }
             let out = workspace(out, REPO_DIR);
             let anchor = workspace(anchor, ANCHOR);
             let source = passphrase(file);
@@ -445,7 +381,16 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
                 now: now_or(now),
                 passphrase: &source,
             })?;
-            print_init(&made);
+            println!("tuf init: key ids");
+            for (name, id) in &made.key_ids {
+                println!("  {name}: {id}");
+            }
+            println!("tuf init: secret keys (keep them offline, never in the repository)");
+            for file in &made.key_files {
+                println!("  {}", file.display());
+            }
+            windows_key_warning("tuf init");
+            println!("tuf init: wrote {}", made.root.display());
             println!("tuf init: wrote the trust anchor {}", made.anchor.display());
             println!(
                 "tuf init: the timestamp key is the single line of timestamp.key: put it in the \
@@ -454,96 +399,28 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             );
             Ok(())
         }
-        TufCommand::Init {
-            keys,
-            out,
-            anchor,
-            now,
-            passphrase_file: file,
-            repo: Layout::V2,
-            v1,
-        } => {
-            let out = workspace(out, V2_REPO_DIR);
-            let v1 = v1.unwrap_or_else(|| sibling(&out, "v1"));
-            let source = passphrase(file);
-            let made = init::init_v2(&init::V2Options {
-                keys: &keys,
-                out: &out,
-                v1: &v1,
-                anchor: anchor.as_deref(),
-                now: now_or(now),
-                passphrase: &source,
-            })?;
-            print_init(&made);
-            if anchor.is_some() {
-                println!("tuf init: wrote the trust anchor {}", made.anchor.display());
-            }
-            println!(
-                "tuf init: the snapshot and timestamp keys of tuf/v2 are the single lines of \
-                 v2-snapshot.key and v2-timestamp.key: put them in the GitHub secrets \
-                 TUF_V2_SNAPSHOT_KEY of the environment tuf-snapshot and TUF_V2_TIMESTAMP_KEY \
-                 of the environment tuf-timestamp, then keep no other copy; then `cargo xtask \
-                 tuf update` signs the first targets of tuf/v2"
-            );
-            Ok(())
-        }
         TufCommand::Update {
             keys,
             index,
             out,
-            v2_out,
             publishers,
-            repo,
+            config,
             refresh,
             now,
             passphrase_file: file,
         } => {
-            let source = passphrase(file);
-            let index = workspace(index, crate::index::INDEX_DIR);
-            let v1 = workspace(out, REPO_DIR);
-            let v2 = v2_out.unwrap_or_else(|| sibling(&v1, "v2"));
-            let publishers = workspace(publishers, PUBLISHERS_DIR);
-            let now = now_or(now);
-            match repo {
-                Repos::V1 => print_v1_update(&update::update(&update::Options {
-                    keys: &keys,
-                    index: &index,
-                    out: &v1,
-                    refresh,
-                    now,
-                    passphrase: &source,
-                })?),
-                Repos::V2 => print_v2_update(&update::update_v2(&update::V2Options {
-                    keys: &keys,
-                    index: &index,
-                    out: &v2,
-                    v1: Some(&v1),
-                    publishers: &publishers,
-                    refresh,
-                    now,
-                    passphrase: &source,
-                })?),
-                Repos::Both => {
-                    let both = update::update_both(&update::BothOptions {
-                        keys: &keys,
-                        index: &index,
-                        v1: &v1,
-                        v2: &v2,
-                        publishers: &publishers,
-                        refresh,
-                        now,
-                        passphrase: &source,
-                    })?;
-                    print_v1_update(&both.v1);
-                    match &both.v2 {
-                        Some(outcome) => print_v2_update(outcome),
-                        None => println!(
-                            "tuf update: no tuf/v2 in {} yet: only tuf/v1 was updated",
-                            v2.display()
-                        ),
-                    }
-                }
-            }
+            let out = workspace(out, REPO_DIR);
+            let mode = mode_beside(config, &out)?;
+            print_update(&update::update(&update::Options {
+                keys: &keys,
+                index: &workspace(index, crate::index::INDEX_DIR),
+                out: &out,
+                publishers: &workspace(publishers, PUBLISHERS_DIR),
+                mode,
+                refresh,
+                now: now_or(now),
+                passphrase: &passphrase(file),
+            })?);
             Ok(())
         }
         TufCommand::Snapshot {
@@ -551,37 +428,33 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             anchor,
             index,
             publishers,
+            config,
             previous,
-            first_publication: _,
             key_env,
             key_file,
             now,
         } => {
-            let source = key_source(key_file, key_env, "TUF_V2_SNAPSHOT_KEY");
-            let options = snapshot::Options {
-                out: &out,
-                anchor: &workspace(anchor, V2_ANCHOR),
-                index: &workspace(index, crate::index::INDEX_DIR),
-                publishers: &workspace(publishers, PUBLISHERS_DIR),
-                key: &source,
-                now: now_or(now),
-            };
+            let config = workspace(config, CONFIG);
             let transport = oncl_pki::http::UreqTransport::default();
-            let signed = match &previous {
-                Some(url) => {
-                    let fetcher = HttpFetcher::new(&transport, url)
-                        .map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
-                    snapshot::snapshot(&options, snapshot::Previous::Published(&fetcher))?
-                }
-                // clap allows no `--previous` only with `--first-publication`.
-                None => snapshot::snapshot(&options, snapshot::Previous::FirstPublication)?,
-            };
-            if let Some((version, path)) = &signed.previous {
-                println!(
-                    "tuf snapshot: kept the published snapshot {version} beside it: {}",
-                    path.display()
-                );
-            }
+            let fetcher = HttpFetcher::new(&transport, &previous)
+                .map_err(|e| anyhow::anyhow!("{previous}: {e}"))?;
+            let signed = snapshot::snapshot(
+                &snapshot::Options {
+                    out: &out,
+                    anchor: &workspace(anchor, ANCHOR),
+                    index: &workspace(index, crate::index::INDEX_DIR),
+                    publishers: &workspace(publishers, PUBLISHERS_DIR),
+                    mode: repo::read_mode(&config)?,
+                    key: &key_source(key_file, key_env, "TUF_SNAPSHOT_KEY"),
+                    now: now_or(now),
+                },
+                &fetcher,
+            )?;
+            println!(
+                "tuf snapshot: kept the published snapshot {} beside it: {}",
+                signed.previous.0,
+                signed.previous.1.display()
+            );
             println!(
                 "tuf snapshot: wrote {} (version {}, targets {}, {} role file(s), valid until \
                  {})",
@@ -598,34 +471,21 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             anchor,
             index,
             publishers,
+            config,
             key_env,
             key_file,
             now,
-            repo,
         } => {
-            let index = workspace(index, crate::index::INDEX_DIR);
-            let signed = match repo {
-                Layout::V1 => {
-                    if publishers.is_some() {
-                        bail!("--publishers is for --repo v2");
-                    }
-                    timestamp::timestamp(&timestamp::Options {
-                        out: &out,
-                        anchor: &workspace(anchor, ANCHOR),
-                        index: &index,
-                        key: &key_source(key_file, key_env, "TUF_TIMESTAMP_KEY"),
-                        now: now_or(now),
-                    })?
-                }
-                Layout::V2 => timestamp::timestamp_v2(&timestamp::V2Options {
-                    out: &out,
-                    anchor: &workspace(anchor, V2_ANCHOR),
-                    index: &index,
-                    publishers: &workspace(publishers, PUBLISHERS_DIR),
-                    key: &key_source(key_file, key_env, "TUF_V2_TIMESTAMP_KEY"),
-                    now: now_or(now),
-                })?,
-            };
+            let config = workspace(config, CONFIG);
+            let signed = timestamp::timestamp(&timestamp::Options {
+                out: &out,
+                anchor: &workspace(anchor, ANCHOR),
+                index: &workspace(index, crate::index::INDEX_DIR),
+                publishers: &workspace(publishers, PUBLISHERS_DIR),
+                mode: repo::read_mode(&config)?,
+                key: &key_source(key_file, key_env, "TUF_TIMESTAMP_KEY"),
+                now: now_or(now),
+            })?;
             println!(
                 "tuf timestamp: wrote {} (version {}, snapshot {}, valid until {})",
                 signed.path.display(),
@@ -638,54 +498,29 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
         TufCommand::Root {
             keys,
             out,
+            config,
             rotate_root,
             rotate_targets,
             rotate_snapshot,
+            online,
             rotate_timestamp,
             now,
             passphrase_file: file,
-            repo,
-            v1,
         } => {
-            let source = passphrase(file);
-            let made = match repo {
-                Layout::V1 => {
-                    if v1.is_some() {
-                        bail!("--v1 is for --repo v2");
-                    }
-                    root::root(&root::Options {
-                        keys: &keys,
-                        out: &workspace(out, REPO_DIR),
-                        rotate_root,
-                        rotate_targets,
-                        rotate_snapshot,
-                        rotate_timestamp,
-                        now: now_or(now),
-                        passphrase: &source,
-                    })?
-                }
-                Layout::V2 => {
-                    if rotate_targets {
-                        bail!(
-                            "tuf/v2 shares the targets key of tuf/v1: rotate it there (`cargo \
-                             xtask tuf root --rotate-targets`), then `cargo xtask tuf root \
-                             --repo v2` follows it"
-                        );
-                    }
-                    let out = workspace(out, V2_REPO_DIR);
-                    let v1 = v1.unwrap_or_else(|| sibling(&out, "v1"));
-                    root::root_v2(&root::V2Options {
-                        keys: &keys,
-                        out: &out,
-                        v1: &v1,
-                        rotate_root,
-                        rotate_snapshot,
-                        rotate_timestamp,
-                        now: now_or(now),
-                        passphrase: &source,
-                    })?
-                }
-            };
+            let out = workspace(out, REPO_DIR);
+            let config = config.unwrap_or_else(|| repo::config_path(&out));
+            let made = root::root(&root::Options {
+                keys: &keys,
+                out: &out,
+                config: &config,
+                rotate_root,
+                rotate_targets,
+                rotate_snapshot,
+                rotate_timestamp,
+                online,
+                now: now_or(now),
+                passphrase: &passphrase(file),
+            })?;
             println!(
                 "tuf root: wrote {} (root {}, valid until {})",
                 made.root.display(),
@@ -698,61 +533,42 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             if !made.new_keys.is_empty() {
                 windows_key_warning("tuf root");
             }
-            match repo {
-                Layout::V1 => {
-                    if rotate_targets || rotate_snapshot {
-                        println!(
-                            "tuf root: the committed targets and snapshot are signed by the old \
-                             keys: run `cargo xtask tuf update` now"
-                        );
-                    }
-                    if rotate_timestamp {
-                        println!(
-                            "tuf root: put the new timestamp key in the GitHub secret \
-                             TUF_TIMESTAMP_KEY (`gh secret set --env tuf-timestamp \
-                             TUF_TIMESTAMP_KEY < <file>`) before the root is merged"
-                        );
-                    }
-                    if rotate_targets {
-                        println!(
-                            "tuf root: tuf/v2 shares the targets key: run `cargo xtask tuf root \
-                             --repo v2` too, if it is there"
-                        );
-                    }
-                }
-                Layout::V2 => {
-                    if made.targets_changed {
-                        println!(
-                            "tuf root: the targets key of tuf/v2 now follows tuf/v1: run `cargo \
-                             xtask tuf update` now"
-                        );
-                    }
-                    if rotate_snapshot {
-                        println!(
-                            "tuf root: put the new snapshot key in the GitHub secret \
-                             TUF_V2_SNAPSHOT_KEY (`gh secret set --env tuf-snapshot \
-                             TUF_V2_SNAPSHOT_KEY < <file>`) before the root is merged"
-                        );
-                    }
-                    if rotate_timestamp {
-                        println!(
-                            "tuf root: put the new timestamp key in the GitHub secret \
-                             TUF_V2_TIMESTAMP_KEY (`gh secret set --env tuf-timestamp \
-                             TUF_V2_TIMESTAMP_KEY < <file>`) before the root is merged"
-                        );
-                    }
-                }
+            if let Some(config) = &made.config {
+                println!(
+                    "tuf root: wrote {} (snapshot = \"{}\"): commit it with the root",
+                    config.display(),
+                    made.mode.as_str()
+                );
+            }
+            let offline = made.mode == SnapshotMode::Offline;
+            if rotate_targets || (rotate_snapshot && offline) {
+                println!(
+                    "tuf root: the committed targets and snapshot are signed by the old keys: \
+                     run `cargo xtask tuf update` now"
+                );
+            }
+            if rotate_snapshot && !offline {
+                println!(
+                    "tuf root: put the new snapshot key in the GitHub secret TUF_SNAPSHOT_KEY \
+                     (`gh secret set --env tuf-snapshot TUF_SNAPSHOT_KEY < <file>`) before the \
+                     root is merged"
+                );
+            }
+            if rotate_timestamp {
+                println!(
+                    "tuf root: put the new timestamp key in the GitHub secret \
+                     TUF_TIMESTAMP_KEY (`gh secret set --env tuf-timestamp \
+                     TUF_TIMESTAMP_KEY < <file>`) before the root is merged"
+                );
             }
             Ok(())
         }
         TufCommand::Check {
             dir,
-            v2_dir,
             index,
             publishers,
             anchor,
-            v2_anchor,
-            repo,
+            config,
             now,
             min_days,
             min_root_days,
@@ -761,90 +577,40 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             no_timestamp,
         } => {
             let dir = workspace(dir, REPO_DIR);
-            let v2_dir = v2_dir.unwrap_or_else(|| sibling(&dir, "v2"));
-            let index = workspace(index, crate::index::INDEX_DIR);
-            let publishers = workspace(publishers, PUBLISHERS_DIR);
+            let mode = repo::read_mode(&workspace(config, CONFIG))?;
             let anchor = workspace(anchor, ANCHOR);
-            let now = now_or(now);
-            let expiry = Expiry {
-                min_days,
-                min_root_days,
-                fail: fail_on_expiring,
-            };
-            let mut failed = 0;
-            let mut checked = false;
-            let mut v1_verified = None;
-            if matches!(repo, Repos::V1 | Repos::Both) {
-                let outcome = check::check(&check::Options {
-                    dir: &dir,
-                    index: Some(&index),
-                    anchor: Some(&anchor),
-                    now,
-                    timestamp: if no_timestamp {
-                        TimestampMode::Absent
-                    } else {
-                        TimestampMode::Required
-                    },
-                    expiry,
-                    base: base.as_deref(),
-                })?;
-                match outcome {
-                    check::Outcome::NoRepository => println!(
-                        "tuf check: no TUF repository yet (no {}, no trust anchor {})",
-                        dir.display(),
-                        anchor.display()
-                    ),
-                    check::Outcome::Checked(report) => {
-                        checked = true;
-                        failed +=
-                            print_report("", &report.notes, &report.warnings, &report.problems);
-                        v1_verified = report.verified;
+            let outcome = check::check(&check::Options {
+                dir: &dir,
+                index: Some(&workspace(index, crate::index::INDEX_DIR)),
+                publishers: Some(&workspace(publishers, PUBLISHERS_DIR)),
+                anchor: Some(&anchor),
+                now: now_or(now),
+                stage: if no_timestamp {
+                    Stage::Tree
+                } else {
+                    Stage::Published
+                },
+                mode,
+                expiry: Expiry {
+                    min_days,
+                    min_root_days,
+                    fail: fail_on_expiring,
+                },
+                base: base.as_deref(),
+            })?;
+            match outcome {
+                check::Outcome::NoRepository => println!(
+                    "tuf check: no TUF repository yet (no {}, no trust anchor {})",
+                    dir.display(),
+                    anchor.display()
+                ),
+                check::Outcome::Checked(report) => {
+                    let failed = print_report(&report.notes, &report.warnings, &report.problems);
+                    if failed > 0 {
+                        bail!("tuf check: failed with {failed} problem(s)");
                     }
+                    println!("tuf check: ok");
                 }
-            }
-            if matches!(repo, Repos::V2 | Repos::Both) {
-                let outcome = check_v2::check(&check_v2::Options {
-                    dir: &v2_dir,
-                    index: Some(&index),
-                    publishers: Some(&publishers),
-                    anchor: v2_anchor.as_deref(),
-                    now,
-                    stage: if no_timestamp {
-                        Stage::Tree
-                    } else {
-                        Stage::Published
-                    },
-                    expiry,
-                    base: base.as_deref(),
-                })?;
-                match outcome {
-                    check_v2::Outcome::NoRepository => println!(
-                        "tuf check: tuf/v2: no repository yet (no {})",
-                        v2_dir.display()
-                    ),
-                    check_v2::Outcome::Checked(report) => {
-                        checked = true;
-                        let label = "tuf/v2: ";
-                        failed +=
-                            print_report(label, &report.notes, &report.warnings, &report.problems);
-                        if let (Some(v1), Some(v2)) = (&v1_verified, &report.verified) {
-                            let (problems, warnings) = match check::committed_chain(&dir) {
-                                Ok(v1_roots) => check_v2::cross(v1, &v1_roots, v2),
-                                Err(e) => {
-                                    (vec![Problem::new("client", format!("{e:#}"))], Vec::new())
-                                }
-                            };
-                            failed +=
-                                print_report("tuf/v1 and tuf/v2: ", &[], &warnings, &problems);
-                        }
-                    }
-                }
-            }
-            if failed > 0 {
-                bail!("tuf check: failed with {failed} problem(s)");
-            }
-            if checked {
-                println!("tuf check: ok");
             }
             Ok(())
         }
@@ -853,29 +619,14 @@ pub fn run(command: TufCommand) -> anyhow::Result<()> {
             anchor,
             allow_missing,
             now,
-            repo,
         } => {
-            let anchor = workspace(
-                anchor,
-                match repo {
-                    Layout::V1 => ANCHOR,
-                    Layout::V2 => V2_ANCHOR,
-                },
-            );
+            let anchor = workspace(anchor, ANCHOR);
             let anchor = std::fs::read(&anchor)
                 .with_context(|| format!("reading the trust anchor {}", anchor.display()))?;
             let transport = oncl_pki::http::UreqTransport::default();
             let fetcher =
                 HttpFetcher::new(&transport, &url).map_err(|e| anyhow::anyhow!("{url}: {e}"))?;
-            let verdict = match repo {
-                Layout::V1 => {
-                    published::verify_published(fetcher, &anchor, now_or(now), allow_missing)?
-                }
-                Layout::V2 => {
-                    published::verify_published_v2(fetcher, &anchor, now_or(now), allow_missing)?
-                }
-            };
-            match verdict {
+            match published::verify_published(fetcher, &anchor, now_or(now), allow_missing)? {
                 Published::NotPublished => println!(
                     "tuf verify-published: {url} has no timestamp yet (allowed): nothing verified"
                 ),

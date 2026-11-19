@@ -1,8 +1,8 @@
-//! The delegated repositories python-tuf read (`tests/fixtures/tuf/delegated-*` and
-//! `cross-repo`, see the README): a `tuf/v2` repository of two publishers, `pub-alpha` and
-//! `pub-beta`, and one mutation of it per vector. These tests read the files with the model
-//! alone: the top-level targets in the delegating profile, and each role's file against the
-//! keys its delegation names.
+//! The delegated repositories python-tuf read (`tests/fixtures/tuf/delegated-*`, see the
+//! README): a repository of two publishers, `pub-alpha` and `pub-beta`, as `tuf/v1` is laid
+//! out once it delegates, and one mutation of it per vector. These tests read the files with
+//! the model alone: the top-level targets in the delegating profile, and each role's file
+//! against the keys its delegation names.
 
 use std::path::{Path, PathBuf};
 
@@ -219,18 +219,6 @@ fn the_top_level_metadata_of_the_delegated_vectors_is_signed_by_their_root() {
     }
 }
 
-#[test]
-fn the_v1_timestamp_is_not_signed_by_the_v2_root() {
-    let e = verify_role(
-        &envelope("cross-repo", layout::TIMESTAMP_PATH),
-        &root(),
-        Role::Timestamp,
-        "cross-repo",
-    )
-    .unwrap_err();
-    assert!(matches!(e, TufError::Signature { valid: 0, .. }), "{e:?}");
-}
-
 // --- the whole client: `refresh` and `delegated` in the delegating profile ---
 
 mod client {
@@ -432,15 +420,6 @@ mod client {
             assert!(matches!(e, TufError::Malformed { .. }), "{name}: {e:?}");
             assert!(c.store().load().unwrap().delegated.is_empty(), "{name}");
         }
-    }
-
-    #[test]
-    fn the_v1_files_behind_the_v2_root_are_refused_before_anything_is_saved() {
-        let mut store = MemoryStore::default();
-        let e = run("cross-repo", &mut store).unwrap_err();
-        assert!(matches!(e, TufError::Signature { .. }), "{e:?}");
-        let state = store.load().unwrap();
-        assert!(state.timestamp.is_none() && state.snapshot.is_none());
     }
 
     #[test]
