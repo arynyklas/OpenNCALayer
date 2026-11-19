@@ -807,15 +807,47 @@ fn is_public_v6(ip: Ipv6Addr) -> bool {
         || ip.is_multicast()
         || (s[0] & 0xfe00) == 0xfc00
         || (s[0] & 0xffc0) == 0xfe80
+        // Site-local fec0::/10 (deprecated, still routed inside some networks).
+        || (s[0] & 0xffc0) == 0xfec0
         || (s[0] == 0x2001 && s[1] == 0x0db8)
+        // Teredo 2001::/32 and 6to4 2002::/16 tunnel to an IPv4 address the check never sees.
+        || (s[0] == 0x2001 && s[1] == 0)
+        || s[0] == 0x2002
+        // Local-use NAT64 64:ff9b:1::/48 (RFC 8215) translates into a private network.
+        || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)
         || s[..6] == [0, 0, 0, 0, 0, 0])
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::{Error, ErrorKind};
+    use std::net::IpAddr;
 
-    use super::{is_connect_error, is_connect_io_error};
+    use super::{is_connect_error, is_connect_io_error, is_public};
+
+    #[test]
+    fn tunnels_site_local_and_local_nat64_are_not_public() {
+        let public = |text: &str| is_public(text.parse::<IpAddr>().unwrap());
+        for refused in [
+            "2002:c0a8:0101::1",
+            "2002:0808:0808::1",
+            "2001:0:4136:e378::1",
+            "fec0::1",
+            "feff::1",
+            "64:ff9b:1::808:808",
+            "64:ff9b::10.0.0.1",
+            "64:ff9b::127.0.0.1",
+            "::ffff:192.168.1.1",
+            "fd00::1",
+            "::1",
+        ] {
+            assert!(!public(refused), "{refused}");
+        }
+        // NAT64 64:ff9b::/96 is judged by the address it embeds.
+        for taken in ["64:ff9b::8.8.8.8", "2001:4860:4860::8888", "2a00:1450::1"] {
+            assert!(public(taken), "{taken}");
+        }
+    }
 
     #[test]
     fn connect_errors_fail_over() {

@@ -118,6 +118,13 @@ enum Command {
         #[command(subcommand)]
         command: xtask::tuf::cli::TufCommand,
     },
+    /// Third-party plugin publishers: keys, source archives, the reference build, the role
+    /// file of a release, and the checks of a release pull request
+    /// (`docs/dev/publishers.md`).
+    Vendor {
+        #[command(subcommand)]
+        command: xtask::vendor::cli::VendorCommand,
+    },
     /// Update index tasks (`updates/v1/<channel>.json`).
     Index {
         #[command(subcommand)]
@@ -1155,6 +1162,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Upstream { command } => xtask::upstream::cli::run(command),
         Command::Tuf { command } => xtask::tuf::cli::run(command),
+        Command::Vendor { command } => xtask::vendor::cli::run(command),
         Command::Winget { command } => xtask::winget::run(command),
         Command::Win7 {
             arch,

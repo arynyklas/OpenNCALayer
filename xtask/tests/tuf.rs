@@ -1420,3 +1420,6 @@ mod delegations;
 
 #[path = "tuf/online.rs"]
 mod online;
+
+#[path = "tuf/vendor.rs"]
+mod vendor;

@@ -332,6 +332,12 @@ pub fn check(options: &Options) -> anyhow::Result<Outcome> {
                     &verified,
                     &mut report.problems,
                 );
+                // Today's rules over the newest roles: a warning, the releases stand.
+                report.warnings.extend(
+                    crate::vendor::checks::role_rule_warnings(dir, &verified.roles)
+                        .into_iter()
+                        .map(|m| problem("publisher-rules", m)),
+                );
             }
             report.verified = Some(verified);
         }
