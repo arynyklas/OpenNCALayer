@@ -1,7 +1,6 @@
-#![cfg(feature = "jose")]
 //! Mutations caught: algorithm confusion; old-signature laundering; header-driven
 //! authority; collapsing trust/claims into crypto; escaping resource/root guards.
-#[path = "../examples/sdk_probe/jose_fixtures.rs"]
+#[path = "../../examples/sdk_probe/jose_fixtures.rs"]
 mod fixtures;
 use base64::{
     Engine as _,
@@ -815,8 +814,8 @@ fn independent_openssl_rs256_vectors_and_negative_controls() {
     let cert = issued("user-rsa-sign").cert;
     let p = profile(JwsSerialization::Compact, false);
     for vector in [
-        include_bytes!("fixtures/jose/openssl-jws.txt").as_slice(),
-        include_bytes!("fixtures/jose/openssl-jwt.txt").as_slice(),
+        include_bytes!("../fixtures/jose/openssl-jws.txt").as_slice(),
+        include_bytes!("../fixtures/jose/openssl-jwt.txt").as_slice(),
     ] {
         let request = JwsVerifyRequest {
             profile: p,
@@ -870,7 +869,7 @@ fn independent_openssl_rs256_vectors_and_negative_controls() {
             Verdict::Invalid
         );
     }
-    let vector = include_bytes!("fixtures/jose/openssl-jwt.txt");
+    let vector = include_bytes!("../fixtures/jose/openssl-jwt.txt");
     let mut policy = JwtValidationPolicy::new(0);
     policy.expected_issuer = Some("J01 issuer".into());
     policy.expected_audience = Some("J01 audience".into());

@@ -5,12 +5,7 @@
 //! signature, checked by `oncl_pki` where it is cheap.
 #![allow(dead_code)]
 #![allow(clippy::disallowed_methods)] // Core's own tests make confirmations to test the guard
-#[path = "../examples/sdk_probe/plugin_fixture.rs"]
-mod fixture;
-#[path = "../examples/sdk_probe/batch_fixture.rs"]
-pub(crate) mod plugin_crypto;
-#[path = "../examples/sdk_probe/plugin_xml_fixture.rs"]
-mod xades_fixture;
+use crate::{plugin_fixture as fixture, plugin_xml_fixture as xades_fixture};
 use fixture::*;
 use oncl_core::{
     Action, Engine, EngineServices, ErrorCode, ExecutionGrant, OperationContext, OperationError,

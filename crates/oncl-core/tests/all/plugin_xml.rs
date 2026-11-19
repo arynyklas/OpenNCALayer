@@ -1,11 +1,5 @@
 //! Final L01 actual-WASM XML/XAdES capability acceptance, not a wrapper-only test.
-#![cfg(all(feature = "plugins", feature = "tokens", feature = "xml"))]
-#[path = "../examples/sdk_probe/plugin_fixture.rs"]
-mod fixture;
-#[path = "../examples/sdk_probe/batch_fixture.rs"]
-pub(crate) mod plugin_crypto;
-#[path = "../examples/sdk_probe/plugin_xml_fixture.rs"]
-mod xades_fixture;
+use crate::{plugin_fixture as fixture, plugin_xml_fixture as xades_fixture};
 use fixture::*;
 use oncl_core::{ErrorCode, keys::AppliedState, plugins::*};
 use oncl_pdk::abi::{self, Import};
