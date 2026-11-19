@@ -143,7 +143,9 @@ struct Setup {
 }
 
 impl Setup {
-    fn new() -> Setup {
+    /// `None` after the skip line when there is no `git`.
+    fn new() -> Option<Setup> {
+        oncl_testkit::tool::GIT.or_skip(&["--version"])?;
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_owned();
         let gitconfig = root.join("gitconfig");
@@ -183,7 +185,7 @@ impl Setup {
         s.git(&repo, &["add", "README"]);
         s.git(&repo, &["commit", "-q", "-m", "main"]);
         s.git(&repo, &["remote", "add", "origin", "../origin.git"]);
-        s
+        Some(s)
     }
 
     fn repo(&self) -> PathBuf {
@@ -320,7 +322,9 @@ impl Setup {
 
 #[test]
 fn published_json_normalization_does_not_create_history_on_the_next_day() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let options = s.opts("published");
     let first = s.emit(1);
     assert!(publish(&first, &options).unwrap().committed);
@@ -401,7 +405,9 @@ fn second_emit(s: &Setup) -> PathBuf {
 
 #[test]
 fn creates_then_skips_same_body() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     let first = publish(&emit, &s.opts("b2")).unwrap();
     assert_eq!(
@@ -424,7 +430,9 @@ fn creates_then_skips_same_body() {
 
 #[test]
 fn updates_changed_body_with_comment() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     s.hub.lock().unwrap().issues.push(json!({
         "number": 7, "title": "old", "state": "open",
@@ -449,7 +457,9 @@ fn updates_changed_body_with_comment() {
 
 #[test]
 fn closed_issue_gets_comment_not_reopen() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     s.hub.lock().unwrap().issues.push(json!({
         "number": 7, "title": "old", "state": "closed",
@@ -468,7 +478,9 @@ fn closed_issue_gets_comment_not_reopen() {
 
 #[test]
 fn pull_requests_are_ignored() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     s.hub.lock().unwrap().issues.push(json!({
         "number": 1, "title": "a PR", "state": "open", "pull_request": {},
@@ -484,7 +496,9 @@ fn pull_requests_are_ignored() {
 
 #[test]
 fn dry_run_makes_no_requests() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.emit(1);
     let mut o = s.opts("b1");
     o.dry_run = true;
@@ -511,7 +525,9 @@ fn dry_run_makes_no_requests() {
 
 #[test]
 fn branch_first_run_creates_orphan_with_json_only() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.emit(1);
     let r = publish(&emit, &s.opts("b1")).unwrap();
     assert!(r.committed && r.pushed);
@@ -534,7 +550,9 @@ fn branch_first_run_creates_orphan_with_json_only() {
 
 #[test]
 fn branch_holds_only_json() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.emit(1);
     std::fs::write(emit.join("x.bin"), b"original").unwrap();
     assert!(publish(&emit, &s.opts("b1")).is_err());
@@ -543,7 +561,9 @@ fn branch_holds_only_json() {
 
 #[test]
 fn publish_rejects_non_json_and_unknown_fields() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.emit(1);
     assert!(validate_emit(&emit).is_ok());
     // An unknown field.
@@ -583,7 +603,9 @@ fn publish_rejects_non_json_and_unknown_fields() {
 
 #[test]
 fn no_facts_change_no_commit_no_dispatch() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let first = s.emit(1);
     publish(&first, &s.opts("b1")).unwrap();
     let dispatched = s.hub.lock().unwrap().dispatches.len();
@@ -597,7 +619,9 @@ fn no_facts_change_no_commit_no_dispatch() {
 
 #[test]
 fn push_then_dispatch() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.emit(1);
     let r = publish(&emit, &s.opts("b1")).unwrap();
     assert!(r.dispatched);
@@ -607,7 +631,9 @@ fn push_then_dispatch() {
 
 #[test]
 fn issue_numbers_written_to_index() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     publish(&emit, &s.opts("b2")).unwrap();
     let index: Index =
@@ -627,7 +653,9 @@ fn issue_numbers_written_to_index() {
 
 #[test]
 fn rerun_after_failed_push_skips_issues_and_commits() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let first = s.emit(1);
     publish(&first, &s.opts("b1")).unwrap();
     s.bump_demo();
@@ -653,7 +681,9 @@ fn rerun_after_failed_push_skips_issues_and_commits() {
 
 #[test]
 fn labels_created_once() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = second_emit(&s);
     publish(&emit, &s.opts("b2")).unwrap();
     assert_eq!(s.hub.lock().unwrap().labels.len(), 3);
@@ -665,7 +695,9 @@ fn labels_created_once() {
 
 #[test]
 fn alert_dedup_by_day() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let client = s.client();
     let run = |n: u32| format!("https://github.com/o/r/actions/runs/{n}");
     assert_eq!(
@@ -701,7 +733,9 @@ fn alert_dedup_by_day() {
 
 #[test]
 fn token_never_printed() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     s.hub.lock().unwrap().fail_all = true;
     let out = Command::new(env!("CARGO_BIN_EXE_xtask"))
         .args(["upstream", "alert", "--kind", "collect-failed"])
@@ -719,7 +753,9 @@ fn token_never_printed() {
 
 #[test]
 fn issues_only_mode_from_branch() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let first = s.emit(1);
     publish(&first, &s.opts("b1")).unwrap();
     s.bump_demo();
@@ -741,7 +777,9 @@ fn issues_only_mode_from_branch() {
 
 #[test]
 fn emit_that_drops_branch_history_is_refused() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let first = s.emit(1);
     publish(&first, &s.opts("b1")).unwrap();
     s.bump_demo();
@@ -758,7 +796,9 @@ fn emit_that_drops_branch_history_is_refused() {
 
 #[test]
 fn run_and_publish_reads_the_branch() {
-    let s = Setup::new();
+    let Some(s) = Setup::new() else {
+        return;
+    };
     let emit = s.root.join("emit");
     let opts = s.opts("branch");
     run_and_publish(s.run_opts(s.root.join("unused"), &emit), &opts).unwrap();

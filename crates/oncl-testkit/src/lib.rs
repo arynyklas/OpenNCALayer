@@ -12,6 +12,7 @@ pub mod console;
 pub mod dll;
 pub mod plugin;
 pub mod ports;
+pub mod tool;
 
 /// Root of the Cargo workspace (the directory holding the top-level `Cargo.toml`).
 pub fn workspace_root() -> PathBuf {

@@ -8,18 +8,14 @@
 
 В crates.io ничего не опубликовано, поэтому `cargo add` с версией из реестра не сработает. Свободны ли имена крейтов `oncl-*` в crates.io, не проверялось. Зависеть нужно от проверенного тега или коммита по path или git.
 
-SDK собирается с двумя изменёнными крейтами RustCrypto из форков: `streebog` из `arynyklas/hashes` и `hmac` из `arynyklas/MACs`, в которых добавлены варианты для секретного ввода. Поэтому у потребителя должен быть тот же `[patch.crates-io]` с теми же `rev`, что в корневом `Cargo.toml`:
+Все сторонние зависимости SDK берутся из crates.io, `[patch.crates-io]` не нужен:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
-
-[patch.crates-io]
-streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
-hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
-При подключении по git у каждой записи должны быть одинаковые URL `git` и `rev`. `cargo xtask sdk smoke` (раздел 7) собирает потребителя именно так, только из распакованных пакетов исходников, а не из workspace.
+`cargo xtask sdk smoke` (раздел 7) собирает такого потребителя только из распакованных пакетов исходников, а не из workspace.
 
 ## 2. Features и зависимости
 
@@ -236,9 +232,9 @@ Core выполняет три шага в указанном порядке (`d
 
 - Версия общая для всех крейтов SDK и приложений (`[workspace.package]`). У плагинов свои версии.
 - До 1.0 (`0.1.0-alpha.N`) любая альфа может ломать публичный API любого крейта SDK. Каждая поломка требует повышения версии и заметки о миграции ниже. Внутренние модули не становятся стабильным контрактом только потому, что они `pub` внутри workspace.
-- Версия SDK в момент изменения равна следующей невыпущенной версии; её берут из тегов и манифестов, а не угадывают. Версия `[workspace.package]` в этом дереве — `0.1.1`; предыдущий
-  выпущенный тег — `v0.1.0`.
-  При повышении меняются вместе: `[workspace.package] version`, закрепления `=0.1.0-alpha.N` цепочки SDK в `[workspace.dependencies]` (нужны для `cargo package`), четыре встроенных `plugin.toml` (`version`, `min_core`), lock-файлы (`Cargo.lock`, `plugins/Cargo.lock`, `crates/oncl-pdk/example/Cargo.lock`) и строка статуса в README, если в ней указан выпуск. Закрепление, расходящееся с версией workspace, делает весь workspace неразрешимым (`failed to select a version for the requirement oncl-gost = "=0.1.1"`), так что забытое закрепление в выпуск не попадёт.
+- Версия SDK в момент изменения равна следующей невыпущенной версии; её берут из тегов и манифестов, а не угадывают. Версия `[workspace.package]` в этом дереве — `0.1.2-beta.1`; предыдущий
+  выпущенный тег — `v0.1.1`.
+  При повышении меняются вместе: `[workspace.package] version`, закрепления `=<версия>` цепочки SDK в `[workspace.dependencies]` (нужны для `cargo package`), четыре встроенных `plugin.toml` (`version`, `min_core`), lock-файлы (`Cargo.lock`, `plugins/Cargo.lock`, `crates/oncl-pdk/example/Cargo.lock`) и строка статуса в README, если в ней указан выпуск. Закрепление, расходящееся с версией workspace, делает весь workspace неразрешимым (`failed to select a version for the requirement oncl-gost = "=0.1.2-beta.1"`), так что забытое закрепление в выпуск не попадёт.
 
 Заметки о миграции:
 
@@ -252,6 +248,38 @@ Core выполняет три шага в указанном порядке (`d
 | 0.1.0-rc.3 → 0.1.0-rc.4 | Публичный API крейтов SDK не меняется. |
 | 0.1.0-rc.4 → 0.1.0 | Публичный API крейтов SDK не меняется. |
 | 0.1.0 → 0.1.1 | Публичный API крейтов SDK не меняется. |
+| 0.1.1 → 0.1.2-beta.1 | Несовместимо меняется публичный API `oncl-update` (каталог плагинов и делегированные роли TUF), см. «Переход с 0.1.1 на 0.1.2». У остальных крейтов SDK меняется только номер версии. Номер патча не означает совместимость: до 1.0 SDK и программа выходят под одной версией. |
+
+### Переход с 0.1.1 на 0.1.2
+
+Сравнение с выпущенным `v0.1.1`. Публичный API меняется только у `oncl-update`. У `oncl-gost`, `oncl-registry`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows`, `oncl-plugin` и `oncl-core` он прежний.
+
+Что перестанет собираться в `oncl-update` и как это исправить:
+
+- `choose_plugin` и `offer` принимают `&Catalog` вместо `&Index`. Прежнее поведение даёт `Catalog::owner(index)`: каталог из одного индекса владельца, в котором все издатели недоступны.
+- `PluginChoice` помечен `#[non_exhaustive]` и получил вариант `PublisherRevoked(&PublisherName)`: плагин отозванного издателя выключают так же, как при `Withdrawn`. В `match` нужна ветка `_`.
+- У `PluginRelease` новые поля `publisher: Option<tuf::PublisherName>` и `capabilities: Option<DeclaredCapabilities>`. Из JSON они не читаются (`#[serde(skip)]`); в литерале структуры задайте оба равными `None`.
+- У `tuf::TufError` новый вариант `Delegation { role: RoleName, error: DelegationError }`, исчерпывающему `match` нужна ветка для него.
+- У `tuf::Limits` новые поля `delegated` (128 КиБ на файл роли), `max_delegations` (32 роли) и `max_role_targets` (256 целей в роли). В литерале задайте их или допишите `..Limits::default()`.
+- У `tuf::TrustState` новое поле `delegated: BTreeMap<RoleName, RoleState>`; в литерале подойдёт `BTreeMap::new()` или `..TrustState::default()`. Файл состояния, в котором сохранены роли издателей, версия 0.1.1 не прочитает: `TrustState` объявлен с `deny_unknown_fields`.
+- `tuf::Targets::from_signed(signed)` стал `from_signed(signed, profile)`. Поле `Targets::targets` теперь `BTreeMap<TargetPath, Target>` вместо `BTreeMap<String, Target>`. Поиск по `&str` работает как раньше (`TargetPath: Borrow<str>`), но ключи при обходе имеют тип `&TargetPath` (строку даёт `as_str()`).
+- Функция `tuf::model::valid_target_path` удалена, её заменяет `TargetPath::parse(path).is_ok()`.
+- `tuf::layout::target_file_path` принимает `&TargetPath` и возвращает `String` вместо `Option<String>`.
+
+Что меняется в поведении:
+
+- `TufClient` по умолчанию читает репозиторий в профиле `Profile::Delegating`: член `delegations` верхнего `targets` принимается, а `refresh` его не читает. Клиент 0.1.1 отказывал в таком файле с `TufError::Unsupported`. Прежнее поведение включает `TufClient::with_profile(Profile::Legacy)`.
+- С feature `testing` метод `tuf::testing::Repo::client` создаёт клиента в профиле `Delegating`, а у `Repo` появилось публичное поле `delegations`.
+
+Что добавлено в `oncl-update`:
+
+- модуль `catalog` (каталог плагинов: индекс владельца и выпуски сторонних издателей, `docs/design/publishers.md`). Из корня крейта реэкспортируются `Catalog`, `CatalogBuilder`, `CatalogError`, `DeclaredCapabilities`, `EntryRejected`, `EntryRejection`, `PublisherPolicy`, `PublisherRelease` и `PublisherState`. Остальное доступно как `catalog::…`: `PluginId`, `IdPrefix`, `ModuleName`, `BundleName`, `PROJECT_PREFIX`, `ActivePublisher`, `Publisher`, `PublisherDisplay`, `RevokedVersion`, `Standing`, `CapabilitiesError`, `PublisherTarget`, `MAX_URL`, `MIRROR_BASE`, `mirror_url`, `ReleaseSource`, `SourceError` и `SourceVcs`;
+- метод `UpdateError::unreachable()`;
+- в `tuf`: модули `delegation` (`Delegations`, `DelegatedRole`, `RefusedRole`) и `names` (`TargetPath`, `RoleName`, `PublisherName`, `PathPattern`, `NameError`, `NameKind`), типы `Profile`, `DelegationError`, `RoleState`, `Delegated` и `VerifiedRole`, методы `TufClient::with_profile`, `TufClient::profile`, `TufClient::delegated`, `TufClient::verify_cached_role` и `Targets::delegations`, функции `ed25519::verify_threshold` и `layout::delegated_path`.
+
+Сборка: `oncl-gost` и `oncl-pki` берут `streebog` и `hmac` из crates.io, поэтому раздел `[patch.crates-io]` с форками из заметки rc.2 → rc.3 потребителю SDK больше не нужен. Новая зависимость `oncl-gost`: `subtle` `=2.6.1`.
+
+Поле `Targets.delegations` и вариант `TufError::DelegationsMissing` существовали только в `main` после `v0.1.1` и ни в один выпуск не попали.
 
 ## 7. Готовность к публикации
 
@@ -264,13 +292,13 @@ Core выполняет три шага в указанном порядке (`d
 
 `cargo xtask sdk smoke` проверяет цепочку без реестра и без загрузки:
 
-1. `cargo package --offline` всей цепочки с верификацией: каждый крейт собирается из собственного упакованного tarball, а соседние крейты берутся из локального оверлея tarball'ов cargo. Нужны `--config patch.crates-io.hmac.git=…`/`.rev=…` и то же для `streebog` (ниже). Форки должны лежать в кэше cargo (`cargo fetch --locked`), загрузок во время проверки нет.
+1. `cargo package --offline` всей цепочки с верификацией: каждый крейт собирается из собственного упакованного tarball, а соседние крейты берутся из локального оверлея tarball'ов cargo. Сторонние пакеты должны лежать в кэше cargo (`cargo fetch --locked`), загрузок во время проверки нет.
 2. Файлы `.crate` распаковываются, и проверяется, что внутри нет `tests/`, `fixtures/` и `target/`, а `LICENSE` и `NOTICE` есть.
-3. Отдельный крейт (со своим `[workspace]` и lock-файлом) зависит от `oncl-core` (`full`) и `oncl-pki` по path на распакованные исходники, с `[patch.crates-io]` на остальные распакованные крейты и на изменённые `hmac`/`streebog`. В его `cargo metadata` не должно быть локальных пакетов вне распакованных исходников, а в `cargo tree` не должно быть запрещённых крейтов интерфейса, desktop, обновления, сервера и рантайма. Затем он собирается и запускается: настоящие подпись и проверка CMS, изменённый документ отклоняется, подпись без сети отклоняется с `NotApplied`. В этом процессе нет ни дисплея, ни демона, ни сборщика телеметрии, ни слушающего порта.
+3. Отдельный крейт (со своим `[workspace]` и lock-файлом) зависит от `oncl-core` (`full`) и `oncl-pki` по path на распакованные исходники, с `[patch.crates-io]` на остальные распакованные крейты. В его `cargo metadata` не должно быть локальных пакетов вне распакованных исходников, а в `cargo tree` не должно быть запрещённых крейтов интерфейса, desktop, обновления, сервера и рантайма. Затем он собирается и запускается: настоящие подпись и проверка CMS, изменённый документ отклоняется, подпись без сети отклоняется с `NotApplied`. В этом процессе нет ни дисплея, ни демона, ни сборщика телеметрии, ни слушающего порта.
 
 Что не проверено и не заявляется:
 
-- Загрузка в реестр невозможна. `oncl-gost` и `oncl-pki` используют дополнительную feature `secret-input` изменённых `streebog` и `hmac`, которой нет в версиях из crates.io. Поэтому `cargo package` крейта `oncl-gost` без настройки patch завершается ошибкой («`hmac` does not have that feature»), и `cargo publish`, который сначала упаковывает, должен остановиться там же (не запускался, отсюда ничего не публикуется). До любого выпуска эти крейты нужно опубликовать под принадлежащими проекту именами или предложить изменения в upstream и соответственно поправить манифесты. Это отдельное решение.
+- Загрузка в реестр не выполнялась, это отдельное решение. Форков в цепочке больше нет: `oncl-gost` и `oncl-pki` берут `streebog` и `hmac` из crates.io, а Streebog и HMAC для секретного ввода — код самого `oncl-gost` (`src/streebog_secret.rs`, `src/secret_hmac.rs`).
 - Доступность и принадлежность имён крейтов в реестре не проверены.
 - `cargo publish --dry-run` против настоящего реестра, загрузка и проверки после неё выполняются только при отдельно согласованной публикации.
 - Проверка потребителя работает только на платформе, где запущена; матрица Linux/macOS/Win7 проверяется отдельно (приёмочный прогон «1 ГиБ / 1 ГиБ» пройден, см. раздел 5).
@@ -283,7 +311,7 @@ Core выполняет три шага в указанном порядке (`d
 
 ## 8. Лицензии и уведомления
 
-Каждый крейт цепочки поставляет `LICENSE` (Apache-2.0) и `NOTICE`. `oncl-pki/roots/` встраивает рабочие сертификаты УЦ НУЦ: это публичные документы, права на них принадлежат эмитенту, и под Apache-2.0 они не лицензируются (`fixtures/README.md`). В `testing-data/` лежит синтетический ключ. `crates/oncl-core/THIRD-PARTY.txt` перечисляет сторонние крейты, от которых зависит SDK (из crates.io и git-форки из `[patch.crates-io]`, для каждой поставляемой платформы, включая `distribution` плагинов), вместе с текстами их лицензий. Файл генерирует `cargo xtask sdk licenses`, а `--check` сверяет его с текущими зависимостями. Отдельную опись для программ строит `cargo xtask licenses`.
+Каждый крейт цепочки поставляет `LICENSE` (Apache-2.0) и `NOTICE`. `oncl-pki/roots/` встраивает рабочие сертификаты УЦ НУЦ: это публичные документы, права на них принадлежат эмитенту, и под Apache-2.0 они не лицензируются (`fixtures/README.md`). В `testing-data/` лежит синтетический ключ. `crates/oncl-core/THIRD-PARTY.txt` перечисляет сторонние крейты, от которых зависит SDK (из crates.io, для каждой поставляемой платформы, включая `distribution` плагинов), вместе с текстами их лицензий. Файл генерирует `cargo xtask sdk licenses`, а `--check` сверяет его с текущими зависимостями. Отдельную опись для программ строит `cargo xtask licenses`.
 
 ## Лимиты доказательств и большие встроенные CRL
 
@@ -374,7 +402,7 @@ ETSI EN 319 102-1 V1.3.1, по опубликованному тексту:
 
 ### Что не проверено и чем правило отличается от стандарта
 
-0. Подтверждения на настоящей PKI нет. Закреплённые образцы LT от NCANode здесь никогда не доходят до времени доказательства, поэтому частота выпуска CRL НУЦ (35-дневный CRL корня, выпущенный за часы до метки времени) проверена записанным рабочим CRL (`tests/crl.rs`) и синтетическим 35-дневным CRL, а не документом с Valid на настоящей PKI. Путь простого CMS офлайн покрыт тестом `oncl-core` `offline_cms_status_is_judged_at_the_proof_time_not_the_host_clock`. В качестве `P` берётся ПОСЛЕДНЯЯ прошедшая проверку метка времени подписи, а стандарт (5.5.4, шаг 3b) берёт самую раннюю; это консервативнее.
+0. Подтверждения на настоящей PKI нет. Закреплённые образцы LT от NCANode здесь никогда не доходят до времени доказательства, поэтому частота выпуска CRL НУЦ (35-дневный CRL корня, выпущенный за часы до метки времени) проверена записанным рабочим CRL (`crates/oncl-pki/tests/all/crl.rs`) и синтетическим 35-дневным CRL, а не документом с Valid на настоящей PKI. Путь простого CMS офлайн покрыт тестом `oncl-core` `offline_cms_status_is_judged_at_the_proof_time_not_the_host_clock`. В качестве `P` берётся ПОСЛЕДНЯЯ прошедшая проверку метка времени подписи, а стандарт (5.5.4, шаг 3b) берёт самую раннюю; это консервативнее.
 1. 5.6.2.2.4, шаг 2a, также требует доказательства существования информации об отзыве не позже контрольного времени. Для `LTA` это архивная метка, связывающая доказательства, и её проверяет граф доказательств; для `LT` такое доказательство не запрашивается (кроме метки подписи там ничего нет), как и в 5.5.4.
 2. Строгое `>` и свежесть 300 с выбраны в пределах ограничения, которое стандарт оставляет политике валидации; сам стандарт этих значений не предписывает.
 3. Отзыв в `P` или раньше здесь даёт `Invalid`, а стандарт говорит `INDETERMINATE/REVOKED_NO_POE`; наш вариант строже.

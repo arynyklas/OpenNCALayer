@@ -4,8 +4,7 @@
 //! warns) and brings the crates.io package back: Slint's winit backend would import
 //! `SystemParametersInfoForDpi` again, which Windows 7 does not have, Velopack would use an
 //! Update.exe taken from a package rebuilt from a delta before anything checks it, and the
-//! secret-input variants of `streebog`/`hmac` and the framing observer of `multer` would
-//! be missing.
+//! framing observer of `multer` would be missing.
 
 use oncl_testkit::workspace_root;
 
@@ -49,7 +48,7 @@ fn every_patched_crate_is_locked_from_its_pinned_fork() {
         .expect("[patch.crates-io]");
     assert_eq!(
         patches.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["hmac", "i-slint-backend-winit", "streebog", "velopack"]
+        ["i-slint-backend-winit", "velopack"]
     );
     for (name, spec) in patches {
         let source = pinned_source(spec);
@@ -76,18 +75,10 @@ fn every_patched_crate_is_locked_from_its_pinned_fork() {
 }
 
 #[test]
-fn direct_git_dependencies_name_the_same_fork_and_rev_as_the_patches() {
+fn multer_is_locked_from_its_pinned_fork() {
     let manifest = read_table("Cargo.toml");
     let lock = read_table("Cargo.lock");
-    let patches = &manifest["patch"]["crates-io"];
     let dependencies = &manifest["workspace"]["dependencies"];
-    for name in ["hmac", "streebog"] {
-        assert_eq!(
-            pinned_source(&dependencies[name]),
-            pinned_source(&patches[name]),
-            "{name}: [workspace.dependencies] and [patch.crates-io] name different forks"
-        );
-    }
     let source = pinned_source(&dependencies["multer"]);
     let multer = locked(&lock, "multer");
     assert_eq!(
@@ -128,21 +119,19 @@ fn locked_velopack_is_the_version_the_workspace_asks_for() {
 }
 
 #[test]
-fn sdk_docs_name_the_pinned_revs_of_the_rustcrypto_forks() {
-    let manifest = read_table("Cargo.toml");
-    let patches = &manifest["patch"]["crates-io"];
-    for doc in [
-        "crates/oncl-core/README.md",
-        "docs/dev/sdk.md",
-        "docs/dev/sdk-overview.md",
-    ] {
-        let text = std::fs::read_to_string(workspace_root().join(doc)).unwrap();
-        for name in ["hmac", "streebog"] {
-            let git = patches[name]["git"].as_str().unwrap();
-            let rev = patches[name]["rev"].as_str().unwrap();
+fn rustcrypto_streebog_and_hmac_come_from_crates_io() {
+    // The secret-input Streebog and HMAC are code of `oncl-gost`; a git source here would
+    // mean a fork is back, and SDK consumers would need a `[patch.crates-io]` again.
+    let lock = read_table("Cargo.lock");
+    for name in ["hmac", "streebog"] {
+        let packages = locked(&lock, name);
+        assert!(!packages.is_empty(), "{name} is not locked");
+        for (version, source) in &packages {
             assert!(
-                text.contains(&format!("{{ git = \"{git}\", rev = \"{rev}\" }}")),
-                "{doc} does not name {git} at {rev}: update the example [patch.crates-io]"
+                source
+                    .as_deref()
+                    .is_some_and(|s| s.starts_with("registry+")),
+                "{name} {version} does not come from a registry: {source:?}"
             );
         }
     }

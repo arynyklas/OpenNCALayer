@@ -11,12 +11,14 @@ struct Repo {
 }
 
 impl Repo {
-    fn new() -> Self {
+    /// `None` after the skip line when there is no `git`.
+    fn new() -> Option<Self> {
+        oncl_testkit::tool::GIT.or_skip(&["--version"])?;
         let repo = Repo {
             dir: tempfile::tempdir().unwrap(),
         };
         repo.git(&["init", "-q"]);
-        repo
+        Some(repo)
     }
     fn root(&self) -> &Path {
         self.dir.path()
@@ -68,19 +70,21 @@ impl Repo {
         );
     }
     /// Two ports at 1.0.0, committed and tagged `plugins-20261101`.
-    fn tagged() -> Self {
-        let repo = Repo::new();
+    fn tagged() -> Option<Self> {
+        let repo = Repo::new()?;
         repo.port("alpha", "1.0.0");
         repo.port("beta", "1.0.0");
         repo.commit("release");
         repo.git(&["tag", "plugins-20261101"]);
-        repo
+        Some(repo)
     }
 }
 
 #[test]
 fn no_tag_is_a_notice_not_an_error() {
-    let repo = Repo::new();
+    let Some(repo) = Repo::new() else {
+        return;
+    };
     repo.port("alpha", "1.0.0");
     repo.commit("first");
     let report = check(repo.root()).unwrap();
@@ -91,7 +95,9 @@ fn no_tag_is_a_notice_not_an_error() {
 
 #[test]
 fn nothing_changed_passes() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.write("docs/readme.md", "unrelated\n");
     repo.commit("docs");
     let report = check(repo.root()).unwrap();
@@ -102,7 +108,9 @@ fn nothing_changed_passes() {
 
 #[test]
 fn a_source_change_without_a_new_version_fails() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.write("plugins/alpha/src/lib.rs", "fn g() {}\n");
     repo.commit("change");
     let report = check(repo.root()).unwrap();
@@ -119,7 +127,9 @@ fn a_source_change_without_a_new_version_fails() {
 
 #[test]
 fn a_manifest_or_cargo_change_without_a_new_version_fails() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.write(
         "plugins/beta/plugin.toml",
         "id = \"x.beta\"\nversion = \"1.0.0\"\nmin_core = \"0.1.0\"\n",
@@ -136,7 +146,9 @@ fn a_manifest_or_cargo_change_without_a_new_version_fails() {
 
 #[test]
 fn a_change_with_a_new_version_passes() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.write("plugins/alpha/src/lib.rs", "fn g() {}\n");
     repo.port("alpha", "1.0.1");
     repo.write("plugins/alpha/src/lib.rs", "fn g() {}\n");
@@ -146,7 +158,9 @@ fn a_change_with_a_new_version_passes() {
 
 #[test]
 fn an_uncommitted_change_counts_and_registry_text_does_not() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.write(
         "plugins/alpha/registry.toml",
         "# conformance text changed\n",
@@ -161,7 +175,9 @@ fn an_uncommitted_change_counts_and_registry_text_does_not() {
 
 #[test]
 fn a_new_port_and_the_latest_tag_are_taken_into_account() {
-    let repo = Repo::tagged();
+    let Some(repo) = Repo::tagged() else {
+        return;
+    };
     repo.port("gamma", "0.1.0");
     repo.write("plugins/alpha/src/lib.rs", "fn g() {}\n");
     repo.port("alpha", "1.1.0");

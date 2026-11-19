@@ -50,7 +50,8 @@ fn targets(vector: &str, profile: Profile) -> Result<Targets, TufError> {
 fn delegations(vector: &str) -> Delegations {
     targets(vector, Profile::Delegating)
         .unwrap()
-        .delegations
+        .delegations()
+        .unwrap()
         .unwrap()
 }
 
@@ -149,8 +150,9 @@ fn a_delegation_by_path_hash_prefixes_refuses_that_role_alone() {
 }
 
 #[test]
-fn a_role_listed_twice_refuses_the_top_level_targets_as_python_tuf_does() {
-    let e = targets("delegated-duplicate-role", Profile::Delegating).unwrap_err();
+fn a_role_listed_twice_makes_the_delegations_unreadable_as_python_tuf_does() {
+    let read = targets("delegated-duplicate-role", Profile::Delegating).unwrap();
+    let e = read.delegations().unwrap_err();
     assert!(
         matches!(&e, TufError::Malformed { why, .. } if why.contains("twice")),
         "{e:?}"
@@ -158,8 +160,9 @@ fn a_role_listed_twice_refuses_the_top_level_targets_as_python_tuf_does() {
 }
 
 #[test]
-fn a_top_level_role_name_refuses_the_top_level_targets_as_python_tuf_does() {
-    let e = targets("delegated-top-level-name", Profile::Delegating).unwrap_err();
+fn a_top_level_role_name_makes_the_delegations_unreadable_as_python_tuf_does() {
+    let read = targets("delegated-top-level-name", Profile::Delegating).unwrap();
+    let e = read.delegations().unwrap_err();
     assert!(matches!(e, TufError::Malformed { .. }), "{e:?}");
 }
 
@@ -419,10 +422,15 @@ mod client {
     }
 
     #[test]
-    fn a_role_twice_or_a_top_level_name_refuses_the_refresh() {
+    fn a_role_twice_or_a_top_level_name_fails_the_delegated_step_not_the_refresh() {
         for name in ["delegated-duplicate-role", "delegated-top-level-name"] {
-            let e = run(name, &mut MemoryStore::default()).unwrap_err();
+            let repo = repository(name);
+            let mut store = MemoryStore::default();
+            let mut c = client(&repo, &mut store);
+            let trusted = c.refresh(now(name)).unwrap();
+            let e = c.delegated(&trusted, now(name)).unwrap_err();
             assert!(matches!(e, TufError::Malformed { .. }), "{name}: {e:?}");
+            assert!(c.store().load().unwrap().delegated.is_empty(), "{name}");
         }
     }
 
@@ -441,24 +449,26 @@ mod client {
         let mut store = MemoryStore::default();
         let anchor =
             std::fs::read(fixtures().join("delegated-valid/metadata/1.root.json")).unwrap();
-        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default()).unwrap();
+        let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default())
+            .unwrap()
+            .with_profile(Profile::Legacy);
         let e = c.refresh(now("delegated-valid")).unwrap_err();
         assert!(matches!(e, TufError::Unsupported(_)), "{e:?}");
     }
 
     #[test]
-    fn the_delegating_profile_refuses_a_snapshot_without_lengths_and_hashes() {
-        // The valid (v1) repository lists versions only.
+    fn the_core_takes_a_snapshot_without_lengths_in_the_delegating_profile() {
+        // The valid (v1) repository lists versions only, and no delegations.
         let repo = super::client_v1::repository();
         let mut store = MemoryStore::default();
         let anchor = std::fs::read(fixtures().join("valid/metadata/1.root.json")).unwrap();
         let mut c = TufClient::new(&anchor, &repo, &mut store, Limits::default())
             .unwrap()
             .with_profile(Profile::Delegating);
-        let e = c.refresh(now("valid")).unwrap_err();
-        assert!(
-            matches!(&e, TufError::Malformed { why, .. } if why.contains("length and sha256")),
-            "{e:?}"
+        let trusted = c.refresh(now("valid")).unwrap();
+        assert_eq!(
+            c.delegated(&trusted, now("valid")).unwrap().roles().count(),
+            0
         );
     }
 

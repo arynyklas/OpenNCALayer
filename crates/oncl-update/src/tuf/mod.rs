@@ -6,9 +6,9 @@
 //! everything here is the authentication around them, and nothing in this module reads an
 //! index. The subset implemented, anything else is refused:
 //!
-//! - roles `root`, `timestamp`, `snapshot` and top-level `targets`; in the delegating
-//!   profile ([`Profile`]) one level of delegated roles of third-party publishers
-//!   ([`delegation`], [`names`]); no mirrors, no path hash prefixes;
+//! - roles `root`, `timestamp`, `snapshot` and top-level `targets`; one level of delegated
+//!   roles of third-party publishers, read apart from the program's updates ([`delegation`],
+//!   [`names`], [`Profile`]); no mirrors, no path hash prefixes;
 //! - Ed25519 keys and signatures only, sha256 only ([`keys`], [`ed25519`]);
 //! - consistent snapshots are required ([`layout`]);
 //! - signatures over the OLPC canonical JSON of the `signed` value, whatever it holds

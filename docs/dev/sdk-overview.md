@@ -6,22 +6,18 @@
 
 `oncl-core` выполняет потоковые подпись, проверку, валидацию, инспекцию и метки времени. Доверие, ключи, часы, сеть, аудит и лимиты ресурсов задаёт приложение, в которое встроен SDK. Графическая сессия, демон, слушающий порт и самообновление ему не нужны.
 
-В crates.io ничего не опубликовано, и свободны ли там имена `oncl-*`, не проверялось. Подключайте проверенный коммит по path или git. `streebog` и `hmac` берутся из изменённых форков, поэтому нужен тот же `[patch.crates-io]` с теми же `rev`, что в корневом `Cargo.toml`:
+В crates.io ничего не опубликовано, и свободны ли там имена `oncl-*`, не проверялось. Подключайте проверенный коммит по path или git. Все сторонние зависимости SDK берутся из crates.io, `[patch.crates-io]` не нужен:
 
 ```toml
 [dependencies]
 oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
-
-[patch.crates-io]
-streebog = { git = "https://github.com/arynyklas/hashes", rev = "7f67647379b26e89068874cfe8cf3bf0c8e72b69" }
-hmac = { git = "https://github.com/arynyklas/MACs", rev = "062e38d40e71236dcf49275ab7f9bd491b033c1c" }
 ```
 
 Без features получается минимальный SDK: CMS/CAdES, хеширование, PKI-валидация, файлы ключей и пакеты операций. Есть также `tokens`, `xml`, `pdf`, `jose`, `plugins` и `full` (всё сразу). Ни одна из них не тянет Slint, desktop, механизм обновления, сервер или асинхронный рантайм; это проверяет `cargo xtask sdk closure`.
 
 Примеры выпускают одноразовую PKI и не обращаются к сети: `cargo run -p oncl-core --example sign_file`, `--example verify_file -- <каталог> <файл>` и `--example custom_transport` (собственный HTTP-транспорт приложения; без сети строгая подпись отклоняется до применения ключа).
 
-Semver, контракты ошибок и лимитов, заметки о миграции и готовность к публикации описаны в [`docs/dev/sdk.md`](sdk.md). Цепочку упакованных исходников офлайн проверяет `cargo xtask sdk smoke`; загрузка в реестр невозможна из-за изменённых `hmac` и `streebog` и не выполнялась. Лицензии сторонних крейтов, от которых зависит SDK, собраны в [`crates/oncl-core/THIRD-PARTY.txt`](../../crates/oncl-core/THIRD-PARTY.txt).
+Semver, контракты ошибок и лимитов, заметки о миграции и готовность к публикации описаны в [`docs/dev/sdk.md`](sdk.md). Цепочку упакованных исходников офлайн проверяет `cargo xtask sdk smoke`; загрузка в реестр не выполнялась. Лицензии сторонних крейтов, от которых зависит SDK, собраны в [`crates/oncl-core/THIRD-PARTY.txt`](../../crates/oncl-core/THIRD-PARTY.txt).
 
 ## CAdES
 
@@ -84,7 +80,7 @@ cargo run -p oncl-core --features plugins,tokens --example sdk_probe -- --case L
 Происхождение метаданных подтверждают только закрытые преобразования SDK `SnapshotEncoding::{Identity,PdfByteString}`, декодер вызывающей стороны для этого не годится. Повторный захват подлинного снимка Source той же операции не увеличивает `bytes_in`, а снимок чужой операции отклоняется до ввода-вывода. Каждая новая копия держит реальный резерв временного диска и памяти, освобождение (Drop) копии возвращает её дисковую ёмкость. Повторное чтение сохраняет исходные дедлайн и управление и читает ограниченные упорядоченные диапазоны, новой операции и нового лимита времени оно не получает.
 
 ```
-cargo test -p oncl-pdf --test verify
+cargo test -p oncl-pdf --test all verify::
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P01 --out target/p01-smoke
 ```
 
@@ -103,7 +99,7 @@ Core требует обычного права `Action::Sign`, текущей �
 Закрытый `PdfSignatureOutput` работает только с пустым промежуточным выводом (OUTPUT) той же операции. Добавление учитывает вывод и временные данные один раз, ByteRange фиксируется до хеширования, после этого меняется только зарегистрированный шестнадцатеричный `Contents`. Он не открывает `File`, не даёт произвольного позиционирования и правки и не даёт записи в `FrozenInput`. `shared_view()` у `ResourceScope` даёт ещё один дескриптор той же операции с теми же общими счётчиками, дедлайном, управлением и арендой допуска; новой квоты для другого запроса он не создаёт.
 
 ```
-cargo test -p oncl-pdf --features testing --test sign
+cargo test -p oncl-pdf --features testing --test all sign::
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out target/p02-smoke
 ```
 

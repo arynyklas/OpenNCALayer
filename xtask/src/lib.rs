@@ -4,6 +4,7 @@
 pub mod builtins;
 pub mod e2e;
 pub mod ext;
+pub mod ext_updates;
 pub mod fetch;
 pub mod files;
 pub mod fixtures;
@@ -21,6 +22,7 @@ pub mod plugin_ops;
 pub mod plugin_ports;
 pub mod plugin_version;
 pub mod privacy;
+pub mod publishers;
 pub mod registry;
 pub mod release_features;
 pub mod sdk_delivery;

@@ -1,7 +1,7 @@
 //! Gives the program the git commit it is built from (`ONCL_GIT_COMMIT`, `unknown` outside
-//! a git checkout), for the About window, embeds the built-in modules' WebAssembly
-//! (`$OUT_DIR/builtins.rs`): taken from `ONCL_BUILTINS_DIR` if it is set, else built, and on
-//! Windows embeds the application manifest ([`embed_manifest`]).
+//! a git checkout, `dev` in a debug build), for the About window, embeds the built-in modules'
+//! WebAssembly (`$OUT_DIR/builtins.rs`): taken from `ONCL_BUILTINS_DIR` if it is set, else
+//! built, and on Windows embeds the application manifest ([`embed_manifest`]).
 
 use std::path::Path;
 use std::process::Command;
@@ -13,6 +13,17 @@ fn main() {
     if let Err(e) = oncl_builtins_build::embed(&workspace) {
         panic!("the built-in modules: {e}");
     }
+    // Only a release build says its commit: watching HEAD reruns this script, and so
+    // recompiles the crate and relinks its tests, after every commit and checkout.
+    if std::env::var("PROFILE").is_ok_and(|profile| profile == "release") {
+        stamp_commit();
+    } else {
+        println!("cargo:rustc-env=ONCL_GIT_COMMIT=dev");
+    }
+}
+
+/// `ONCL_GIT_COMMIT` from git, and the files a commit, checkout or reset changes to rerun on.
+fn stamp_commit() {
     let commit = git(&["rev-parse", "--short=12", "HEAD"]).unwrap_or_else(|| "unknown".into());
     println!("cargo:rustc-env=ONCL_GIT_COMMIT={commit}");
     // A commit, checkout or reset moves HEAD or the branch it names, and is written to

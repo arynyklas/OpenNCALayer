@@ -1,6 +1,6 @@
 [package]
 name = "oncl-testkit"
-description = "Test helpers for OpenNCALayer crates: workspace paths, fixture lookup and app-local DLL loading"
+description = "Test helpers for OpenNCALayer crates: workspace paths, fixture lookup, external tool lookup and app-local DLL loading"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

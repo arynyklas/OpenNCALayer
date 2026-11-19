@@ -179,6 +179,8 @@ impl Sandbox {
             },
             rollout: 100,
             revoked: false,
+            publisher: None,
+            capabilities: None,
         }
     }
 

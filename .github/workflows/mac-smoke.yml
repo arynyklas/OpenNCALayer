@@ -44,6 +44,10 @@ concurrency:
   group: mac-smoke-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.workflow_run.head_branch }}
   cancel-in-progress: false
 
+env:
+  # A test or check whose oracle program is missing fails instead of skipping.
+  ONCL_REQUIRE_ORACLES: "1"
+
 jobs:
   smoke:
     # A tag's Release run (its `head_branch` is the tag), or a manual run.

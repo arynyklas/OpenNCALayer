@@ -7,6 +7,8 @@ mod hash;
 pub mod hazmat;
 mod kz;
 mod point;
+mod secret_hmac;
+mod streebog_secret;
 pub mod wrap;
 
 pub use curves::{CurveId, GostAlg};

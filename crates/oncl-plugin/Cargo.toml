@@ -79,53 +79,5 @@ wat.workspace = true
 # Requests read and certificates issued in the key file tests.
 x509-cert.workspace = true
 
-[[test]]
-name = "builtins"
-required-features = ["distribution"]
-[[test]]
-name = "caps"
-required-features = ["distribution"]
-[[test]]
-name = "caps_crypto"
-required-features = ["distribution"]
-[[test]]
-name = "caps_files"
-required-features = ["distribution"]
-[[test]]
-name = "caps_flows"
-required-features = ["distribution"]
-[[test]]
-name = "caps_keys"
-required-features = ["distribution"]
-[[test]]
-name = "caps_keystore"
-required-features = ["distribution"]
-[[test]]
-name = "caps_net"
-required-features = ["distribution"]
-[[test]]
-name = "caps_state"
-required-features = ["distribution"]
-[[test]]
-name = "caps_tokens"
-required-features = ["distribution"]
-[[test]]
-name = "caps_verify"
-required-features = ["distribution"]
-[[test]]
-name = "example"
-required-features = ["distribution"]
-[[test]]
-name = "modules"
-required-features = ["distribution"]
-[[test]]
-name = "operations"
-[[test]]
-name = "package"
-required-features = ["distribution"]
-[[test]]
-name = "runtime"
-required-features = ["distribution"]
-[[test]]
-name = "store"
-required-features = ["distribution"]
+# The integration tests are one binary, `tests/all/` (`main.rs` and the other files, each a
+# module of it; the modules that need `distribution` are `#[cfg(feature = "distribution")]`).

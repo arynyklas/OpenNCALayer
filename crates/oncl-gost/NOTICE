@@ -8,10 +8,14 @@ operations behind it. It is not affiliated with or endorsed by the National Cert
 Authority of the Republic of Kazakhstan. "NCALayer" and "Kalkan" are used only to describe
 compatibility.
 
-The workspace builds oncl-gost and oncl-pki against forks of the RustCrypto `streebog`
-0.11.0 and `hmac` 0.13.0 crates (additive secret-input variants of the key-agreement and
-key-wrap paths; the public-document hash and HMAC paths are unchanged). Both are
-MIT OR Apache-2.0, Copyright (c) The RustCrypto Project Developers and Artyom Pavlov. The
-forks are https://github.com/arynyklas/hashes and https://github.com/arynyklas/MACs
-(branches `openncalayer/streebog-0.11.0` and `openncalayer/hmac-0.13.0`); the full notice
-is in the repository's `NOTICE`, which this package does not contain.
+src/streebog_secret.rs and src/streebog_secret/consts.rs are derived from the RustCrypto
+`streebog` 0.11.0 crate (https://github.com/RustCrypto/hashes, commit
+b5051e5a5e7dc86a6c27c1ec7a390744ebcfb97a), Copyright (c) 2016-2026 The RustCrypto Project
+Developers and Copyright (c) 2016 Artyom Pavlov, distributed under the MIT or Apache-2.0
+licenses and used here under Apache-2.0. consts.rs is a verbatim copy. streebog_secret.rs is
+modified for secret input: constant-time selection of the LPS table words (the `subtle`
+crate), compression temporaries in one workspace wiped after every block, the state in one
+heap allocation made before any input and wiped as soon as the digest is written. It was
+first kept in a fork (https://github.com/arynyklas/hashes, branch
+`openncalayer/streebog-0.11.0`). src/secret_hmac.rs is our own RFC 2104 HMAC over it. Public
+document hashing uses the unmodified crates.io `streebog`.

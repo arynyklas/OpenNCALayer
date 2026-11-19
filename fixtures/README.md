@@ -17,7 +17,7 @@
   - `crates/oncl-gost/tests/kz.rs` проверяет подпись каждого из 9 ГОСТ-сертификатов ключом его издателя:
     - ГОСТ 34.310-2004: `prod/ncagost`, `prod/ncagost18`, `prod/rcagost`, `test/ncagosttest2018`, `test/rcagosttest2018`;
     - ГОСТ 34.10-2015-512: `prod/ncagost22`, `prod/rcagost22`, `test/ncagosttest2022`, `test/rcagosttest2022`.
-  - `crates/oncl-pki/tests/cert_verify.rs` проверяет через `cert::verify_signature` все 16 сертификатов, ГОСТ и RSA. Издатель ищется по DN.
+  - `crates/oncl-pki/tests/all/cert_verify.rs` проверяет через `cert::verify_signature` все 16 сертификатов, ГОСТ и RSA. Издатель ищется по DN.
 - **Встроенные корни.** Все 10 сертификатов `nca/prod/` вшиваются в бинарь (`crates/oncl-pki/src/roots.rs`, `include_bytes!`) — это набор CA по умолчанию для `signerParams.chain` в демоне (`oncl verify` использует только корни, переданные оператором через `--root`). Вшиваются копии из `crates/oncl-pki/roots/` (исходный пакет `oncl-pki` самодостаточен и не читает `fixtures/` вне крейта); тест сверяет их с `SHA256SUMS`, поэтому файл в `nca/prod/` и его копия меняются только вместе с суммой. Так же `crates/oncl-pki/testing-data/rsa.pk8.der` — копия `openssl/rsa.pk8.der` (синтетический ключ для `testing`), равенство проверяет тест. `nca/test/` не встраивается.
 
 ## `nca-ocsp/` — ответ тестового OCSP НУЦ (коммитится)
@@ -25,11 +25,11 @@
 Один записанный ответ тестового ответчика НУЦ `http://test.pki.gov.kz/ocsp/` о тестовом сертификате NCANode `individual_valid_2015` (издатель — `nca/test/ncagosttest2022`). Это публичные данные: подписанный статус публичного тестового сертификата и сертификат ответчика. Секретов в нём нет.
 
 - `individual_valid_2015.req.der` — запрос `openssl ocsp -issuer ncagosttest2022.pem -cert <лист> -no_nonce -reqout …` (OpenSSL 3.0.13). Тест сверяет с ним `ocsp::request_der` байт в байт.
-- `individual_valid_2015.resp.der` — ответ на этот запрос по GET-биндингу НУЦ (`curl http://test.pki.gov.kz/ocsp/<urlencode(base64(запрос))>`), записан 2026-10-26: `good`, thisUpdate = producedAt = `20261026000150Z`, без nextUpdate, ответчик `CN=OCSP` выпущен `ncagosttest2022` (срок до 2029-03-09). `crates/oncl-pki/tests/ocsp.rs` проверяет его офлайн на фиксированный момент внутри окна `ALLOWED_PERIOD`; лист берётся из `target/fixtures/ncanode/`.
+- `individual_valid_2015.resp.der` — ответ на этот запрос по GET-биндингу НУЦ (`curl http://test.pki.gov.kz/ocsp/<urlencode(base64(запрос))>`), записан 2026-10-26: `good`, thisUpdate = producedAt = `20261026000150Z`, без nextUpdate, ответчик `CN=OCSP` выпущен `ncagosttest2022` (срок до 2029-03-09). `crates/oncl-pki/tests/all/ocsp.rs` проверяет его офлайн на фиксированный момент внутри окна `ALLOWED_PERIOD`; лист берётся из `target/fixtures/ncanode/`.
 
 ## `nca-crl/` — CRL корневого ГОСТ-УЦ НУЦ (коммитится)
 
-- `gost2015_2022.crl` — CRL `НЕГІЗГІ КУӘЛАНДЫРУШЫ ОРТАЛЫҚ (GOST) 2022` (`nca/prod/rcagost22`) из точки распространения CRL сертификата `nca/prod/ncagost22`: `curl http://crl.root.gov.kz/gost2015_2022.crl`, записан 2026-10-26 (`Content-Type: application/pkix-crl`, 471 байт, sha256 `4e8038f34a1c216f352c7861b94ef99b5464bfb566a0737ef0140597ac1f8380`). CRL v2, подпись ГОСТ 34.10-2015-512, thisUpdate `2026-10-02 05:12:41 UTC`, nextUpdate `2026-11-06 05:12:41 UTC`, расширения CRL Number (63) и authorityKeyIdentifier, отозванных сертификатов нет. Публичные данные. `crates/oncl-pki/tests/crl.rs` проверяет его офлайн на фиксированные моменты: подпись ключом `rcagost22`, границы thisUpdate/nextUpdate, издателя и статус `ncagost22`.
+- `gost2015_2022.crl` — CRL `НЕГІЗГІ КУӘЛАНДЫРУШЫ ОРТАЛЫҚ (GOST) 2022` (`nca/prod/rcagost22`) из точки распространения CRL сертификата `nca/prod/ncagost22`: `curl http://crl.root.gov.kz/gost2015_2022.crl`, записан 2026-10-26 (`Content-Type: application/pkix-crl`, 471 байт, sha256 `4e8038f34a1c216f352c7861b94ef99b5464bfb566a0737ef0140597ac1f8380`). CRL v2, подпись ГОСТ 34.10-2015-512, thisUpdate `2026-10-02 05:12:41 UTC`, nextUpdate `2026-11-06 05:12:41 UTC`, расширения CRL Number (63) и authorityKeyIdentifier, отозванных сертификатов нет. Публичные данные. `crates/oncl-pki/tests/all/crl.rs` проверяет его офлайн на фиксированные моменты: подпись ключом `rcagost22`, границы thisUpdate/nextUpdate, издателя и статус `ncagost22`.
 
 ## `ocsp/` — эталонный OCSP-запрос OpenSSL (коммитится)
 

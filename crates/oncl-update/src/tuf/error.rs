@@ -182,11 +182,6 @@ pub enum TufError {
     /// The state directory could not be read or written.
     #[error("TUF state: {0}")]
     Store(#[from] io::Error),
-    /// A top-level targets read in the delegating profile has no `delegations` member: the
-    /// delegations are unknown, which is not the same as "there are none" (an empty
-    /// `{"keys": {}, "roles": []}`).
-    #[error("the top-level targets have no delegations")]
-    DelegationsMissing,
     /// A delegated role that is not trusted, for a reason only a delegation has. The other
     /// roles, and the top-level metadata, are not concerned.
     #[error("the delegated role {role}: {error}")]
@@ -220,6 +215,9 @@ pub enum DelegationError {
     /// The snapshot does not list the role's file.
     #[error("the snapshot does not list it")]
     NotInSnapshot,
+    /// The snapshot lists the role's file without its length and sha256.
+    #[error("the snapshot lists it without its length and sha256")]
+    Unhashed,
     /// The role's file has a `delegations` member: delegations are one level deep.
     #[error("it delegates further")]
     Nested,

@@ -2320,7 +2320,8 @@ dependencies = [
 [[package]]
 name = "hmac"
 version = "0.13.0"
-source = "git+https://github.com/arynyklas/MACs?rev=062e38d40e71236dcf49275ab7f9bd491b033c1c#062e38d40e71236dcf49275ab7f9bd491b033c1c"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6303bc9732ae41b04cb554b844a762b4115a61bfaa81e3e83050991eeb56863f"
 dependencies = [
  "digest 0.11.3",
 ]
@@ -4096,7 +4097,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oncl-api"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "axum",
  "der 0.8.2",
@@ -4126,7 +4127,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtin-accessory"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "oncl-pdk",
  "serde_json",
@@ -4134,7 +4135,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtin-applet"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "oncl-pdk",
@@ -4143,7 +4144,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtin-basics"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4153,7 +4154,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtin-commonutils"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "oncl-pdk",
@@ -4161,7 +4162,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtin-tests"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4190,9 +4191,10 @@ dependencies = [
 
 [[package]]
 name = "oncl-builtins-build"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "oncl-plugin",
+ "oncl-testkit",
  "serde",
  "sha2 0.11.1",
  "tempfile",
@@ -4201,7 +4203,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-cli"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "clap",
@@ -4233,7 +4235,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-core"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4262,7 +4264,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-desktop"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "libc",
  "oncl-flows",
@@ -4277,7 +4279,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-flows"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "der 0.8.2",
  "oncl-pki",
@@ -4293,7 +4295,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-gost"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "crypto-bigint",
  "getrandom 0.4.3",
@@ -4301,6 +4303,7 @@ dependencies = [
  "hmac 0.13.0",
  "oncl-testkit",
  "streebog",
+ "subtle",
  "thiserror 2.0.21",
  "x509-cert",
  "zeroize",
@@ -4308,7 +4311,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-ipc"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "libc",
@@ -4320,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-nmhost"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "oncl-ipc",
  "serde",
@@ -4331,7 +4334,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pdf"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "der 0.8.2",
  "flate2",
@@ -4346,7 +4349,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pdk"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "ciborium",
  "oncl-protocol",
@@ -4358,7 +4361,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-pki"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "aes",
  "aws-lc-rs",
@@ -4399,7 +4402,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-plugin"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4435,7 +4438,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-port-tests"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "aes",
  "base64",
@@ -4463,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-protocol"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "hashbrown 0.17.1",
@@ -4474,14 +4477,14 @@ dependencies = [
 
 [[package]]
 name = "oncl-registry"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "windows-sys 0.61.2",
 ]
 
 [[package]]
 name = "oncl-server"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "async-trait",
  "axum",
@@ -4530,7 +4533,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-testkit"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "object",
  "serde",
@@ -4543,7 +4546,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-tls"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "der 0.8.2",
  "rand_chacha 0.3.1",
@@ -4563,7 +4566,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-token"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "der 0.8.2",
  "flate2",
@@ -4587,8 +4590,9 @@ dependencies = [
 
 [[package]]
 name = "oncl-trust"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
+ "oncl-testkit",
  "oncl-tls",
  "rusqlite",
  "security-framework",
@@ -4603,7 +4607,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-ui"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "der 0.8.2",
  "ksni",
@@ -4642,7 +4646,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-update"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "getrandom 0.4.3",
  "oncl-pki",
@@ -4661,18 +4665,18 @@ dependencies = [
 
 [[package]]
 name = "oncl-win7shim-combase"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 
 [[package]]
 name = "oncl-win7shim-winrt-error"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "oncl-testkit",
 ]
 
 [[package]]
 name = "oncl-winget-setup"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "oncl-core",
  "oncl-ipc",
@@ -4687,7 +4691,7 @@ dependencies = [
 
 [[package]]
 name = "oncl-xml"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "der 0.8.2",
@@ -4703,7 +4707,7 @@ dependencies = [
 
 [[package]]
 name = "openncalayer"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "base64",
  "clap",
@@ -6402,10 +6406,10 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "streebog"
 version = "0.11.0"
-source = "git+https://github.com/arynyklas/hashes?rev=7f67647379b26e89068874cfe8cf3bf0c8e72b69#7f67647379b26e89068874cfe8cf3bf0c8e72b69"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "942b8aca83a17a387b90643abe15430abd0aabc91d6db511e85827e7060746ef"
 dependencies = [
  "digest 0.11.3",
- "subtle",
 ]
 
 [[package]]
@@ -8391,7 +8395,7 @@ checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
 name = "xtask"
-version = "0.1.1"
+version = "0.1.2-beta.1"
 dependencies = [
  "anyhow",
  "base64",

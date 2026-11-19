@@ -4,9 +4,11 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use oncl_pki::http::HttpTransport;
+use oncl_update::tuf::PublicKey;
 use oncl_update::tuf::store::{FileStore, Store};
 use oncl_update::tuf::testing::Repo;
 use oncl_update::{Channel, Index, UpdateError};
+use serde_json::{Map, Value, json};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 use super::Repository;
@@ -81,6 +83,28 @@ pub(crate) fn index(channel: Channel, seq: u64) -> Vec<u8> {
         plugins: Vec::new(),
     })
     .unwrap()
+}
+
+/// `delegations` members the top-level targets of `tuf/v1` may carry, by what they are:
+/// none of them is the concern of the program's updates.
+pub(crate) fn delegations_members() -> [(&'static str, Value); 3] {
+    let key = PublicKey::from_bytes([9; 32]);
+    let keyid = key.key_id().to_hex();
+    let keys: Map<String, Value> = [(keyid.clone(), key.to_value())].into_iter().collect();
+    [
+        ("empty", json!({"keys": {}, "roles": []})),
+        (
+            "one role",
+            json!({
+                "keys": keys,
+                "roles": [{
+                    "name": "pub-acme", "keyids": [keyid], "threshold": 1,
+                    "paths": ["plugins/acme/*/*"], "terminating": true,
+                }],
+            }),
+        ),
+        ("unreadable", json!({"keys": {}, "roles": 7})),
+    ]
 }
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -339,6 +363,30 @@ fn a_kept_index_is_checked_offline_against_the_saved_targets() {
             .is_err()
     );
     assert_eq!(transport.asked().len(), asked, "no request was made");
+}
+
+#[test]
+fn the_updater_reads_tuf_v1_with_delegations() {
+    for (what, delegations) in delegations_members() {
+        let (server, transport, dir) = (
+            Server::new(),
+            Arc::new(FakeTransport::default()),
+            tempfile::tempdir().unwrap(),
+        );
+        server.repo().delegations = Some(delegations);
+        let body = index(Channel::Stable, 5);
+        server.publish(&transport, Channel::Stable, &body);
+        let r = repository(&server, dir.path(), &transport);
+        let got = r
+            .index(Channel::Stable, None, TIMEOUT)
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert_eq!((got.index.seq, got.bytes), (5, body.clone()), "{what}");
+        let now = OffsetDateTime::now_utc();
+        let until = r
+            .verify_kept(Channel::Stable, &body, now)
+            .unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(until > now + TimeDuration::days(29), "{what}");
+    }
 }
 
 #[test]

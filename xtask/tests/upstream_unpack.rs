@@ -504,10 +504,21 @@ fn zip_symlink_entries_are_skipped() {
 fn sevenzip_does_not_follow_a_link_out_of_the_output() {
     use xtask::upstream::tools::{find_7z, sevenzip_supported, sevenzip_version};
     use xtask::upstream::unpack::{Extractor, SevenZip};
-    let Some(exe) =
-        find_7z().filter(|e| sevenzip_version(e).is_some_and(|v| sevenzip_supported(&v)))
-    else {
-        eprintln!("no 7-Zip 25.01 or newer: the watcher does not use older ones");
+    let found = find_7z()
+        .filter(|e| sevenzip_version(e).is_some_and(|v| sevenzip_supported(&v)))
+        .ok_or_else(|| {
+            oncl_testkit::tool::Missing::new(
+                "7-Zip 25.01 or newer",
+                vec![
+                    "the default 7-Zip install (Windows)".to_owned(),
+                    "7z".to_owned(),
+                ],
+                Some("ONCL_7Z"),
+                "7-Zip 25.01 or newer (https://www.7-zip.org/); the watcher does not use \
+                 older ones",
+            )
+        });
+    let Some(exe) = oncl_testkit::tool::or_skip(found) else {
         return;
     };
     let dir = tempfile::tempdir().unwrap();

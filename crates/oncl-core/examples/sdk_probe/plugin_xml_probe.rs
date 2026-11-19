@@ -239,7 +239,7 @@ pub(super) fn run(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
         out.join("plugin-xml-manifest.json"),
         r#"{"rsa_files":["plugin-xml-basic.xml","plugin-xml-ex.xml","plugin-xades-b.xml","plugin-xades-t.xml","plugin-xades-lt.xml"]}"#,
     )?;
-    let oracle = std::process::Command::new("python")
+    let oracle = std::process::Command::new(oncl_testkit::tool::python_with("lxml, cryptography")?)
         .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/sdk_probe/plugin_xml_oracle.py"))
         .arg("--out")
         .arg(out)

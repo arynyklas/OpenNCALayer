@@ -498,7 +498,7 @@ impl PluginService {
             };
         }
         let channel = self.update_settings().channel;
-        let index = self.valid_index();
+        let index = self.valid_index().map(oncl_update::Catalog::owner);
         let (checked, error) = {
             let catalog = lock(&self.catalog);
             (catalog.checked, catalog.error.clone())
@@ -506,7 +506,7 @@ impl PluginService {
         let catalog = match &index {
             Some(index) => CatalogView::Ready {
                 channel,
-                generated: index.generated,
+                generated: index.index().generated,
                 checked,
                 error,
             },
@@ -516,7 +516,7 @@ impl PluginService {
         let available = index
             .as_ref()
             .map(|index| {
-                let ids: BTreeSet<&str> = index.plugins.iter().map(|r| r.id.as_str()).collect();
+                let ids: BTreeSet<&str> = index.releases().map(|r| r.id.as_str()).collect();
                 ids.into_iter()
                     .filter(|id| !state.plugins.contains_key(*id))
                     .filter_map(|id| {
@@ -571,7 +571,10 @@ impl PluginService {
             Asker::User
         };
         let failed = |name: Localized, error: String| self.install_failed(id, name, error, asker);
-        let Some(index) = self.ensure_index(INDEX_TIMEOUT, asker) else {
+        let Some(index) = self
+            .ensure_index(INDEX_TIMEOUT, asker)
+            .map(oncl_update::Catalog::owner)
+        else {
             failed(
                 same_name(id),
                 "the plugin catalog is unavailable".to_owned(),
@@ -721,7 +724,7 @@ impl PluginService {
         symname: &str,
         timeout: Duration,
     ) -> Option<PluginRelease> {
-        let index = self.ensure_index(timeout, Asker::Page)?;
+        let index = oncl_update::Catalog::owner(self.ensure_index(timeout, Asker::Page)?);
         let state = self.store.state();
         offer(&index, &self.cfg.core, &state.install_id, &state.bad, |r| {
             r.replaces.as_ref().is_some_and(|p| p.symname == symname)
@@ -734,7 +737,7 @@ impl PluginService {
     /// read again) when its entry changes: a plugin newly needed, or by another page. Never
     /// downloads.
     fn missing(&self, module: &str, add_info: &AddInfo) {
-        let Some(index) = self.valid_index() else {
+        let Some(index) = self.valid_index().map(oncl_update::Catalog::owner) else {
             return;
         };
         let state = self.store.state();
@@ -935,7 +938,7 @@ impl PluginService {
         loop {
             self.apply_pending.store(false, Ordering::SeqCst);
             if let Some(index) = self.valid_index() {
-                self.apply_index(&index);
+                self.apply_index(&oncl_update::Catalog::owner(index));
             }
             if !self.apply_pending.swap(false, Ordering::SeqCst) {
                 break;
@@ -944,7 +947,7 @@ impl PluginService {
     }
 
     /// One pass of [`PluginService::apply_catalog`] over `index`.
-    fn apply_index(&self, index: &Index) {
+    fn apply_index(&self, index: &oncl_update::Catalog) {
         let state = self.store.state();
         for (id, snapshot) in &state.plugins {
             if snapshot.source != Source::Catalog {
@@ -963,8 +966,7 @@ impl PluginService {
                 PluginChoice::Keep => {
                     lock(&self.pending).remove(id);
                     let listed = index
-                        .plugins
-                        .iter()
+                        .releases()
                         .any(|r| r.id == *id && r.version == snapshot.version && !r.revoked);
                     if !(snapshot.withdrawn && listed) {
                         continue;
@@ -983,7 +985,9 @@ impl PluginService {
                 PluginChoice::Update(release) | PluginChoice::Downgrade(release) => {
                     self.update_to(release, snapshot);
                 }
-                PluginChoice::Withdrawn if !snapshot.withdrawn => {
+                PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_)
+                    if !snapshot.withdrawn =>
+                {
                     lock(&self.pending).remove(id);
                     let _change = lock(&self.changing);
                     if self.still(id, snapshot).is_none() {
@@ -999,8 +1003,13 @@ impl PluginService {
                         name: self.name_of(id),
                     });
                 }
-                PluginChoice::Withdrawn => {
+                PluginChoice::Withdrawn | PluginChoice::PublisherRevoked(_) => {
                     lock(&self.pending).remove(id);
+                }
+                // A choice this core does not know leaves the plugin as it is, but is logged:
+                // a newer library may mean a withdrawal by it.
+                other => {
+                    warn!(plugin = %id, choice = ?other, "unknown plugin choice; the plugin is left as it is");
                 }
             }
         }

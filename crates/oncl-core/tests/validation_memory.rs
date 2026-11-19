@@ -210,7 +210,13 @@ fn validate(
     let limits = ResourceLimits {
         memory_bytes: memory as u64,
         metadata_bytes: 4 << 20,
-        operation_timeout: Duration::from_secs(60),
+        // The deadline is not under test (io_limits, admission and validation_policy
+        // cover it). One validation here is 704 GOST R 34.10 512-bit verifications
+        // (11 per signer), about 14 s in a debug build on a fast machine and several
+        // times that on a shared CI runner; a 60 s deadline turned that runner speed
+        // into DeadlineExceeded. An hour is never reached: nextest's terminate-after
+        // stays the guard against a hang.
+        operation_timeout: Duration::from_secs(3600),
         ..ResourceLimits::default()
     };
     let services = ValidationServices::new(
@@ -266,14 +272,15 @@ fn many_signers_share_common_signed_evidence_within_operation_memory_budget() {
     );
     match result {
         Ok(report) => assert_all_signers(&report),
-        Err(OperationError::Processing(ProcessingError::MemoryLimit)) => {}
+        // A genuine quota refusal is acceptable, but the same signed input must
+        // then complete with all signer results when the host supplies more memory.
+        // After a completed first run that second run would only repeat it.
+        Err(OperationError::Processing(ProcessingError::MemoryLimit)) => {
+            let (result, peak) = validate(&input, memory * 4, network.clone());
+            assert!(peak <= memory * 4);
+            assert_all_signers(&result.unwrap());
+        }
         Err(error) => panic!("bounded evidence handling returned unrelated error: {error}"),
     }
-    assert_eq!(network.0.load(Ordering::SeqCst), 0);
-    // A genuine quota refusal is acceptable above, but the same signed input
-    // must complete with all signer results when the host supplies more memory.
-    let (result, peak) = validate(&input, memory * 4, network.clone());
-    assert!(peak <= memory * 4);
-    assert_all_signers(&result.unwrap());
     assert_eq!(network.0.load(Ordering::SeqCst), 0);
 }

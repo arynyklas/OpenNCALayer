@@ -49,12 +49,12 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
     ),
     ("crates/oncl-basics/tests/sign.rs", 'C', &["/keys/"]),
     (
-        "crates/oncl-builtin-tests/tests/basics_sign.rs",
+        "crates/oncl-builtin-tests/tests/all/basics_sign.rs",
         'C',
         &["/keys/"],
     ),
     (
-        "crates/oncl-builtin-tests/tests/commonutils.rs",
+        "crates/oncl-builtin-tests/tests/all/commonutils.rs",
         'C',
         &["/x"],
     ),
@@ -115,15 +115,19 @@ pub const MACHINE_PATH_EXCEPTIONS: &[(&str, char, &[&str])] = &[
         'C',
         &[r"\Data\OpenNCALayer", r"\\Data\\OpenNCALayer"],
     ),
-    ("crates/oncl-pki/tests/csr.rs", 'C', &[r"\\Users\\Тест\\"]),
-    ("crates/oncl-pki/tests/keystore.rs", 'C', &[r"\\keys"]),
     (
-        "crates/oncl-plugin/tests/package.rs",
+        "crates/oncl-pki/tests/all/csr.rs",
+        'C',
+        &[r"\\Users\\Тест\\"],
+    ),
+    ("crates/oncl-pki/tests/all/keystore.rs", 'C', &[r"\\keys"]),
+    (
+        "crates/oncl-plugin/tests/all/package.rs",
         'C',
         &["/plugin.wasm"],
     ),
     (
-        "crates/oncl-plugin/tests/runtime.rs",
+        "crates/oncl-plugin/tests/all/runtime.rs",
         'C',
         &[r"\\k.p12", r"\\keys"],
     ),

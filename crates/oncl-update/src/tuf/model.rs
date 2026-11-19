@@ -15,7 +15,8 @@
 //! - `consistent_snapshot` is `true`;
 //! - hashes are sha256 only;
 //! - in the [`Profile::Legacy`] profile targets have no `delegations` (not even an empty
-//!   one); in [`Profile::Delegating`] the top-level targets must have one ([`Delegations`]);
+//!   one); in [`Profile::Delegating`] the top-level targets may have one, kept unread
+//!   ([`Targets::delegations`] reads it into [`Delegations`]);
 //! - a target path is a [`TargetPath`].
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -420,16 +421,17 @@ pub struct Target {
     pub custom: Option<Value>,
 }
 
-/// What a repository's top-level targets carry besides the targets, and so how the client
-/// reads them.
+/// How the client reads a repository's top-level targets: the `delegations` member is the
+/// only difference.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Profile {
-    /// No delegations: a top-level targets with a `delegations` member, even an empty one, is
-    /// refused. The profile of `tuf/v1` and of every client released before delegations.
+    /// The clients released before delegations (0.1.0, 0.1.1): a top-level targets with a
+    /// `delegations` member, even an empty one, is refused. Kept to tell whether they still
+    /// read a repository.
     Legacy,
-    /// The top-level targets must have a `delegations` member (empty if there is no
-    /// publisher), read into [`Delegations`]; every entry of a snapshot's `meta` must list
-    /// its length and sha256.
+    /// Every client from 0.1.2: `delegations` is optional and is not read with the targets
+    /// ([`Targets::delegations`] reads it, for the plugin catalog only), so the program's
+    /// updates never depend on it.
     Delegating,
 }
 
@@ -442,27 +444,25 @@ pub struct Targets {
     pub expires: OffsetDateTime,
     /// The files, by target path.
     pub targets: BTreeMap<TargetPath, Target>,
-    /// The delegations: always `Some` in the [`Profile::Delegating`] profile, always `None`
-    /// in [`Profile::Legacy`].
-    pub delegations: Option<Delegations>,
+    /// The `delegations` member as signed, unread (`None` without one, always in
+    /// [`Profile::Legacy`]).
+    delegations: Option<Value>,
 }
 
 impl Targets {
     /// Reads the `signed` of a targets file in `profile`; the errors are those of
-    /// [`Root::from_signed`] and of [`Delegations`], and in [`Profile::Legacy`]
-    /// [`TufError::Unsupported`] for a `delegations` member, in [`Profile::Delegating`]
-    /// [`TufError::DelegationsMissing`] for none.
+    /// [`Root::from_signed`], and in [`Profile::Legacy`] [`TufError::Unsupported`] for a
+    /// `delegations` member. In [`Profile::Delegating`] that member is not read here.
     pub fn from_signed(signed: &Value, profile: Profile) -> Result<Targets, TufError> {
         let (members, header) = header(signed, Role::Targets)?;
         let delegations = match (profile, members.get("delegations")) {
-            (Profile::Legacy, None) => None,
+            (_, None) => None,
             (Profile::Legacy, Some(_)) => {
                 return Err(TufError::Unsupported(
                     "delegations in targets metadata".to_owned(),
                 ));
             }
-            (Profile::Delegating, None) => return Err(TufError::DelegationsMissing),
-            (Profile::Delegating, Some(delegations)) => Some(Delegations::from_value(delegations)?),
+            (Profile::Delegating, Some(delegations)) => Some(delegations.clone()),
         };
         let mut targets = BTreeMap::new();
         for (path, entry) in object(field(members, "targets", "targets")?, "targets")? {
@@ -486,6 +486,22 @@ impl Targets {
             targets,
             delegations,
         })
+    }
+
+    /// The delegations, read now: `Ok(None)` without the member. A member that cannot be
+    /// read is an error here, for the plugin catalog, never for the targets.
+    ///
+    /// # Errors
+    ///
+    /// [`TufError::Malformed`] for a field missing or of the wrong type, a key id that is not
+    /// 64 hex digits, a role name that is not a [`RoleName`](super::names::RoleName) or is
+    /// listed twice; [`TufError::BadKeyId`] for a key under another id than its hash;
+    /// [`TufError::Unsupported`] for a key that is not Ed25519.
+    pub fn delegations(&self) -> Result<Option<Delegations>, TufError> {
+        self.delegations
+            .as_ref()
+            .map(Delegations::from_value)
+            .transpose()
     }
 }
 

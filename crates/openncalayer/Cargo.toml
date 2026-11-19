@@ -92,17 +92,9 @@ toml.workspace = true
 # Velopack packages (zip archives) in the installer's tests.
 zip.workspace = true
 
-[[test]]
-name = "tokens"
-required-features = ["e2e-prompter", "token-emulator"]
-
 [build-dependencies]
 # The built-in modules' WebAssembly, built (or taken from `ONCL_BUILTINS_DIR`) and embedded.
 oncl-builtins-build.workspace = true
-
-[[test]]
-name = "maintenance_e2e"
-required-features = ["e2e-prompter"]
 
 [target.'cfg(windows)'.dev-dependencies]
 # Ending the processes the maintenance end-to-end tests start.

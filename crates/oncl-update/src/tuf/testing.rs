@@ -9,12 +9,13 @@
 
 use std::collections::BTreeMap;
 
+use serde_json::Value;
 use time::{Duration, OffsetDateTime};
 
 use super::build::{self, RoleDef, RootDef};
 use super::fetch::MemoryFetcher;
 use super::layout;
-use super::{SigningKey, TufClient};
+use super::{Profile, SigningKey, TufClient};
 use crate::Channel;
 
 /// How long each role stays valid from the moment of signing, the design's values by
@@ -60,6 +61,9 @@ pub struct Repo {
     /// The version of the timestamp published next (it grows by one with each publication,
     /// as a timestamp signed later has a higher version).
     pub next_timestamp: u64,
+    /// The `delegations` member of the top-level targets published next, as it is signed
+    /// (`None`: no member). Anything, also what no client can read as delegations.
+    pub delegations: Option<Value>,
 }
 
 impl Repo {
@@ -100,6 +104,7 @@ impl Repo {
             lifetimes,
             next_version: 1,
             next_timestamp: 1_000_000,
+            delegations: None,
         }
     }
 
@@ -128,8 +133,13 @@ impl Repo {
             .iter()
             .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
             .collect();
-        let targets_signed = build::targets(version, at + self.lifetimes.targets, &listed)
+        let mut targets_signed = build::targets(version, at + self.lifetimes.targets, &listed)
             .expect("targets of valid paths");
+        if let (Some(delegations), Some(members)) =
+            (&self.delegations, targets_signed.as_object_mut())
+        {
+            members.insert("delegations".to_owned(), delegations.clone());
+        }
         let targets = build::sign(&targets_signed, &[&self.targets]).expect("a targets file");
         let snapshot_signed =
             build::snapshot(version, at + self.lifetimes.snapshot, version, &targets)
@@ -188,7 +198,8 @@ impl Repo {
         fetcher
     }
 
-    /// A client of `fetcher` and `store` that trusts this repository's root.
+    /// A client of `fetcher` and `store` that trusts this repository's root, in the profile
+    /// of the program ([`Profile::Delegating`]).
     ///
     /// # Panics
     ///
@@ -200,6 +211,7 @@ impl Repo {
     ) -> TufClient<F, S> {
         TufClient::new(&self.anchor, fetcher, store, super::Limits::default())
             .expect("this repository's own root")
+            .with_profile(Profile::Delegating)
     }
 }
 

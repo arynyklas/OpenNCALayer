@@ -4,7 +4,7 @@
 
 ## Коротко: от клона до зелёных тестов
 
-1. Поставьте `rustup`, OpenSSL 3 и Python 3.12 или новее (в CI стоит 3.12). На Linux до `cargo test --workspace` нужны ещё пакеты разработки для окон из раздела [«Сборка и запуск»](#сборка-и-запуск): `libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev`. Подробности в разделе [«Что нужно для тестов»](#что-нужно-для-тестов).
+1. Поставьте `rustup`, OpenSSL 3 и Python 3.12 или новее (в CI стоит 3.12). На Linux до `cargo test --workspace` нужны ещё пакеты разработки для окон из раздела [«Сборка и запуск»](#сборка-и-запуск): `libfontconfig1-dev libxkbcommon-dev libwayland-dev`. Подробности в разделе [«Что нужно для тестов»](#что-нужно-для-тестов).
 2. Создайте для тестов отдельное окружение Python и укажите путь к нему:
    ```sh
    python3 -m venv .venv-oracle
@@ -24,10 +24,10 @@
 
 Нужен `rustup`. Версия Rust записана в `rust-toolchain.toml` и ставится автоматически.
 
-На Linux для окон нужны пакеты разработки fontconfig, xkbcommon, Wayland и GTK 3. В Debian и Ubuntu:
+На Linux для окон нужны пакеты разработки fontconfig, xkbcommon и Wayland. GTK не нужен: ни один крейт из `Cargo.lock` его не подключает. В Debian и Ubuntu:
 
 ```sh
-sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev libgtk-3-dev
+sudo apt-get install -y libfontconfig1-dev libxkbcommon-dev libwayland-dev
 ```
 
 Для запуска программы на Linux нужны ещё два компонента:
@@ -106,9 +106,25 @@ openncalayer run        # запустить сервер со значком; `
 
 Переменная `ONCL_DATA_DIR` задаёт другой каталог данных. При разработке укажите её (например, `ONCL_DATA_DIR=target/oncl-data`), чтобы не трогать свой рабочий профиль.
 
+## Как не ждать сборку
+
+Советы ниже основаны на замерах на машине разработки.
+
+- Каталог `target` держите на SSD или NVMe, не на HDD. На HDD одна сборка нескольких клонов давала очередь в 31 запрос и 60 мс на операцию при 0 % простоя, а NVMe рядом был свободен на 98 %. Один каталог тестов `oncl-cli` занимает около 6 ГБ.
+- Держите один общий `CARGO_TARGET_DIR` на клон и одну форму команды в нём. Новый каталог означает холодную сборку: весь workspace собирался на той машине около 12 минут. Если в том же каталоге сменить `-p oncl-cli` на `--workspace`, пересоберутся 107 сторонних и 42 своих крейта, которые уже были собраны, а при смене `-p oncl-pki` на `-p oncl-cli` и обратно 38 и 5. Смена линкера, тулчейна или `RUSTFLAGS` пересобирает всё.
+- В Windows исключите каталог сборки из проверки Defender в реальном времени или собирайте на Dev Drive (на SSD) в режиме производительности. Во время сборки Defender занимал около 0,67 ядра. Сколько времени это даёт, не измерялось.
+
 ## Что нужно для тестов
 
-Для сборки этот раздел не нужен, а `cargo test` без него упадёт. Часть тестов сверяет результат нашего кода с независимыми программами: OpenSSL, pyHanko, lxml и другими. Если нужной программы нет, тест падает, а не пропускается.
+Для сборки этот раздел не нужен. Часть тестов сверяет результат нашего кода с независимыми программами: OpenSSL, pyHanko, lxml и другими. Если нужной программы нет, такой тест (или одна его проверка) пропускается и считается пройденным, а в вывод `cargo test` попадает строка, где сказано, какой программы не хватило и где её искали:
+
+```text
+skipped: <имя теста> needs openssl (not found: tried `openssl`; ONCL_OPENSSL is not set); see docs/dev/development.md «Что нужно для тестов»
+```
+
+Молча тесты не пропускаются. Но зелёный прогон с такими строками проверил меньше, чем CI. Чтобы отсутствие программы было ошибкой, задайте `ONCL_REQUIRE_ORACLES=1`: тогда тест падает и пишет полное сообщение, то есть какие файлы пробовал, какой переменной указать путь и какой пакет поставить. Любое значение, кроме пустого и `0`, тоже включает эту проверку. В CI переменная задана для всех тестов.
+
+`cargo nextest` по умолчанию не показывает вывод прошедших тестов, поэтому строк `skipped:` там не видно. Запускайте его с `--success-output final`, тогда они появятся в конце прогона. Или задайте `ONCL_REQUIRE_ORACLES=1`, и пропусков не будет вовсе.
 
 Что поставить:
 
@@ -121,6 +137,7 @@ openncalayer run        # запустить сервер со значком; `
 | JDK, `keytool` в `PATH` | тест JKS в `oncl-cli` | `keytool -help` |
 | `python` в `PATH` | вспомогательные скрипты тестов (без сторонних пакетов) | `python --version` |
 | `certutil` из NSS (только Linux; пакет `libnss3-tools` или `nss-tools`) | тесты записи сертификата в базы браузеров в `oncl-trust` | `certutil -H` |
+| 7-Zip 25.01 или новее | тест `xtask` о том, что 7-Zip не пишет по символической ссылке за пределы каталога распаковки (`sevenzip_does_not_follow_a_link_out_of_the_output`) | `7z i` или `7zz i`. Ищется в `ONCL_7Z`, в Windows ещё в каталоге `7-Zip` внутри `Program Files`, затем `7z` в `PATH`. Пакеты Ubuntu (`7zip`, `p7zip`) старее: консольную версию `7zz` для Linux и macOS возьмите на [7-zip.org](https://www.7-zip.org/download.html) и укажите в `ONCL_7Z`. CI на Linux и macOS скачивает 26.06 со сверкой sha256, на Windows берёт 7-Zip из образа раннера |
 | Отдельное окружение Python | независимая проверка подписей: pyHanko, lxml, cryptography, asn1crypto, gostcrypto | см. ниже |
 | Тестовые данные NCANode | файлы для тестов | `cargo xtask fetch-fixtures` |
 
@@ -128,7 +145,7 @@ Docker, Node.js и браузеры для обычного `cargo test` не н
 
 ### 1. OpenSSL
 
-Нужен OpenSSL 3 с командами `cms` и `pkcs12 -legacy`. В CI он берётся так: на Linux пакет `openssl`, на Windows OpenSSL из Git for Windows, на macOS Homebrew (`openssl@3`).
+Нужен OpenSSL 3 с командами `cms` и `pkcs12 -legacy`. В CI он берётся так: на Linux тот, что уже есть в образе раннера, на Windows OpenSSL из Git for Windows, на macOS Homebrew (`openssl@3`).
 
 Linux. Обычно OpenSSL уже установлен. Если нет: `sudo apt-get install -y openssl`.
 
@@ -151,7 +168,7 @@ winget install -e --id ShiningLight.OpenSSL.Light
 openssl version
 ```
 
-Тесты `oncl-cli` ищут OpenSSL ещё и в переменной `ONCL_OPENSSL` (полный путь к `openssl`), а в Windows также среди файлов Git for Windows. Тесты `oncl-api` берут только `openssl` из `PATH`, поэтому надёжнее всего добавить его в `PATH`.
+Тесты ищут OpenSSL сначала в переменной `ONCL_OPENSSL` (полный путь к `openssl`), потом в `PATH`, а в Windows ещё и среди файлов Git for Windows.
 
 ### 2. Отдельное окружение Python
 
@@ -195,7 +212,7 @@ export ONCL_PYHANKO_PYTHON="$PWD/.venv-oracle/Scripts/python.exe"
 
 Переменная `ONCL_PYHANKO_PYTHON` действует только в том терминале, где её задали. Чтобы она сохранялась, задайте её в настройках среды: в Windows командой `setx ONCL_PYHANKO_PYTHON <путь к python.exe окружения>` (подействует в новых терминалах), в Linux и macOS строкой `export` в `~/.profile` или `~/.zshrc`.
 
-Тесты не берут первый попавшийся `python` из `PATH`, потому что в нём обычно нет `lxml`. Им нужен интерпретатор окружения из `ONCL_PYHANKO_PYTHON`. Если переменная не задана или файла нет, тест падает и ссылается на этот раздел.
+Тесты не берут первый попавшийся `python` из `PATH`, потому что в нём обычно нет `lxml`. Им нужен интерпретатор окружения из `ONCL_PYHANKO_PYTHON`. Если переменная не задана или файла нет, тест пропускается со строкой `skipped: ...`, а с `ONCL_REQUIRE_ORACLES=1` падает и ссылается на этот раздел.
 
 ### 3. Тестовые данные
 
@@ -223,9 +240,9 @@ cargo xtask fetch-fixtures
 cargo test --workspace --all-features
 ```
 
-Сначала выполните шаги из раздела «Что нужно для тестов». Полный набор тестов большой, и в CI он разбит на три части.
+Сначала выполните шаги из раздела «Что нужно для тестов». Полный набор тестов большой, CI делит его на три части (раздел [«Что запускает CI»](#что-запускает-ci)).
 
-Команда `cargo test -p <крейт>` не включает необязательные возможности (features), которые нужны тестам. Такие тесты описаны в `Cargo.toml` как `required-features`, и без возможности cargo молча не собирает и не запускает их: ошибки нет, просто в выводе меньше тестовых программ. Так у `oncl-pki` (возможность `testing`) пропускаются девять тестов: `envelope`, `tsp`, `pkix`, `ocsp`, `crl`, `keystore`, `cms_report`, `cms_stream`, `cms_stream_sign`. Так же у `oncl-core`, `oncl-flows`, `oncl-token`, `oncl-cli` и `openncalayer`. Когда работаете над одним крейтом, запускайте с `--all-features`, как в CI:
+Команда `cargo test -p <крейт>` не включает необязательные возможности (features), которые нужны тестам. Тест, которому нужна возможность, без неё отключён: модуль в `tests/all/main.rs` помечен `#[cfg(feature = …)]` или отдельная тестовая программа описана в `Cargo.toml` с `required-features`. Cargo такие тесты молча не собирает и не запускает: ошибки нет, просто тестов в выводе меньше. Так у `oncl-pki` без возможности `testing` выпадают 11 модулей `tests/all` и программа `cms_stream`. Так же у `oncl-api`, `oncl-core`, `oncl-flows`, `oncl-plugin`, `oncl-token`, `oncl-xml`, `oncl-winget-setup`, `oncl-cli` и `openncalayer`. Когда работаете над одним крейтом, запускайте с `--all-features`, как в CI:
 
 ```sh
 cargo test -p oncl-pki --all-features
@@ -248,11 +265,37 @@ cargo test --workspace --all-features -- --ignored live_
 - `live_ocsp_nca_test_certificate`: тестовый OCSP НУЦ (нужен `cargo xtask fetch-fixtures`);
 - `live_crl_nca_root_gost_2022`: CRL промышленного `crl.root.gov.kz`.
 
-Они зависят от внешних сервисов, поэтому в CI запускаются только по расписанию и вручную (`workflow_dispatch`, job `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
+Они зависят от внешних сервисов, поэтому в CI их запускает только job `live` в `scheduled.yml`: по понедельникам (03:00 UTC) и вручную (Actions → Scheduled → Run workflow, `live`). Если такой тест один раз упал из-за сети, перезапустите его. Тестовый RSA-ответчик OCSP НУЦ отвечает `malformedRequest` на стандартные запросы, в том числе от OpenSSL, поэтому OCSP проверяется на ГОСТ-сертификате.
 
 #### Встроенные модули без маркеров
 
 Тесты встроенных модулей (`cargo test -p oncl-builtin-tests`) проходят и без маркеров. Обычно ядро заменяет длинные строки запроса маркерами. При `ONCL_TEST_NO_MARKERS=1` модуль читает строки как есть, и все тесты проходят так же. Тест `markers` сравнивает ответы с маркерами и без них для каждой строки запросов покрытых методов, увеличенной до 20 000 байт (и для пачки документов длиннее 1 МиБ).
+
+#### Что собирается внутри сборки и тестов
+
+Встроенные модули (WebAssembly) собирает скрипт сборки `openncalayer` и `oncl-builtin-tests`. Сборка одна на весь каталог `target`: модули лежат в `target/builtins-target` (или в `$CARGO_TARGET_DIR/builtins-target`), и оба крейта, все профили и `cargo check` берут их оттуда. Если два скрипта сборки запустились одновременно, второй ждёт первого. Пересобираются модули, только когда меняются `src`, `Cargo.toml` или `plugin.toml` в `crates/oncl-pdk`, `crates/oncl-protocol` и `crates/oncl-builtin-*` (кроме `crates/oncl-builtin-tests`), корневые `Cargo.toml`, `Cargo.lock` или `rust-toolchain.toml`. `cargo xtask builtins build` собирает в тот же `builtins-target`. Если файл блокировки взять нельзя (файловая система без блокировок), сборка идёт без неё и Cargo выводит предупреждение.
+
+Модули можно собрать один раз и не собирать больше вовсе:
+
+```sh
+cargo xtask builtins build                      # → target/builtins
+export ONCL_BUILTINS_DIR="$PWD/target/builtins"  # в PowerShell: $env:ONCL_BUILTINS_DIR = "$PWD\target\builtins"
+```
+
+С `ONCL_BUILTINS_DIR` скрипт сборки берёт готовые модули и сверяет их с исходниками. Если исходники модулей изменились, сборка падает с ошибкой «built from other sources»: пересоберите модули той же командой.
+
+Отладочная сборка `openncalayer` пишет в окне «О программе» коммит `dev`. Коммит из git попадает только в сборку с `--release`: иначе после каждого коммита и `git checkout` крейт пересобирался бы вместе со своими тестами.
+
+Тесты плагинов сами собирают пример `crates/oncl-pdk/example` и порты из `plugins/`, один раз на процесс, в `target/plugin-example` и `target/plugin-ports`. Пример собирается в `release`. Порты по умолчанию собираются в профиле `plugin-test`: это `release` без LTO, в 16 единицах компиляции и с `opt-level = 1`. Профиль описан в `plugins/Cargo.toml`, так что тесты, CI и сборка вручную (`cargo build --profile plugin-test --manifest-path plugins/Cargo.toml …`) собирают одно и то же. Импорты хоста у портов в нём те же, что в `release`. У примера без LTO импортов больше, чем объявлено в его `plugin.toml`, поэтому он остаётся в `release`.
+
+Плагины выходят в релизы собранными в `release`. В CI тесты портов на такой сборке гоняет задача `plugins-release` (в `main` и ночью). Локально так:
+
+```sh
+ONCL_PORTS_PROFILE=release cargo test -p oncl-port-tests
+# в PowerShell: $env:ONCL_PORTS_PROFILE = "release"; cargo test -p oncl-port-tests
+```
+
+Модули портов лежат в `target/plugin-ports/wasm32-unknown-unknown/<профиль>/`. Кроме `release` и `plugin-test`, другие значения `ONCL_PORTS_PROFILE` тесты не принимают.
 
 ### Расширение браузера
 
@@ -324,16 +367,51 @@ cargo xtask index check updates/v1 --offline --base origin/main
 cargo xtask tuf check --no-timestamp --base origin/main
 ```
 
+### Что запускает CI
+
+Workflow `.github/workflows/ci.yml`. Обязательная проверка репозитория называется `check`: это последнее задание `ci.yml`. Оно падает, если упало или отменено любое задание, которое нужно этому запуску, или если такое задание пропущено. Задание, которое пропущено потому, что изменение его не касается, проверку не валит.
+
+Полный запуск идёт на каждый пуш в `main`, каждую ночь (02:30 UTC), вручную (Actions → CI → Run workflow) и на PR с меткой `full-ci`. Метку можно повесить на открытый PR: CI сразу начнёт полный запуск заново. Любая другая метка тоже перезапускает CI на PR и отменяет запуск, который шёл. Ручной запуск не на `main` проверяет всё, но `check` в нём красный: обязательным статусом он быть не может.
+
+Если у PR сменили базовую ветку, CI сам не перезапускается: отправьте новый коммит или снимите и снова повесьте метку.
+
+`live` (тесты с настоящими сервисами НУЦ) и `bench` лежат в отдельном workflow `scheduled.yml`: `live` идёт по понедельникам, оба можно запустить вручную. В `check` они не входят.
+
+Обычный PR проверяется так:
+
+- `fmt`, `privacy` (`privacy.yml`), `index` (`index-check.yml`) и `actionlint` идут в каждом запуске. Тяжёлые задания ждут `fmt` и `privacy`, поэтому ошибка форматирования не занимает раннеры на час.
+- Если PR меняет только документацию (`docs/`, кроме `docs/dev/sdk*.md`, а также `CHANGELOG.md`, `CONTRIBUTING.md`, `SECURITY.md`, `AGENTS.md`, `CLAUDE.md`, `.agents/`, шаблоны issue и PR), сборки и тесты не запускаются. Если только `updates/` или `tuf/`, запускаются `index` и `site`.
+- Сборка пакетов (`win7`, `windows-package`, `linux-appimage`) и `builtins-x86` идут, только если PR меняет то, из чего они собираются: `crates/`, `xtask/`, `web/`, `deploy/`, `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `.cargo/`, `.gitattributes`, `.github/workflows/`, `.github/actions/`, `README.md`, `LICENSE`, `NOTICE`.
+- На macOS идёт одно задание `test-macos`: тесты крейтов, где есть свой код для macOS, и `oncl-cli`. Весь набор на macOS и `macos-universal` идут только в полном запуске.
+
+Как идут тесты:
+
+- `prepare` один раз на Linux собирает встроенные модули (`cargo xtask builtins build`) и скачивает тестовые данные NCANode. Остальные задания берут модули из артефакта через `ONCL_BUILTINS_DIR`, как `release.yml`. Модули принимаются, только если собраны из тех же исходников тем же тулчейном.
+- `test-build` на каждой ОС собирает все тесты один раз (`cargo nextest archive`). Задания `test (<ОС>, N/3)` запускают из архива по трети тестов (`--partition slice:N/3`). В архив не попадают файлы PDB, поэтому у упавшего в CI теста на Windows в backtrace нет номеров строк.
+- Задания `test` ничего не собирают, поэтому перед запуском скачивают пакеты всех платформ: `cargo fetch --locked` для workspace и для `plugins/`. Их офлайн читают из реестра cargo тесты лицензий и тесты SDK (замыкание зависимостей и перечень лицензий). Без этого шага они падают на любой ОС.
+- Настройки [cargo-nextest](https://nexte.st) лежат в `.config/nextest.toml`, профиль `ci`. Упавший тест перезапускается до двух раз. Если потом он прошёл, nextest помечает его FLAKY, а запуск всё равно красный. Тест дольше 30 минут снимается. Отчёт JUnit сохраняется артефактом `junit-<ОС>-<N>-<попытка>`.
+- `no-markers` прогоняет тесты встроенных модулей с `ONCL_TEST_NO_MARKERS=1`. `linux-checks` запускает doctest-ы и проверки xtask: `check-release-features`, `sdk closure`, `plugin-ops-check` (на модулях профиля `plugin-test`), `plugin-version-check`, `interop-openssl`. На Windows и macOS doctest-ы идут только в полном запуске, в задании `doctests`.
+- В `main` и ночью `plugins-release` прогоняет тесты портов с `ONCL_PORTS_PROFILE=release`, то есть на модулях, собранных так же, как они выходят, и проверяет на этих модулях `plugin-ops-check`.
+- CI задаёт `ONCL_REQUIRE_ORACLES=1`: тест, которому не хватает внешней программы, в CI падает, а не пропускается.
+
+Те же тесты локально через nextest (`cargo install cargo-nextest`):
+
+```sh
+cargo nextest run --workspace --all-features --profile ci --run-ignored all
+```
+
+Обычный `cargo test` работает как раньше.
+
 ### Клиент демо-страницы
 
 `web/demo/vendor/ncalayer-client.js` взят без изменений из npm-пакета `ncalayer-js-client@1.6.1` (файл `package/ncalayer-client.js`, лицензия MIT, sha256 `bdf2015c3e422eed70ccf38eef3246af67a0d38639e6b70fe6b8655a2fa03489`). Тест `demo_assets_served` сверяет sha256 файла, который отдаёт сервер. Лицензия клиента лежит рядом: `/demo/vendor/LICENSE`.
 
 ## Форки сторонних крейтов
 
-Пять крейтов с crates.io нужны нам с небольшими изменениями. Их исходников в репозитории нет: они берутся по git из форков в аккаунте `arynyklas`. Версия форка закреплена полным коммитом (`rev`) в корневом `Cargo.toml`.
+Три крейта с crates.io нужны нам с небольшими изменениями. Их исходников в репозитории нет: они берутся по git из форков в аккаунте `arynyklas`. Версия форка закреплена полным коммитом (`rev`) в корневом `Cargo.toml`.
 
-- `i-slint-backend-winit`, `velopack`, `streebog` и `hmac` подменяются в `[patch.crates-io]`.
-- `hmac`, `streebog` и `multer` указаны с тем же `git` и `rev` ещё и в `[workspace.dependencies]`, чтобы проект, который подключает SDK или сервер вне этого workspace, получил тот же исходник.
+- `i-slint-backend-winit` и `velopack` подменяются в `[patch.crates-io]`.
+- `multer` указан с `git` и `rev` в `[workspace.dependencies]`, чтобы проект, который подключает сервер вне этого workspace, получил тот же исходник.
 - Каждое изменение лежит отдельным подписанным коммитом в ветке форка `openncalayer/<крейт>-<версия>`. Ветка начинается с коммита апстрима, из которого опубликован крейт (он записан в `.cargo_vcs_info.json` пакета).
 - Ветки не переписываются. Новая правка означает новый коммит и новый `rev`.
 
@@ -341,12 +419,9 @@ cargo xtask tuf check --no-timestamp --base origin/main
 |---|---|---|---|
 | `i-slint-backend-winit` 1.18.1 | [`arynyklas/slint`](https://github.com/arynyklas/slint), `openncalayer/i-slint-backend-winit-1.18.1` | [`slint-ui/slint`](https://github.com/slint-ui/slint), каталог `internal/backends/winit` | Функция `SystemParametersInfoForDpi` (есть с Windows 10 1607) не импортируется, а ищется через `GetProcAddress` (`windows_message_font_height` в `lib.rs`, её вызывает `bind_context`). Если функции нет, вызывается `SystemParametersInfoW(SPI_GETNONCLIENTMETRICS)`, и высота шрифта пересчитывается из системного DPI в 96. Так сборке для Windows 7 не нужна отсутствующая там функция, а на Windows 10/11 поведение прежнее. Для этого включена фича `Win32_System_LibraryLoader` крейта `windows`. Ещё три коммита касаются упаковки: внутренние крейты Slint и `vtable` указаны по версии, а не по пути (иначе git-зависимость принесла бы вторую копию с несовместимыми типами), а тексты лицензий в `LICENSES/` сделаны обычными файлами вместо symlink. |
 | `velopack` 1.3.39-g8d2844f | [`arynyklas/velopack`](https://github.com/arynyklas/velopack), `openncalayer/velopack-1.3.39-g8d2844f` | [`velopack/velopack`](https://github.com/velopack/velopack), каталог `src/lib-rust` | В `UpdateSource` добавлен метод `verify_full_package` (по умолчанию проверяет размер и контрольную сумму, как сам Velopack). `download_updates` проверяет им полный пакет, уже лежащий на диске (непрошедший удаляется и скачивается заново), и пакет, собранный из дельты, до переименования и до извлечения `Squirrel.exe` (Update.exe). Непрошедший пакет заменяется скачанным полным. Наш `IndexSource` принимает файл, если он совпадает с полным пакетом из подписанного индекса по sha256 и размеру или содержит те же файлы (`contents_sha256` индекса). Ещё два коммита касаются упаковки: версия крейта (в репозитории `0.0.0-local`, релиз подставляет опубликованную) и файл `LICENSE` в каталоге крейта (в пакете crates.io его нет). |
-| `streebog` 0.11.0 | [`arynyklas/hashes`](https://github.com/arynyklas/hashes), `openncalayer/streebog-0.11.0` | [`RustCrypto/hashes`](https://github.com/RustCrypto/hashes), крейт `streebog` | Фича `secret-input`: варианты `Streebog256Secret` и `Streebog512Secret`. У них один рабочий буфер, который очищается, слова таблицы выбираются без ветвлений, а состояние не сериализуется. Обычное хеширование публичных документов не меняется. |
-| `hmac` 0.13.0 | [`arynyklas/MACs`](https://github.com/arynyklas/MACs), `openncalayer/hmac-0.13.0` | [`RustCrypto/MACs`](https://github.com/RustCrypto/MACs), крейт `hmac` | Фича `secret-input`: тип `HmacSecret` очищает нормализованный ключ, блоки ipad/opad и внутренний дайджест. Обычный `Hmac` не меняется. |
 | `multer` 3.1.0 | [`arynyklas/multer`](https://github.com/arynyklas/multer), `openncalayer/multer-3.1.0` | [`rwf2/multer`](https://github.com/rwf2/multer) | `Constraints::framing_observer`: необязательный наблюдатель за служебными байтами multipart (границы, заголовки частей, отступы), разбор он не меняет. Также `cfg(nightly)` для check-cfg и `u64::MAX` и проверенное сложение счётчика размера потока (`StreamSizeExceeded` вместо переполнения). |
 
 Лицензии:
-- `streebog` и `hmac`: MIT или Apache-2.0;
 - `multer` и `velopack`: MIT;
 - `i-slint-backend-winit`: Slint Royalty-free 2.0. Она разрешает изменять программу и распространять изменённую копию в составе приложения (разделы 1 и 2), уведомления о лицензии в файлах сохранены.
 
@@ -354,8 +429,11 @@ cargo xtask tuf check --no-timestamp --base origin/main
 
 Тест `xtask/tests/forks.rs` падает, если:
 - патч не используется (`Cargo.lock` снова берёт пакет с crates.io);
-- `rev` в разных секциях не совпадают;
-- версия `i-slint-backend-winit` разошлась с версией Slint.
+- `multer` взят не из форка;
+- версия `i-slint-backend-winit` разошлась с версией Slint;
+- `streebog` или `hmac` снова взяты не из crates.io.
+
+Раньше форками были и `streebog`, и `hmac`: в них были варианты для секретного ввода. Теперь эти варианты — код самого `oncl-gost`. `src/streebog_secret.rs` — Streebog для секретов: таблица LPS не читается по секретному индексу, временные значения сжатия лежат в одной рабочей области и стираются после каждого блока, всё состояние выделено в куче одним блоком, а после вывода дайджеста обнуляется. `src/secret_hmac.rs` — HMAC поверх него для KDF из `wrap`: блок ключа, хеш длинного ключа и внутренний дайджест стираются, в том числе при панике. Откуда взят код и под какой он лицензией — в `NOTICE`. Публичные документы, PKCS#12 и PBKDF2 хешируются обычными `streebog` и `hmac` с crates.io.
 
 `cargo deny check` разрешает только git-источники этих форков (`[sources] allow-git` в `deny.toml`).
 

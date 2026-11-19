@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use oncl_update::{Index, PluginChoice, Version, choose_plugin, offer, plugin_bucket};
+use oncl_update::{Catalog, Index, PluginChoice, Version, choose_plugin, offer, plugin_bucket};
 use serde_json::{Value, json};
 
 fn version(s: &str) -> Version {
@@ -30,6 +30,11 @@ fn document(plugins: Vec<Value>) -> Value {
 
 fn index(plugins: Vec<Value>) -> Index {
     Index::from_json(&serde_json::to_vec(&document(plugins)).unwrap()).unwrap()
+}
+
+/// The catalog of the owner's index of `plugins` alone.
+fn catalog(plugins: Vec<Value>) -> Catalog {
+    Catalog::owner(index(plugins))
 }
 
 fn reject(plugins: Vec<Value>, reason: &str) {
@@ -102,7 +107,7 @@ fn plugin_entries_parse_and_roundtrip() {
 
 #[test]
 fn no_plugin_entries_remains_compatible_with_previous_indexes() {
-    let parsed = index(Vec::new());
+    let parsed = catalog(Vec::new());
     assert!(matches!(
         choose_plugin(
             &parsed,
@@ -123,7 +128,7 @@ fn updates_skip_bad_incompatible_and_not_rolled_out_versions() {
     newer_core["min_core"] = json!("2.0.0");
     let mut staged = release(id, "4.0.0");
     staged["rollout"] = json!(0);
-    let parsed = index(vec![
+    let parsed = catalog(vec![
         newer_core,
         staged,
         release(id, "3.0.0"),
@@ -161,7 +166,7 @@ fn revoked_current_bypasses_rollout_and_only_then_allows_downgrade() {
     current["revoked"] = json!(true);
     let mut fallback = release(id, "2.0.0");
     fallback["rollout"] = json!(0);
-    let parsed = index(vec![current.clone(), fallback]);
+    let parsed = catalog(vec![current.clone(), fallback]);
     let PluginChoice::Downgrade(target) = choose_plugin(
         &parsed,
         id,
@@ -173,7 +178,7 @@ fn revoked_current_bypasses_rollout_and_only_then_allows_downgrade() {
         panic!("revoked version did not fall back");
     };
     assert_eq!(target.version, version("2.0.0"));
-    let parsed = index(vec![current]);
+    let parsed = catalog(vec![current]);
     assert!(matches!(
         choose_plugin(
             &parsed,
@@ -194,7 +199,7 @@ fn revoked_current_takes_a_newer_version_outside_its_rollout() {
     current["revoked"] = json!(true);
     let mut fix = release(id, "2.0.1");
     fix["rollout"] = json!(0);
-    let parsed = index(vec![current, fix, release(id, "1.0.0")]);
+    let parsed = catalog(vec![current, fix, release(id, "1.0.0")]);
     let PluginChoice::Update(target) = choose_plugin(
         &parsed,
         id,
@@ -212,7 +217,7 @@ fn revoked_current_takes_a_newer_version_outside_its_rollout() {
 fn offer_finds_a_plugin_by_module_and_skips_bad_and_revoked_ones() {
     let mut revoked = release("kz.example.one", "3.0.0");
     revoked["revoked"] = json!(true);
-    let parsed = index(vec![
+    let parsed = catalog(vec![
         revoked,
         release("kz.example.one", "2.0.0"),
         release("kz.example.one", "1.0.0"),
@@ -243,7 +248,7 @@ fn rollout_cutoff_is_exact_and_offers_match_the_requested_original_bundle() {
     let bucket = plugin_bucket(&[7; 16], id, &v);
     let mut entry = release(id, "2.0.0");
     entry["rollout"] = json!(bucket);
-    let parsed = index(vec![entry.clone()]);
+    let parsed = catalog(vec![entry.clone()]);
     assert!(matches!(
         choose_plugin(
             &parsed,
@@ -256,7 +261,7 @@ fn rollout_cutoff_is_exact_and_offers_match_the_requested_original_bundle() {
         PluginChoice::Keep
     ));
     entry["rollout"] = json!(bucket + 1);
-    let parsed = index(vec![release("kz.example.other", "9.0.0"), entry]);
+    let parsed = catalog(vec![release("kz.example.other", "9.0.0"), entry]);
     let selected = offer(
         &parsed,
         &version("1.0.0"),
