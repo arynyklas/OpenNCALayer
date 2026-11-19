@@ -1,5 +1,4 @@
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 #[test]
 fn standalone_binary_dispatches_typed_json_to_the_real_sdk() {

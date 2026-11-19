@@ -1,5 +1,4 @@
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 use std::{
     io::{Read, Write},

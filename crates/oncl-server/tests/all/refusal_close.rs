@@ -8,8 +8,7 @@
 //! The wait for the client is bounded, and these tests pin each bound: the bytes it reads,
 //! the time it takes, and what it holds for the operation while it waits.
 
-#[path = "server_support/mod.rs"]
-mod support;
+use crate::server_support as support;
 
 use axum::{Router, http::StatusCode, routing::post};
 use oncl_server::service::serve_connection;
