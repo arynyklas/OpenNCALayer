@@ -252,6 +252,32 @@ impl Git {
             .with_context(|| format!("git log printed {text:?} for a commit time"))
     }
 
+    /// The object id of the entry `path` (a tree, a blob, …) at `rev`, without reading it;
+    /// `None` if `rev` has no such entry.
+    ///
+    /// # Errors
+    ///
+    /// `rev` is not a commit, or git fails.
+    pub fn object(&self, rev: &str, path: &str) -> anyhow::Result<Option<String>> {
+        let out = self.output(&["ls-tree", "-z", "--full-tree", rev, "--", path])?;
+        for record in out.split(|b| *b == 0).filter(|r| !r.is_empty()) {
+            let tab = record
+                .iter()
+                .position(|b| *b == b'\t')
+                .context("git ls-tree printed a line without a tab")?;
+            if &record[tab + 1..] != path.as_bytes() {
+                continue;
+            }
+            let head = utf8(&record[..tab], "a git ls-tree line")?;
+            let fields: Vec<&str> = head.split_whitespace().collect();
+            let [_, _, oid] = fields.as_slice() else {
+                bail!("git ls-tree printed {head:?}");
+            };
+            return Ok(Some((*oid).to_owned()));
+        }
+        Ok(None)
+    }
+
     fn ls_tree(&self, rev: &str, paths: &[&str]) -> anyhow::Result<Vec<TreeEntry>> {
         let mut args = vec!["ls-tree", "-r", "-z", "-l", "--full-tree", rev, "--"];
         args.extend_from_slice(paths);
