@@ -6,12 +6,14 @@
 #
 # The release process appends each new tag (`cargo xtask sdk revision add v<version>`,
 # docs/dev/release.md). An entry is never changed or removed; `vendor check-onboarding --base`
-# (index-check.yml) checks that each tag points to its commit. The schema and its rules:
+# (index-check.yml) checks that each tag points to the commit of one of its entries. A tag
+# moved before its publication gets a second entry (run `sdk revision add` again); its
+# entries must hold the same SDK. The schema and its rules:
 # xtask/src/publishers/sdk_revisions.rs.
 #
 # [[revision]]
 # tag = "v<version>"            # the release tag
-# commit = "<40 lowercase hex>" # the commit it points to
+# commit = "<40 lowercase hex>" # a commit it points (or pointed) to
 
 [[revision]]
 tag = "v0.1.0"
@@ -28,3 +30,7 @@ commit = "703c4facbed6425b0695e231188182086dcf217e"
 [[revision]]
 tag = "v0.1.2"
 commit = "cccfbb61274a8bdf715a3f72fcc65f3461218ef5"
+
+[[revision]]
+tag = "v0.1.2"
+commit = "26e30fdb07929bab3f740c3b36bebbb91741b5e8"
