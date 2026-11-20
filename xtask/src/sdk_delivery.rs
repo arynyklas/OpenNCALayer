@@ -117,7 +117,8 @@ pub enum SdkCommand {
 #[derive(Subcommand, Debug)]
 pub enum RevisionCommand {
     /// Appends the commit of the release tag (`v<version>`, a tag of this clone whose
-    /// workspace version is `<version>`) to publishers/sdk-revisions.toml.
+    /// workspace version is `<version>`) to publishers/sdk-revisions.toml; again after the
+    /// tag was moved, if the SDK crates are the same.
     Add {
         /// The release tag, `v0.1.3`.
         tag: String,
@@ -158,7 +159,8 @@ pub fn run(root: &Path, command: SdkCommand) -> anyhow::Result<()> {
 }
 
 /// `sdk revision add`: the commit of `tag` in the repository at `root`, its workspace version
-/// checked against the tag, appended to `publishers/sdk-revisions.toml`.
+/// checked against the tag, appended to `publishers/sdk-revisions.toml` (again after the tag
+/// was moved, if the SDK is the same: [`crate::publishers::sdk_revisions::SdkRevisions::add`]).
 fn add_revision(root: &Path, tag: &str) -> anyhow::Result<()> {
     use crate::publishers::sdk_revisions::{self, SdkRevisions};
     if !sdk_revisions::is_release_tag(tag) {
@@ -185,7 +187,7 @@ fn add_revision(root: &Path, tag: &str) -> anyhow::Result<()> {
     let file = root
         .join(crate::publishers::PUBLISHERS_DIR)
         .join(sdk_revisions::FILE_NAME);
-    SdkRevisions::append(&file, tag, &commit)?;
+    SdkRevisions::add(&file, root, tag, &commit)?;
     println!("{}: {tag} = {commit}", file.display());
     Ok(())
 }
