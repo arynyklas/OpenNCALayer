@@ -565,8 +565,16 @@ jobs:
             fi
           done
           rm -rf -- "$work/signed/META-INF"
+          # AMO re-formats manifest.json when it signs (same JSON, other whitespace): it is
+          # compared as JSON, every other file byte for byte.
+          if ! cmp -s <(jq -S . "$work/unsigned/manifest.json") <(jq -S . "$work/signed/manifest.json"); then
+            echo "::error::the signed xpi's manifest.json is not the build's (compared as JSON)"
+            diff <(jq -S . "$work/unsigned/manifest.json") <(jq -S . "$work/signed/manifest.json") || true
+            exit 1
+          fi
+          rm -f -- "$work/unsigned/manifest.json" "$work/signed/manifest.json"
           if ! diff -r --no-dereference -- "$work/unsigned" "$work/signed"; then
-            echo "::error::the signed xpi differs from the build outside META-INF/"
+            echo "::error::the signed xpi differs from the build outside META-INF/ and manifest.json"
             exit 1
           fi
           mv -f -- "${signed[0]}" "$unsigned"
