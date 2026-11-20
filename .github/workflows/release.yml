@@ -464,13 +464,20 @@ jobs:
   # web-ext comes from `extension/sign/package-lock.json` (`npm ci --ignore-scripts`, in a
   # step without the secrets); the signing step has the secrets but installs nothing.
   #
-  # AMO signs a version once. When a later job fails after the signing step succeeded, recover
-  # with "Re-run failed jobs"; "Re-run all jobs" signs the same version again and AMO refuses
-  # it, so that run fails at the signing step and the fix is a new tag.
+  # AMO signs a version once and refuses a second upload of it, so the signing step first asks
+  # AMO for this version (`extension/sign/amo-signed.mjs`, Node's own modules only): a version
+  # AMO has signed is downloaded and used, one AMO has not signed (rejected, or still
+  # unreviewed after 20 minutes) fails the step, and only a version AMO does not have at all
+  # is uploaded with `web-ext sign`. When web-ext fails (a 5xx while it waits for the
+  # signature), the upload may have made the version anyway, so the script asks again. A
+  # rerun of the job, failed or all, takes the version an earlier run uploaded. Whatever the
+  # source, the next step checks that the signed file is the unsigned one plus AMO's
+  # `META-INF/`.
   extension:
     needs: version
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # The build, up to 20 minutes for web-ext to get the signature and 20 more for the script.
+    timeout-minutes: 55
     env:
       # Only whether the AMO secrets exist and whether this tag is signed: the secrets reach
       # the signing step alone.
@@ -498,15 +505,68 @@ jobs:
           WEB_EXT_API_KEY: ${{ secrets.AMO_JWT_ISSUER }}
           WEB_EXT_API_SECRET: ${{ secrets.AMO_JWT_SECRET }}
         run: |
-          extension/sign/node_modules/.bin/web-ext sign --channel unlisted --no-input \
-            --approval-timeout 1200000 \
-            --source-dir target/extension/firefox --artifacts-dir target/extension/signed
+          signed_dir=target/extension/signed
+          rm -rf -- "$signed_dir"
+          amo_signed() {
+            node extension/sign/amo-signed.mjs --source-dir target/extension/firefox \
+              --artifacts-dir "$signed_dir" --timeout-minutes 20
+          }
+          status=0
+          amo_signed || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "::notice::AMO had signed this version before: the signed file is reused"
+          elif [ "$status" -ne 3 ]; then
+            exit "$status"
+          elif ! extension/sign/node_modules/.bin/web-ext sign --channel unlisted --no-input \
+              --approval-timeout 1200000 \
+              --source-dir target/extension/firefox --artifacts-dir "$signed_dir"; then
+            echo "::warning::web-ext sign failed; the upload may have made the version on AMO, asking AMO for it"
+            rm -rf -- "$signed_dir"
+            status=0
+            amo_signed || status=$?
+            if [ "$status" -eq 3 ]; then
+              echo "::error::web-ext sign failed and AMO has no such version (the upload did not make one): rerun the job"
+              exit 1
+            elif [ "$status" -ne 0 ]; then
+              exit "$status"
+            fi
+          fi
+      # No secrets: the signed file must be the unsigned build plus AMO's signature, so a
+      # wrong or stale version on AMO cannot replace the build.
+      - name: Check the signed add-on against the build
+        if: env.AMO == 'true' && env.PRERELEASE != 'true'
+        run: |
           signed=(target/extension/signed/*.xpi)
           if [ "${#signed[@]}" -ne 1 ] || [ ! -f "${signed[0]}" ]; then
-            echo "::error::web-ext sign left ${#signed[@]} files matching target/extension/signed/*.xpi, expected one"
+            echo "::error::the signing step left ${#signed[@]} files matching target/extension/signed/*.xpi, expected one"
             exit 1
           fi
-          mv -f -- "${signed[0]}" "target/extension/openncalayer-firefox-$VERSION.xpi"
+          unsigned="target/extension/openncalayer-firefox-$VERSION.xpi"
+          work="$RUNNER_TEMP/xpi-compare"
+          rm -rf -- "$work"
+          mkdir -p -- "$work/signed" "$work/unsigned"
+          unzip -q -- "${signed[0]}" -d "$work/signed"
+          unzip -q -- "$unsigned" -d "$work/unsigned"
+          if [ ! -f "$work/signed/META-INF/mozilla.rsa" ]; then
+            echo "::error::the signed xpi has no AMO signature (META-INF/mozilla.rsa)"
+            exit 1
+          fi
+          for field in .browser_specific_settings.gecko.id .version; do
+            want="$(jq -er "$field" "$work/unsigned/manifest.json")" \
+              || { echo "::error::the build's manifest.json has no $field"; exit 1; }
+            got="$(jq -er "$field" "$work/signed/manifest.json")" \
+              || { echo "::error::the signed xpi's manifest.json has no $field"; exit 1; }
+            if [ "$got" != "$want" ]; then
+              echo "::error::the signed xpi has $field $got, the build has $want"
+              exit 1
+            fi
+          done
+          rm -rf -- "$work/signed/META-INF"
+          if ! diff -r --no-dereference -- "$work/unsigned" "$work/signed"; then
+            echo "::error::the signed xpi differs from the build outside META-INF/"
+            exit 1
+          fi
+          mv -f -- "${signed[0]}" "$unsigned"
           echo "::notice::The Firefox add-on is signed by AMO (unlisted): openncalayer-firefox-$VERSION.xpi"
       - name: AMO signing skipped
         if: env.AMO != 'true' || env.PRERELEASE == 'true'
