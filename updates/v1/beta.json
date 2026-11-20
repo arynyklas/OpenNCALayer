@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "channel": "beta",
-  "seq": 13,
-  "generated": "2026-11-18T17:48:52Z",
-  "expires": "2026-12-18T17:48:52Z",
+  "seq": 14,
+  "generated": "2026-11-20T14:13:36Z",
+  "expires": "2026-12-20T14:13:36Z",
   "core": [
     {
       "version": "0.1.0-alpha.7",
@@ -665,17 +665,103 @@
       "rollout": 100,
       "revoked": false,
       "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.2-beta.1"
+    },
+    {
+      "version": "0.1.2",
+      "flavors": {
+        "linux-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-linux-x64-full.nupkg",
+          "sha256": "97d1f8b604bf2d916cefb54169b5d5b0f19803e2cd09362fac12bdb77539a07e",
+          "size": 32881530,
+          "contents_sha256": "30846a239aabef7d3cde21358a17de832011fd1de6e2ef1c74d2db0facb69fee",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-linux-x64-delta.nupkg",
+              "sha256": "260e0910c34ddc1258404dccd15ca56ae8b29a42402220237ab1cdbc0c39eda8",
+              "size": 26902677
+            }
+          }
+        },
+        "osx": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-osx-full.nupkg",
+          "sha256": "91282b01dfb75e72963c0e11d8afd7d16797e68417ca42f0107acba9bf95ddb9",
+          "size": 47638508,
+          "contents_sha256": "abc3fa07c3e69e9c130fea8cedf37a83372e70a3b59bae81ec6f69450ab2b7f1",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-osx-delta.nupkg",
+              "sha256": "5007b3d9d0625596ed2419fd4ee7bc1f7a21704e453e8ab0df95fe681ec0cb9b",
+              "size": 12508348
+            }
+          }
+        },
+        "win-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win-x64-full.nupkg",
+          "sha256": "09d804fb4fd2c8d76a87b35b2b49cbced9d5711d0a5fa9251008d3dc700cc133",
+          "size": 23138262,
+          "contents_sha256": "cca06ce65baa6951c0aae05a5b14dfd7c0ffc81c4eb139ccb6f598e0eb5b3901",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win-x64-delta.nupkg",
+              "sha256": "492d4e5de8f080ba1d5dd27a8156a7a569c4b7ae5b1c4cc62a0ec6d40b06d9bc",
+              "size": 6297814
+            }
+          }
+        },
+        "win-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win-x86-full.nupkg",
+          "sha256": "34b9e8d4ce5ac8ba307c3a88ab3a3f15a4daa6a938b71e0b3f643cf8852889f0",
+          "size": 21073028,
+          "contents_sha256": "d87c0c730caf431c2af3c871267c84ecccbcdac4fd00fafec865aa2dd9dbea5f",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win-x86-delta.nupkg",
+              "sha256": "3205bdeab4c4734352e9076732856d97f8cbc449cd0ac2b5d14c686446edb516",
+              "size": 5377356
+            }
+          }
+        },
+        "win7-x64": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win7-x64-full.nupkg",
+          "sha256": "fcfbb813a828412f47d50ab8cc8cfe0501e9b9f8a2634d4d39b35c30d7dcd819",
+          "size": 23226755,
+          "contents_sha256": "a64d1f9515fe2e2f752debedcc7c823202a53d6803f7d4e48efc06be1254eb48",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win7-x64-delta.nupkg",
+              "sha256": "a2df359eca674b6fce06878f43d74a7ac5608070f40412c0ffe66ce2a9b78d67",
+              "size": 6027401
+            }
+          }
+        },
+        "win7-x86": {
+          "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win7-x86-full.nupkg",
+          "sha256": "d27e403557620bae812356a94e39a6a808a0cea3f35d2e647461b30679af45b4",
+          "size": 21187318,
+          "contents_sha256": "cc2f3cccc8f41f57f8a30574cb4c8cc1ef2ea0694d9a9a029c979debe84f8e0d",
+          "delta_from": {
+            "0.1.1": {
+              "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/OpenNCALayer-0.1.2-win7-x86-delta.nupkg",
+              "sha256": "a577cfc336489ab815a75dafb4ae40f949d7ed98f27151bbd3b7e4bb0f1a37c6",
+              "size": 5406734
+            }
+          }
+        }
+      },
+      "rollout": 100,
+      "revoked": false,
+      "notes_url": "https://github.com/arynyklas/OpenNCALayer/releases/tag/v0.1.2"
     }
   ],
   "extension": {
-    "version": "0.1.2-beta.1",
+    "version": "0.1.2",
     "chromium_zip": {
-      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2-beta.1/openncalayer-chromium-0.1.2-beta.1.zip",
-      "sha256": "3a7139e30876308571cf97d67e0f88569082ff14faaf1eb78d3b1026a5169854"
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/openncalayer-chromium-0.1.2.zip",
+      "sha256": "60712417828f7ec9b0e6871ca771bfe5a99520b80063769de3adb37b87327b5b"
     },
     "firefox_xpi": {
-      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2-beta.1/openncalayer-firefox-0.1.2-beta.1.xpi",
-      "sha256": "b68ed26e27829d43cf96ae72a5cbb297813350a8b95e63ac4d125525d64aa295"
+      "url": "https://github.com/arynyklas/OpenNCALayer/releases/download/v0.1.2/openncalayer-firefox-0.1.2.xpi",
+      "sha256": "5f48a7a87a159fc8040d95587a8b58f47858f88081e5c0fc45bc026ab26364bb"
     }
   },
   "plugins": [
