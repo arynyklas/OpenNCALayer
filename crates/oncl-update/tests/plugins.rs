@@ -159,58 +159,79 @@ fn updates_skip_bad_incompatible_and_not_rolled_out_versions() {
     ));
 }
 
-#[test]
-fn revoked_current_bypasses_rollout_and_only_then_allows_downgrade() {
-    let id = "kz.example.one";
-    let mut current = release(id, "3.0.0");
-    current["revoked"] = json!(true);
-    let mut fallback = release(id, "2.0.0");
-    fallback["rollout"] = json!(0);
-    let parsed = catalog(vec![current.clone(), fallback]);
-    let PluginChoice::Downgrade(target) = choose_plugin(
-        &parsed,
+/// The choice for the installed `current` in `catalog`.
+fn choose<'a>(catalog: &'a Catalog, id: &str, current: &str) -> PluginChoice<'a> {
+    choose_plugin(
+        catalog,
         id,
-        &version("3.0.0"),
+        &version(current),
         &version("1.0.0"),
         &[7; 16],
         &BTreeSet::new(),
-    ) else {
-        panic!("revoked version did not fall back");
-    };
-    assert_eq!(target.version, version("2.0.0"));
-    let parsed = catalog(vec![current]);
-    assert!(matches!(
-        choose_plugin(
-            &parsed,
-            id,
-            &version("3.0.0"),
-            &version("1.0.0"),
-            &[7; 16],
-            &BTreeSet::new()
-        ),
-        PluginChoice::Withdrawn
-    ));
+    )
+}
+
+/// A release of `id` `v` rolled out to the installation `[7; 16]` (`in_rollout`) or held
+/// back from it at the edge of its bucket.
+fn rolled_out(id: &str, v: &str, in_rollout: bool) -> Value {
+    let bucket = plugin_bucket(&[7; 16], id, &version(v));
+    let mut release = release(id, v);
+    release["rollout"] = json!(if in_rollout { bucket + 1 } else { bucket });
+    release
 }
 
 #[test]
-fn revoked_current_takes_a_newer_version_outside_its_rollout() {
+fn revoked_current_moves_back_only_within_its_rollout() {
     let id = "kz.example.one";
-    let mut current = release(id, "2.0.0");
+    let mut current = release(id, "3.0.0");
     current["revoked"] = json!(true);
-    let mut fix = release(id, "2.0.1");
+    let parsed = catalog(vec![current.clone(), release(id, "2.0.0")]);
+    let PluginChoice::Downgrade(target) = choose(&parsed, id, "3.0.0") else {
+        panic!("revoked version did not fall back");
+    };
+    assert_eq!(target.version, version("2.0.0"));
+    // 2.0.0 not rolled out here: back to the newest older one that is.
+    let parsed = catalog(vec![
+        current.clone(),
+        rolled_out(id, "2.0.0", false),
+        rolled_out(id, "1.5.0", true),
+    ]);
+    let PluginChoice::Downgrade(target) = choose(&parsed, id, "3.0.0") else {
+        panic!("revoked version did not fall back");
+    };
+    assert_eq!(target.version, version("1.5.0"));
+    // None rolled out here: off until one is.
+    let mut fallback = release(id, "2.0.0");
+    fallback["rollout"] = json!(0);
+    let parsed = catalog(vec![current.clone(), fallback]);
+    assert_eq!(choose(&parsed, id, "3.0.0"), PluginChoice::Withdrawn);
+    let parsed = catalog(vec![current]);
+    assert_eq!(choose(&parsed, id, "3.0.0"), PluginChoice::Withdrawn);
+}
+
+#[test]
+fn revoked_current_takes_a_newer_version_only_once_rolled_out_to_it() {
+    let id = "kz.example.one";
+    let mut current = release(id, "1.1.0");
+    current["revoked"] = json!(true);
+    // The fix at rollout 0: not offered, the revoked version is off.
+    let mut fix = release(id, "1.2.0");
     fix["rollout"] = json!(0);
-    let parsed = catalog(vec![current, fix, release(id, "1.0.0")]);
-    let PluginChoice::Update(target) = choose_plugin(
-        &parsed,
-        id,
-        &version("2.0.0"),
-        &version("1.0.0"),
-        &[7; 16],
-        &BTreeSet::new(),
-    ) else {
+    let parsed = catalog(vec![current.clone(), fix]);
+    assert_eq!(choose(&parsed, id, "1.1.0"), PluginChoice::Withdrawn);
+    // Rolled out, but not to this installation: still off.
+    let parsed = catalog(vec![current.clone(), rolled_out(id, "1.2.0", false)]);
+    assert_eq!(choose(&parsed, id, "1.1.0"), PluginChoice::Withdrawn);
+    // Rolled out to it: the update, even over an older version in its rollout.
+    let parsed = catalog(vec![
+        current,
+        rolled_out(id, "1.2.0", true),
+        release(id, "1.0.0"),
+    ]);
+    let PluginChoice::Update(target) = choose(&parsed, id, "1.1.0") else {
         panic!("the fix was not chosen");
     };
-    assert_eq!(target.version, version("2.0.1"));
+    assert_eq!(target.version, version("1.2.0"));
 }
 
 #[test]

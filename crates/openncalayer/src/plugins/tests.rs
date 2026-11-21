@@ -1929,6 +1929,39 @@ fn a_revoked_version_is_off_until_its_replacement_installs_on_the_same_snapshot(
 }
 
 #[test]
+fn a_revoked_version_is_off_until_a_replacement_is_rolled_out_to_it() {
+    let sandbox = Sandbox::new(true);
+    let service = sandbox.service();
+    sandbox.installed_from_catalog(&service, 1, "0.1.0");
+    let mut revoked = sandbox.release("0.1.0", &example("0.1.0"));
+    revoked.revoked = true;
+    let mut staged = sandbox.release("0.2.0", &example("0.2.0"));
+    staged.rollout = 0;
+    sandbox.publish(2, vec![revoked.clone(), staged.clone()]);
+    service.check_now();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Withdrawn { name: name() }]
+    );
+    assert!(sandbox.modules.names().is_empty());
+    assert!(sandbox.store().state().plugins[ID].withdrawn);
+    assert_eq!(package_downloads(&sandbox, "0.2.0"), 0);
+    // Rolled out to it: installed and on.
+    staged.rollout = 100;
+    sandbox.publish(3, vec![revoked, staged]);
+    service.check_now();
+    assert_eq!(
+        sandbox.notices(),
+        [PluginNotice::Updated {
+            name: name(),
+            version: v("0.2.0"),
+        }]
+    );
+    assert!(!sandbox.store().state().plugins[ID].withdrawn);
+    assert_eq!(sandbox.modules.names(), [MODULE]);
+}
+
+#[test]
 fn a_waiting_update_is_confirmed_only_while_the_catalog_still_chooses_it() {
     let sandbox = Sandbox::new(true);
     let service = sandbox.service();
