@@ -141,37 +141,45 @@ pub fn build(workspace: &Path, target_dir: &Path, out: &Path) -> io::Result<Vec<
     }
     // After the lock: sources edited while waiting for it are those built.
     let digest = source_digest(workspace)?;
-    let mut cargo = Command::new("cargo");
-    cargo
-        .current_dir(workspace)
-        .args([
-            "build",
-            "--locked",
-            "--profile",
-            PROFILE,
-            "--target",
-            TARGET,
-        ])
-        .arg("--target-dir")
-        .arg(target_dir);
-    for guest in GUESTS {
-        cargo.args(["-p", guest.package]);
-    }
-    for var in CLEARED_VARS {
-        cargo.env_remove(var);
-    }
     let mut flags = remaps(workspace)?;
     flags.push("-Zlocation-detail=none".to_owned());
-    cargo
-        .env("CARGO_ENCODED_RUSTFLAGS", flags.join("\x1f"))
-        .env("RUSTC_BOOTSTRAP", "1");
-    let output = cargo.output()?;
-    if !output.status.success() {
-        return Err(io::Error::other(format!(
-            "the built-in modules do not build ({}):\n{}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        )));
+    let flags = flags.join("\x1f");
+    // One `cargo rustc` for each module, asking for the `cdylib`: the guests' manifests declare
+    // an `rlib` only, so that their host builds have hashed file names like any library's.
+    for guest in GUESTS {
+        let mut cargo = Command::new("cargo");
+        cargo
+            .current_dir(workspace)
+            .args([
+                "rustc",
+                "--locked",
+                "--lib",
+                "--crate-type",
+                "cdylib",
+                "--profile",
+                PROFILE,
+                "--target",
+                TARGET,
+                "-p",
+                guest.package,
+            ])
+            .arg("--target-dir")
+            .arg(target_dir);
+        for var in CLEARED_VARS {
+            cargo.env_remove(var);
+        }
+        cargo
+            .env("CARGO_ENCODED_RUSTFLAGS", &flags)
+            .env("RUSTC_BOOTSTRAP", "1");
+        let output = cargo.output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "the built-in module {} does not build ({}):\n{}",
+                guest.package,
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )));
+        }
     }
     let wasm_dir = target_dir.join(TARGET).join(PROFILE);
     let mut built = Vec::new();

@@ -82,7 +82,7 @@ flowchart LR
 | `oncl-api`, `oncl-cli`, `oncl-server` | HTTP-контракт, CLI `oncl` и HTTP-сервис |
 | `oncl-protocol` | Конверт NCALayer (приветствие, heartbeat, маршрутизация, `MODULE_NOT_FOUND`), диалекты ответов, семантика `CommonInvoker` |
 | `oncl-flows` | Окна, которые ядро показывает модулям и плагинам (трейт `Prompter` и типы окон), выбор ключа (`KeyChooser`, `KeyFlow`, живые проверки OCSP), правила путей страницы и PIN страниц |
-| `oncl-builtin-basics`, `oncl-builtin-commonutils`, `oncl-builtin-applet`, `oncl-builtin-accessory` | Встроенные модули оригинала, собранные в WebAssembly (`cdylib` + `rlib`): разбор запросов, диалекты и коды ошибок оригинала. Ключи, окна, файлы, токены и сеть остаются в ядре и доступны через host-функции |
+| `oncl-builtin-basics`, `oncl-builtin-commonutils`, `oncl-builtin-applet`, `oncl-builtin-accessory` | Встроенные модули оригинала, собранные в WebAssembly (в манифесте только `rlib`, `cdylib` под wasm32 заказывает `oncl-builtins-build`): разбор запросов, диалекты и коды ошибок оригинала. Ключи, окна, файлы, токены и сеть остаются в ядре и доступны через host-функции |
 | `oncl-builtins-build` | Сборка встроенных модулей (`wasm32-unknown-unknown`) для `build.rs` демона и `cargo xtask builtins`, их вшивание и сверка `SHA256SUMS` |
 | `oncl-builtin-tests` | Тесты встроенных модулей через трейт `Module` (не публикуется) |
 | `oncl-plugin` | Плагины: пакет `.onclp`, манифест `plugin.toml`, рантайм wasmi с host-функциями, пул встроенных модулей (`Builtins`) (`docs/design/plugins.md`) |
