@@ -109,7 +109,8 @@ pub enum PluginChoice<'a> {
     Update(&'a PluginRelease),
     /// Replace a revoked version with an older release.
     Downgrade(&'a PluginRelease),
-    /// The installed version is revoked and no eligible replacement exists.
+    /// The installed version is revoked and no eligible replacement (compatible, not bad,
+    /// rolled out to this installation) exists yet.
     Withdrawn,
     /// The plugin's publisher is revoked: the caller turns it off as if withdrawn.
     PublisherRevoked(&'a PublisherName),
@@ -133,10 +134,11 @@ pub(crate) fn offerable(
 
 /// Chooses a plugin update compatible with `core` and not known to fail here.
 ///
-/// Ordinary updates respect rollout and never downgrade. Revocation bypasses rollout:
-/// getting off the withdrawn version takes precedence, including by downgrade. If no
-/// safe replacement exists the caller must unload it. An unlisted current version alone
-/// never causes a downgrade or removal.
+/// Updates respect rollout, revoked or not, and only a revoked version is moved back. A
+/// revoked version is left for the newest release that is neither revoked nor outside this
+/// installation's rollout, including an older one; if there is none it is
+/// [`PluginChoice::Withdrawn`] (the caller unloads it) until a replacement is rolled out to
+/// it. An unlisted current version alone never causes a downgrade or removal.
 ///
 /// A publisher's plugin is [`PluginChoice::PublisherRevoked`] once its publisher is revoked.
 /// While its publisher is retired or unavailable it is kept as it is, unless its version is
@@ -191,7 +193,7 @@ pub fn choose_installed<'a>(
                 && !r.revoked
                 && r.min_core <= *core
                 && !bad.contains(&r.version)
-                && (revoked || plugin_bucket(install_id, id, &r.version) < r.rollout)
+                && plugin_bucket(install_id, id, &r.version) < r.rollout
         })
         .max_by(|a, b| a.version.cmp(&b.version));
     match candidate {
