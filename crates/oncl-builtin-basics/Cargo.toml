@@ -9,8 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [lib]
-# `cdylib`: the module the core embeds (wasm32); `rlib`: its name and unit tests on the host.
-crate-type = ["cdylib", "rlib"]
+# `rlib` only: its name and unit tests on the host. The module the core embeds (wasm32) is the
+# `cdylib` `oncl-builtins-build` asks for (see `oncl-builtin-accessory`).
+crate-type = ["rlib"]
 
 [dependencies]
 # Java's `Base64.getDecoder()` of `data` and certificates, with the original's error texts.
