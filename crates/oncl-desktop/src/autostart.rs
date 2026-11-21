@@ -378,7 +378,8 @@ impl RegistryAutostart {
 }
 
 /// Whether the switch of the `Run` value `value` in the `StartupApproved\Run` key
-/// `approved_key` of `hive` disables it ([`RegistryAutostart::APPROVED_KEY`]).
+/// `approved_key` of `hive` disables it ([`RegistryAutostart::APPROVED_KEY`]). Read in the
+/// 64-bit view, where Windows keeps the switches, by an x86 build as by an x64 one.
 #[cfg(windows)]
 pub(crate) fn disabled_by_windows(
     hive: oncl_registry::Hive,
