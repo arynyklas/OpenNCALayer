@@ -11,10 +11,6 @@ keywords = ["ncalayer", "dialogs", "key-selection", "kazakhstan"]
 categories = ["authentication"]
 include = ["/src/**", "/LICENSE", "/NOTICE"]
 
-[features]
-# `testing`: `ScriptedPrompter` and `MemoryRecentPath` for tests of this crate and its users.
-testing = []
-
 [dependencies]
 der.workspace = true
 oncl-pki.workspace = true
@@ -45,7 +41,3 @@ windows-sys = { workspace = true, features = [
     "Win32_Storage_FileSystem",
     "Win32_System_Pipes",
 ] }
-
-[[test]]
-name = "keys"
-required-features = ["testing"]

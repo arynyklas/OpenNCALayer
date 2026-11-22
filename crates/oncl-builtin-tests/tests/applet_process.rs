@@ -2,8 +2,8 @@
 //! process.
 
 use oncl_builtin_tests::applet::Applet;
+use oncl_builtin_tests::scripted::{ScriptedPrompter, Step};
 use oncl_flows::StorageKind;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_protocol::{AddInfo, Module};
 use oncl_testkit::synthetic;
 use oncl_token::emulator::{CardSpec, EmuKey, EmulatorBackend, card};

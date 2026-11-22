@@ -2,8 +2,8 @@
 //! its own, a dialog held in one does not hold the others, a dropped reply closes the
 //! socket without a frame.
 
+use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use futures_util::{SinkExt, StreamExt};
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::tsp::MockTsa;
 use oncl_plugin::{Engine, HostServices, Package, PluginModules};
 use oncl_testkit::{read, synthetic};

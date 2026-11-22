@@ -4,10 +4,10 @@
 
 use crate::common;
 
+use crate::common::scripted::{ScriptedPrompter, Step};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use common::*;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_flows::{FileKind, MessageKind, lock_dialog_flow};
 use oncl_pdk::abi::{self, Bytes, ConfirmArgs, ErrorCode, HttpArgs, HttpResponse, Import, Method};
 use oncl_pki::http::{GetOptions, HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};

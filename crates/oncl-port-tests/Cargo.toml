@@ -9,8 +9,8 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-# `ScriptedPrompter`, `MemoryRecentPath`: the dialogs of a port, answered by a script.
-oncl-flows = { workspace = true, features = ["testing"] }
+# The dialogs of a port, answered by `scripted::ScriptedPrompter`.
+oncl-flows.workspace = true
 oncl-pdk.workspace = true
 # `MockTsa`, `MockOcsp`, `MockCrl`, `RouteTransport`: the PKI services ports reach.
 oncl-pki = { workspace = true, features = ["testing"] }
@@ -22,6 +22,8 @@ oncl-testkit.workspace = true
 oncl-token = { workspace = true, features = ["emulator"] }
 semver.workspace = true
 time.workspace = true
+# The passwords `scripted::ScriptedPrompter` answers with.
+zeroize.workspace = true
 
 [dev-dependencies]
 oncl-xml.workspace = true

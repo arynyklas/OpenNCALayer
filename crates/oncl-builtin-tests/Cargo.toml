@@ -9,8 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
-# `testing`: `ScriptedPrompter` and `MemoryRecentPath`, which the tests answer dialogs with.
-oncl-flows = { workspace = true, features = ["testing"] }
+# The dialogs: `scripted::ScriptedPrompter` and `scripted::MemoryRecentPath` answer them.
+oncl-flows.workspace = true
 # The accessory module's names; its guest is embedded by the build script.
 oncl-builtin-accessory.workspace = true
 # The Applet module's name; its guest is embedded by the build script.
@@ -25,7 +25,8 @@ oncl-plugin = { workspace = true, features = ["distribution"] }
 oncl-protocol.workspace = true
 oncl-token.workspace = true
 time.workspace = true
-# The prompter that panics in a window, for the tests of a host function's panic.
+# The answers of the scripted prompter and of the prompter that panics in a window, for the
+# tests of a host function's panic.
 zeroize.workspace = true
 
 [build-dependencies]

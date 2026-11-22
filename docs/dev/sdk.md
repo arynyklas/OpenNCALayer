@@ -259,7 +259,7 @@ Core выполняет три шага в указанном порядке (`d
 | 0.1.0 → 0.1.1 | Публичный API крейтов SDK не меняется. |
 | 0.1.1 → 0.1.2-beta.1 | Несовместимо меняется публичный API `oncl-update` (каталог плагинов и делегированные роли TUF), см. «Переход с 0.1.1 на 0.1.2». У остальных крейтов SDK меняется только номер версии. Номер патча не означает совместимость: до 1.0 SDK и программа выходят под одной версией. |
 | 0.1.2-beta.1 → 0.1.2 | Публичный API крейтов SDK не меняется: `0.1.2` собирается из коммита `0.1.2-beta.1`. |
-| 0.1.2 → 0.1.3 | Несовместимо меняется публичный API `oncl-plugin` (feature `distribution`): `Store::install` принимает издателя, у `Installed` и `StoreState` новые поля. В `oncl-update` только добавления: `choose_installed` и методы каталога для записанного издателя. См. «Переход с 0.1.2 на 0.1.3». |
+| 0.1.2 → 0.1.3 | Несовместимо меняется публичный API `oncl-plugin` (feature `distribution`): `Store::install` принимает издателя, у `Installed` и `StoreState` новые поля. `oncl-flows` удаляет feature `testing` и её модуль `testing` (`Step`, `ScriptedPrompter`, `MemoryRecentPath`). В `oncl-update` только добавления: `choose_installed` и методы каталога для записанного издателя. См. «Переход с 0.1.2 на 0.1.3». |
 
 ### Переход с 0.1.1 на 0.1.2
 
@@ -294,12 +294,17 @@ Core выполняет три шага в указанном порядке (`d
 
 ### Переход с 0.1.2 на 0.1.3
 
-Сравнение с `v0.1.2`. Несовместимо меняется публичный API `oncl-plugin` с feature `distribution`; в `oncl-update` только добавления. У остальных крейтов SDK он прежний.
+Сравнение с `v0.1.2`. Несовместимо меняется публичный API `oncl-plugin` с feature `distribution` и `oncl-flows` с feature `testing`; в `oncl-update` только добавления. У остальных крейтов SDK он прежний.
 
 Что перестанет собираться в `oncl-plugin` (feature `distribution`) и как это исправить:
 
 - `Store::install(package, bytes, source)` стал `install(package, bytes, source, publisher)`: `publisher: Option<&tuf::PublisherName>` — издатель выпуска каталога (`PluginRelease::publisher`), для порта из индекса владельца и для файла пользователя `None`.
 - У `Installed` новое поле `publisher: Option<PublisherName>`, у `StoreState` — `declined_replacements: BTreeMap<String, String>`; в литерале задайте `None` и `BTreeMap::new()`. Файл состояния с ними версии 0.1.1 и 0.1.2 читают: оба поля без значения не пишутся, а незнакомые поля они пропускают. Но, сохранив состояние заново (после отката на них проверкой здоровья или вручную), они оба поля теряют: издатель затем восстанавливается по префиксу, а отказы от замены порта забываются, и замену предложат снова. Имя издателя, которое новая версия не принимает, читается как `None` (журнал `warn`), остальное состояние не теряется.
+
+Что удалено из `oncl-flows` и чем заменить:
+
+- Feature `testing` и модуль `oncl_flows::testing` с тестовыми заменами `Step`, `ScriptedPrompter` (окна, отвеченные по сценарию) и `MemoryRecentPath` (последний путь в памяти). Это тестовый код, в выпуск он не входил. Сборка с `features = ["testing"]` у `oncl-flows` перестанет разрешаться.
+- Замена — своя реализация публичных трейтов `Prompter` и `RecentPathStore` в тестах вашего крейта. Удалённый модуль пользовался только публичным API `oncl-flows` (`Prompt`, запросы `*Prompt`, ответы `*Answer`, `Busy::new`, `LiveAvailability::wait_settled`), поэтому нужную часть можно скопировать без изменений. Так сделано и в этом репозитории: у каждого крейта с такими тестами своя копия только с нужными ему шагами, например `crates/oncl-flows/tests/keys/scripted.rs`.
 
 Что добавлено в `oncl-update`: функция `choose_installed` (как `choose_plugin`, но с издателем, записанным при установке), методы `Catalog::publisher_state_of`, `Catalog::is_installed_revoked`, `Catalog::source_archive`, `CatalogBuilder::capabilities` и `CatalogBuilder::delegations_unavailable`, константа `PublisherPolicy::TARGET`, тип `catalog::SourceArchive`, вариант `EntryRejection::CapabilitiesUnreadable`, методы `TufClient::verify_cached_top_level` и `TufClient::verify_cached_current_role` (сохранённая роль только в версии, которую перечисляет сохранённый снимок); `tuf::PublisherName` (де)сериализуется строкой с проверкой грамматики; с feature `testing` у `tuf::testing::Repo` методы `set_target`, `remove_target`, `set_role`, `role_file`, `republish` и функция `tuf::testing::delegations`.
 

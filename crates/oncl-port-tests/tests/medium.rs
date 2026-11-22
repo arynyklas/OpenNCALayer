@@ -1,8 +1,8 @@
 //! The medium ports: taxtech, energy, eproc, osdkz ESF, uchet esfSignUtil, qiwi, bas, eup,
 //! dogovor24, onaidocs, workspace, Simourg and motiw, run as the daemon runs them.
 
-use oncl_flows::testing::Step;
 use oncl_pki::key::{PublicKey, SigAlg};
+use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, default_clock, entry, p12};
 use oncl_protocol::Reply;
 use oncl_protocol::javab64::decode_java;

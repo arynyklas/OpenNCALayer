@@ -5,7 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use der::Encode;
 use oncl_builtin_tests::commonutils::{CommonUtils, MODULE_NAME};
-use oncl_flows::testing::{ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{ScriptedPrompter, Step};
 use oncl_flows::{Action, FileKind, Locale, OpenError, StorageKind};
 use oncl_pki::cert::{self, Certificate};
 use oncl_pki::cms::{self, SignOptions, verify};

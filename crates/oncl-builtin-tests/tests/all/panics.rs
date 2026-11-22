@@ -6,7 +6,7 @@
 use oncl_builtin_tests::SOURCES;
 use oncl_builtin_tests::basics::MODULE_NAME;
 use oncl_builtin_tests::panicking::PanicOnKey;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::info::cert_info;
 use oncl_pki::pkcs12::load;
 use oncl_pki::tsp::MockTsa;

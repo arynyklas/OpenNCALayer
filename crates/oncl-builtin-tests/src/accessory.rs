@@ -1,7 +1,7 @@
 //! `kz.gov.pki.ncalayerservices.accessory`.
 
 use crate::Lazy;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::http::{HttpError, HttpReply, HttpRequest, HttpTransport};
 use oncl_plugin::HostServices;
 use oncl_plugin::core::CoreHooks;

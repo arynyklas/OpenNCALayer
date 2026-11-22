@@ -1,19 +1,31 @@
-//! Test doubles (feature `testing`): a [`Prompter`] answering from a script and an in-memory
-//! [`RecentPathStore`].
+//! The dialogs answered from a script instead of windows: the `run` of a test build (feature
+//! `e2e-prompter`, `cli::e2e_prompter`) and the tests of this crate. The library's unit
+//! tests, the binary's and the integration tests compile this file as a module of their own;
+//! each of them uses a part of it.
 
-use crate::prompt::{
+#![cfg_attr(
+    test,
+    allow(
+        dead_code,
+        reason = "each test target of the crate uses a part of the script"
+    )
+)]
+
+#[cfg(test)]
+use oncl_flows::RecentPathStore;
+use oncl_flows::{
     Busy, BusyPrompt, ChoiceAnswer, ChoicePrompt, ConfirmPrompt, CsrAnswer, CsrPrompt, FilePrompt,
     ImportAnswer, ImportPrompt, KeyPrompt, MessagePrompt, PasswordPrompt, PathPrompt, Prompt,
-    Prompter, ReaderPrompt, RecentPathStore, SavePrompt, StorageAnswer, StorageKind, StoragePrompt,
+    Prompter, ReaderPrompt, SavePrompt, StorageAnswer, StorageKind, StoragePrompt,
 };
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Barrier, Mutex, MutexGuard, PoisonError};
 use zeroize::Zeroizing;
 
 /// One scripted answer. Its `Debug` form is its kind alone: scripts carry passwords.
 #[derive(Clone)]
-pub enum Step {
+pub(crate) enum Step {
     /// Answer a storage prompt with a PKCS#12 file.
     Storage {
         /// Key store file.
@@ -135,11 +147,11 @@ impl Step {
             Step::CancelConfirm => "CancelConfirm",
             Step::Save { .. } => "Save",
             Step::CancelSave => "CancelSave",
-            Step::Wait(_) => "Wait",
             Step::Choice { .. } => "Choice",
             Step::CancelChoice => "CancelChoice",
             Step::Path(_) => "Path",
             Step::CancelPath => "CancelPath",
+            Step::Wait(_) => "Wait",
         }
     }
 }
@@ -155,35 +167,24 @@ struct State {
     steps: VecDeque<Step>,
     timeline: Vec<&'static str>,
     storage_prompts: Vec<StoragePrompt>,
-    busy_prompts: Vec<BusyPrompt>,
-    opened_key_prompts: Vec<KeyPrompt>,
     key_prompts: Vec<KeyPrompt>,
-    csr_prompts: Vec<CsrPrompt>,
-    import_prompts: Vec<ImportPrompt>,
-    file_prompts: Vec<FilePrompt>,
     password_prompts: Vec<PasswordPrompt>,
-    message_prompts: Vec<MessagePrompt>,
-    confirm_prompts: Vec<ConfirmPrompt>,
-    save_prompts: Vec<SavePrompt>,
     choice_prompts: Vec<ChoicePrompt>,
-    path_prompts: Vec<PathPrompt>,
-    reader_prompts: Vec<ReaderPrompt>,
-    mismatches: Vec<String>,
 }
 
-/// A [`Prompter`] answering from a queue of [`Step`]s and recording every prompt shown. An
+/// A [`Prompter`] answering from a queue of [`Step`]s and recording the prompts shown. An
 /// empty queue cancels. A key prompt is answered once its OCSP checks have settled, as a
 /// user would pick from what the dialog ends up showing. Safe to share between threads.
 ///
-/// A window whose next scripted step answers another kind of window is cancelled and logged
-/// (see [`ScriptedPrompter::mismatches`]), never a panic: the step is dropped.
-pub struct ScriptedPrompter {
+/// A window whose next scripted step answers another kind of window is cancelled and logged,
+/// never a panic: the step is dropped.
+pub(crate) struct ScriptedPrompter {
     state: Arc<Mutex<State>>,
 }
 
 impl ScriptedPrompter {
     /// A prompter answering with `steps` in order.
-    pub fn new(steps: Vec<Step>) -> Self {
+    pub(crate) fn new(steps: Vec<Step>) -> Self {
         ScriptedPrompter {
             state: Arc::new(Mutex::new(State {
                 steps: steps.into(),
@@ -192,88 +193,28 @@ impl ScriptedPrompter {
         }
     }
 
-    /// What was shown so far, in order: `"storage"`, `"busy"`, `"busy closed"`, `"key"`,
-    /// `"csr"`, `"import"`, `"file"`, `"password"`, `"message"`, `"confirm"`, `"save"`,
-    /// `"choice"`, `"path"`, `"reader"`.
-    pub fn timeline(&self) -> Vec<&'static str> {
-        self.lock().timeline.clone()
-    }
-
     /// Storage prompts shown so far.
-    pub fn storage_prompts(&self) -> Vec<StoragePrompt> {
+    #[cfg(test)]
+    pub(crate) fn storage_prompts(&self) -> Vec<StoragePrompt> {
         self.lock().storage_prompts.clone()
     }
 
-    /// Busy indicators shown so far.
-    pub fn busy_prompts(&self) -> Vec<BusyPrompt> {
-        self.lock().busy_prompts.clone()
-    }
-
-    /// Key prompts shown so far, as they opened: keys whose OCSP check was still running
-    /// are [`crate::Availability::Pending`].
-    pub fn opened_key_prompts(&self) -> Vec<KeyPrompt> {
-        self.lock().opened_key_prompts.clone()
-    }
-
     /// Key prompts answered so far, with the availabilities they settled on.
-    pub fn key_prompts(&self) -> Vec<KeyPrompt> {
+    #[cfg(test)]
+    pub(crate) fn key_prompts(&self) -> Vec<KeyPrompt> {
         self.lock().key_prompts.clone()
     }
 
-    /// `generateCsr` prompts shown so far.
-    pub fn csr_prompts(&self) -> Vec<CsrPrompt> {
-        self.lock().csr_prompts.clone()
-    }
-
-    /// `importCertificate` prompts shown so far.
-    pub fn import_prompts(&self) -> Vec<ImportPrompt> {
-        self.lock().import_prompts.clone()
-    }
-
-    /// File choosers shown so far.
-    pub fn file_prompts(&self) -> Vec<FilePrompt> {
-        self.lock().file_prompts.clone()
-    }
-
     /// Password dialogs shown so far.
-    pub fn password_prompts(&self) -> Vec<PasswordPrompt> {
+    #[cfg(test)]
+    pub(crate) fn password_prompts(&self) -> Vec<PasswordPrompt> {
         self.lock().password_prompts.clone()
     }
 
-    /// Messages shown so far.
-    pub fn message_prompts(&self) -> Vec<MessagePrompt> {
-        self.lock().message_prompts.clone()
-    }
-
-    /// Yes/no questions shown so far.
-    pub fn confirm_prompts(&self) -> Vec<ConfirmPrompt> {
-        self.lock().confirm_prompts.clone()
-    }
-
-    /// Save dialogs shown so far.
-    pub fn save_prompts(&self) -> Vec<SavePrompt> {
-        self.lock().save_prompts.clone()
-    }
-
     /// Plugins' choices shown so far.
-    pub fn choice_prompts(&self) -> Vec<ChoicePrompt> {
+    #[cfg(test)]
+    pub(crate) fn choice_prompts(&self) -> Vec<ChoicePrompt> {
         self.lock().choice_prompts.clone()
-    }
-
-    /// Plugins' path choosers shown so far.
-    pub fn path_prompts(&self) -> Vec<PathPrompt> {
-        self.lock().path_prompts.clone()
-    }
-
-    /// Reader prompts shown so far.
-    pub fn reader_prompts(&self) -> Vec<ReaderPrompt> {
-        self.lock().reader_prompts.clone()
-    }
-
-    /// One line per window cancelled because the next scripted step answered another kind
-    /// of window; empty while the script and the flow agree.
-    pub fn mismatches(&self) -> Vec<String> {
-        self.lock().mismatches.clone()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -281,16 +222,14 @@ impl ScriptedPrompter {
     }
 
     /// A window met a scripted answer of another kind: the script and the flow disagree.
-    /// Logs it, remembers it for [`ScriptedPrompter::mismatches`], and cancels the window,
-    /// so the call ends with its ordinary cancel reply instead of a panic taking the
-    /// connection down.
+    /// Logs it and cancels the window, so the call ends with its ordinary cancel reply
+    /// instead of a panic taking the connection down.
     fn mismatch<T>(&self, window: &str, step: &Step) -> Prompt<T> {
         let line = format!(
             "ScriptedPrompter: {window} met the scripted step {}; the window is cancelled",
             step.kind()
         );
         tracing::error!("{line}");
-        self.lock().mismatches.push(line);
         Prompt::Cancelled
     }
 
@@ -347,17 +286,14 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn busy(&self, p: &BusyPrompt) -> Busy {
-        let mut state = self.lock();
-        state.timeline.push("busy");
-        state.busy_prompts.push(p.clone());
-        drop(state);
+    fn busy(&self, _p: &BusyPrompt) -> Busy {
+        self.lock().timeline.push("busy");
         let state = Arc::clone(&self.state);
         Busy::new(move || lock(&state).timeline.push("busy closed"))
     }
 
     fn key(&self, p: &KeyPrompt) -> Prompt<usize> {
-        let step = self.next("key", |s| s.opened_key_prompts.push(p.clone()));
+        let step = self.next("key", |_| {});
         let mut settled = p.clone();
         for (candidate, availability) in settled.candidates.iter_mut().zip(p.live.wait_settled()) {
             candidate.availability = availability;
@@ -370,8 +306,8 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn csr(&self, p: &CsrPrompt) -> Prompt<CsrAnswer> {
-        match self.next("csr", |s| s.csr_prompts.push(p.clone())) {
+    fn csr(&self, _p: &CsrPrompt) -> Prompt<CsrAnswer> {
+        match self.next("csr", |_| {}) {
             Some(Step::Csr { dir, password }) => Prompt::Answer(CsrAnswer {
                 storage: StorageKind::Pkcs12,
                 dir,
@@ -382,8 +318,8 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn import_cert(&self, p: &ImportPrompt) -> Prompt<ImportAnswer> {
-        match self.next("import", |s| s.import_prompts.push(p.clone())) {
+    fn import_cert(&self, _p: &ImportPrompt) -> Prompt<ImportAnswer> {
+        match self.next("import", |_| {}) {
             Some(Step::Import { dir, password }) => Prompt::Answer(ImportAnswer {
                 dir,
                 new_password: Zeroizing::new(password),
@@ -393,8 +329,8 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn file(&self, p: &FilePrompt) -> Prompt<PathBuf> {
-        match self.next("file", |s| s.file_prompts.push(p.clone())) {
+    fn file(&self, _p: &FilePrompt) -> Prompt<PathBuf> {
+        match self.next("file", |_| {}) {
             Some(Step::File(path)) => Prompt::Answer(path),
             Some(Step::CancelFile) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("file chooser", &step),
@@ -409,24 +345,24 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn message(&self, p: &MessagePrompt) -> Prompt<()> {
-        match self.next("message", |s| s.message_prompts.push(p.clone())) {
+    fn message(&self, _p: &MessagePrompt) -> Prompt<()> {
+        match self.next("message", |_| {}) {
             Some(Step::Message) => Prompt::Answer(()),
             Some(Step::CancelMessage) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("message", &step),
         }
     }
 
-    fn confirm(&self, p: &ConfirmPrompt) -> Prompt<bool> {
-        match self.next("confirm", |s| s.confirm_prompts.push(p.clone())) {
+    fn confirm(&self, _p: &ConfirmPrompt) -> Prompt<bool> {
+        match self.next("confirm", |_| {}) {
             Some(Step::Confirm { yes }) => Prompt::Answer(yes),
             Some(Step::CancelConfirm) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("question", &step),
         }
     }
 
-    fn save_file(&self, p: &SavePrompt) -> Prompt<PathBuf> {
-        match self.next("save", |s| s.save_prompts.push(p.clone())) {
+    fn save_file(&self, _p: &SavePrompt) -> Prompt<PathBuf> {
+        match self.next("save", |_| {}) {
             Some(Step::Save { path }) => Prompt::Answer(path),
             Some(Step::CancelSave) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("save dialog", &step),
@@ -443,16 +379,16 @@ impl Prompter for ScriptedPrompter {
         }
     }
 
-    fn path(&self, p: &PathPrompt) -> Prompt<PathBuf> {
-        match self.next("path", |s| s.path_prompts.push(p.clone())) {
+    fn path(&self, _p: &PathPrompt) -> Prompt<PathBuf> {
+        match self.next("path", |_| {}) {
             Some(Step::Path(path)) => Prompt::Answer(path),
             Some(Step::CancelPath) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("path chooser", &step),
         }
     }
 
-    fn reader(&self, p: &ReaderPrompt) -> Prompt<String> {
-        match self.next("reader", |s| s.reader_prompts.push(p.clone())) {
+    fn reader(&self, _p: &ReaderPrompt) -> Prompt<String> {
+        match self.next("reader", |_| {}) {
             Some(Step::Reader(reader)) => Prompt::Answer(reader),
             Some(Step::CancelReader) | None => Prompt::Cancelled,
             Some(step) => self.mismatch("reader prompt", &step),
@@ -461,14 +397,16 @@ impl Prompter for ScriptedPrompter {
 }
 
 /// A [`RecentPathStore`] in memory.
-pub struct MemoryRecentPath {
+#[cfg(test)]
+pub(crate) struct MemoryRecentPath {
     initial: Option<PathBuf>,
     saved: Mutex<Option<PathBuf>>,
 }
 
+#[cfg(test)]
 impl MemoryRecentPath {
     /// A store whose path is `initial` until something is saved.
-    pub fn new(initial: Option<PathBuf>) -> Self {
+    pub(crate) fn new(initial: Option<PathBuf>) -> Self {
         MemoryRecentPath {
             initial,
             saved: Mutex::new(None),
@@ -476,7 +414,7 @@ impl MemoryRecentPath {
     }
 
     /// The last path passed to [`RecentPathStore::save`].
-    pub fn saved(&self) -> Option<PathBuf> {
+    pub(crate) fn saved(&self) -> Option<PathBuf> {
         self.saved
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -484,12 +422,13 @@ impl MemoryRecentPath {
     }
 }
 
+#[cfg(test)]
 impl RecentPathStore for MemoryRecentPath {
     fn load(&self) -> Option<PathBuf> {
         self.saved().or_else(|| self.initial.clone())
     }
 
-    fn save(&self, p: &Path) {
+    fn save(&self, p: &std::path::Path) {
         *self.saved.lock().unwrap_or_else(PoisonError::into_inner) = Some(p.to_path_buf());
     }
 }

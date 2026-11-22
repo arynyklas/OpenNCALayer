@@ -1,8 +1,8 @@
 //! `kz.gov.pki.knca.applet.Applet`.
 
 use crate::Lazy;
+use crate::scripted::MemoryRecentPath;
 use oncl_flows::Prompter;
-use oncl_flows::testing::MemoryRecentPath;
 use oncl_pki::http::{HttpError, HttpReply, HttpRequest, HttpTransport};
 use oncl_plugin::HostServices;
 use oncl_protocol::{AddInfo, Module, Reply};

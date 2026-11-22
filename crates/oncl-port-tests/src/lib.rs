@@ -4,8 +4,10 @@
 //! by a [`ScriptedPrompter`] and their PKI requests by the mock TSA, OCSP responder and CRL
 //! server of `oncl_pki` ([`Harness`]).
 
+pub mod scripted;
+
+use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_flows::Locale;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::crl::MockCrl;
 use oncl_pki::http::{
     HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport, RouteTransport,

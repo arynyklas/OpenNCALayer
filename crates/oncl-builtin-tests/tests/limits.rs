@@ -10,7 +10,7 @@ use oncl_builtin_tests::accessory::MODULE_NAME as ACCESSORY;
 use oncl_builtin_tests::applet::MODULE_NAME as APPLET;
 use oncl_builtin_tests::basics::MODULE_NAME;
 use oncl_builtin_tests::commonutils::MODULE_NAME as CU_MODULE;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::info::cert_info;
 use oncl_pki::key::SigAlg;
 use oncl_pki::pkcs12::load;

@@ -5,8 +5,8 @@
 
 use crate::common;
 
+use crate::common::scripted::{ScriptedPrompter, Step};
 use common::*;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_flows::{Availability, DisabledReason};
 use oncl_pdk::abi::{
     self, Action, Bytes, CertArgs, CertDetails, Chosen, ErrorCode, Filter, FilterMore, Handle,

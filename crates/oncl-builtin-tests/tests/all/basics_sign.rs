@@ -6,7 +6,7 @@ use base64::engine::general_purpose::STANDARD;
 use der::Encode;
 use oncl_builtin_tests::basics::{Basics, MODULE_NAME};
 use oncl_builtin_tests::panicking::PanicOnKey;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_flows::{
     Action, Availability, Busy, BusyPrompt, ChainPolicy, CsrAnswer, CsrPrompt, DisabledReason,
     FilePrompt, FilterMore, ImportAnswer, ImportPrompt, KeyFilter, KeyPrompt, Locale, OcspCache,

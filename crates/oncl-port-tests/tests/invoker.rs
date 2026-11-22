@@ -4,8 +4,8 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use oncl_flows::testing::Step;
 use oncl_pki::http::{HttpError, HttpErrorKind, HttpReply, HttpRequest, HttpTransport};
+use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, P12_PASSWORD, p12};
 use oncl_protocol::Reply;
 use serde_json::Value;

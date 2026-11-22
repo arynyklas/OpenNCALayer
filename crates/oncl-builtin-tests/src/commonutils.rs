@@ -1,8 +1,8 @@
 //! `kz.gov.pki.knca.commonUtils`.
 
 use crate::Lazy;
+use crate::scripted::MemoryRecentPath;
 use oncl_flows::Prompter;
-use oncl_flows::testing::MemoryRecentPath;
 use oncl_pki::http::HttpTransport;
 use oncl_pki::pkix::CaSet;
 use oncl_plugin::HostServices;
