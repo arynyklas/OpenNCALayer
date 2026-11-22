@@ -4,7 +4,7 @@
 
 use oncl_builtin_tests::SOURCES;
 use oncl_builtin_tests::basics::MODULE_NAME;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter};
+use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter};
 use oncl_pki::tsp::MockTsa;
 use oncl_plugin::{BuiltinLimits, Builtins, Engine as WasmEngine, HostServices};
 use oncl_protocol::{AddInfo, Reply};

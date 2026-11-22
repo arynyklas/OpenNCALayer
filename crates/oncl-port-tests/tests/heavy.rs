@@ -1,10 +1,10 @@
 //! The ports of the heavy plugins: Buhta NcaModule, Alatau City Bank, KNP (ИС СОНО),
 //! Documentolog, Qoltanba, SKF.
 
-use oncl_flows::testing::Step;
 use oncl_flows::{Availability, DisabledReason};
 use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::key::SigAlg;
+use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, entry, p12};
 use oncl_protocol::Reply;
 use oncl_protocol::javab64::decode_java;

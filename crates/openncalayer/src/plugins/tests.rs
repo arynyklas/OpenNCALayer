@@ -3,8 +3,8 @@
 //! directory.
 
 use super::*;
+use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use crate::update::tests::FakeTransport;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_plugin::{Engine, HostServices};
 use oncl_protocol::DynamicModules;
 use oncl_update::{PluginReplaces, Sha256};

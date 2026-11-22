@@ -4,9 +4,9 @@
 
 use crate::common;
 
+use crate::common::scripted::{ScriptedPrompter, Step};
 use common::*;
 use oncl_flows::StorageKind;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_pdk::abi::{
     self, Action, Bytes, ChooseArgs, Chosen, ErrorCode, Filter, Handle, HostResult, Import,
     KeySource, OpenArgs, OpenOutcome, Password, PasswordArgs, SignCmsArgs, TerminalsArgs,

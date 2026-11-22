@@ -4479,6 +4479,7 @@ dependencies = [
  "tempfile",
  "time",
  "x509-cert",
+ "zeroize",
  "zip",
 ]
 

@@ -3,7 +3,7 @@
 //! writes it refuses without a command to the card.
 
 use oncl_builtin_tests::applet::Applet;
-use oncl_flows::testing::{ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{ScriptedPrompter, Step};
 use oncl_flows::{OpenError, ReaderEntry, StorageKind};
 use oncl_protocol::{AddInfo, Module};
 use oncl_testkit::synthetic;

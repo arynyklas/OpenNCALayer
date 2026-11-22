@@ -3,11 +3,13 @@
 
 #![allow(dead_code)]
 
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+pub mod scripted;
+
 use oncl_pdk::abi::{self, HostResult, Import};
 use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_plugin::{HostServices, Localized, Manifest, SessionContext, Trust};
 use oncl_protocol::AddInfo;
+use scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use serde::de::DeserializeOwned;
 use std::fmt::Write as _;
 use std::sync::Arc;

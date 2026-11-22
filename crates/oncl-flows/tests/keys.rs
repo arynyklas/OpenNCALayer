@@ -1,7 +1,9 @@
 //! The shared key choice ([`KeyChooser`], [`KeyFlow`]) and the plugin dialogs of the scripted
 //! prompter.
 
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
+#[path = "keys/scripted.rs"]
+mod scripted;
+
 use oncl_flows::{
     Action, Availability, ChainPolicy, ConfirmPrompt, FileRead, KeyChecks, KeyChooser, KeyFilter,
     KeyFlow, KeyOrder, KeyRequest, Locale, MessageKind, MessagePrompt, OcspCache, OpenError,
@@ -14,6 +16,7 @@ use oncl_pki::pkcs12::{WriteOptions, write};
 use oncl_testkit::{fixture, read, synthetic};
 use oncl_token::emulator::{CardSpec, EmuKey, EmulatorBackend, card};
 use oncl_token::{TokenKind, Tokens};
+use scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use std::path::PathBuf;
 use std::sync::Arc;
 use time::OffsetDateTime;

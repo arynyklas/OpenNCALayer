@@ -8,6 +8,7 @@ pub mod applet;
 pub mod basics;
 pub mod commonutils;
 pub mod panicking;
+pub mod scripted;
 
 use oncl_plugin::core::CoreHooks;
 use oncl_plugin::{BuiltinLimits, Builtins, Engine, HostServices};

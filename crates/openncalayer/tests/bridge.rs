@@ -1,10 +1,13 @@
 //! The browser extension bridge over a real IPC endpoint: in process (`serve_ipc`) and, with
 //! feature `e2e-prompter`, through the `openncalayer` binary.
 
+/// The scripted dialogs: the crate's one copy, in `src/scripted.rs`.
+#[path = "../src/scripted.rs"]
+mod scripted;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_ipc::{Endpoint, IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::tsp::MockTsa;
@@ -14,6 +17,7 @@ use oncl_tls::TlsFiles;
 use openncalayer::{NM_FRAME_LIMIT, ServerConfig, build_registry, serve, serve_ipc, split_message};
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
+use scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use serde_json::{Value, json};
 use std::net::SocketAddr;
 use std::sync::{Arc, Barrier, LazyLock, Mutex};

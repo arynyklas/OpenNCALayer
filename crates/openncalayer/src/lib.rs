@@ -20,6 +20,8 @@ mod paths;
 pub mod plugins;
 pub mod renewal;
 pub mod repository;
+#[cfg(any(test, feature = "e2e-prompter"))]
+mod scripted;
 mod server;
 mod session;
 mod settings;

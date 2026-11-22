@@ -8,7 +8,7 @@ use der::asn1::OctetString;
 use der::oid::AssociatedOid;
 use der::{Decode, Encode};
 use oncl_builtin_tests::applet::{Applet, MODULE_NAME};
-use oncl_flows::testing::{ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{ScriptedPrompter, Step};
 use oncl_flows::{Action, FileKind, Locale, OpenError, StorageKind};
 use oncl_pki::cert::Certificate;
 use oncl_pki::csr::KeyStoreInfo;

@@ -14,8 +14,6 @@ mod ocsp_cache;
 mod page_file;
 mod page_pin;
 mod prompt;
-#[cfg(feature = "testing")]
-pub mod testing;
 mod tokens;
 
 pub use filter::{

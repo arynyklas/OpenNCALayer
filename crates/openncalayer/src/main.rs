@@ -1161,7 +1161,7 @@ fn file_manager(dir: &Path) -> std::process::Command {
 /// The prompter of the `e2e-prompter` script, if the feature is on and the script set.
 fn scripted_prompter() -> Result<Option<Arc<dyn Prompter>>, ExitCode> {
     #[cfg(feature = "e2e-prompter")]
-    let scripted = cli::e2e_prompter()?.map(|p| Arc::new(p) as Arc<dyn Prompter>);
+    let scripted = cli::e2e_prompter()?;
     #[cfg(not(feature = "e2e-prompter"))]
     let scripted = None;
     Ok(scripted)
@@ -1223,6 +1223,10 @@ fn join_within<T>(thread: JoinHandle<T>, timeout: Duration) -> Option<thread::Re
     }
     Some(thread.join())
 }
+
+/// The scripted dialogs of the tests: `src/scripted.rs`, a module of the library too.
+#[cfg(all(test, feature = "token-emulator"))]
+mod scripted;
 
 #[cfg(test)]
 mod tests {
@@ -1421,8 +1425,8 @@ mod tests {
         .unwrap();
         let tokens = Tokens::new(Arc::new(emu), true);
         let services = HostServices::interactive(
-            Arc::new(oncl_flows::testing::ScriptedPrompter::new(Vec::new())),
-            Arc::new(oncl_flows::testing::MemoryRecentPath::new(None)),
+            Arc::new(crate::scripted::ScriptedPrompter::new(Vec::new())),
+            Arc::new(crate::scripted::MemoryRecentPath::new(None)),
             Arc::new(LiveProxyTransport::new(oncl_desktop::ProxySetting::None)),
             Arc::clone(&tokens),
         );

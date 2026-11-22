@@ -1,11 +1,11 @@
 //! The ecc.kz family of ports: MarketSign, EFactoringSign, NURSign and K2Sign answer as the
 //! originals did, byte for byte where the replies are fixed.
 
-use oncl_flows::testing::Step;
 use oncl_flows::{Locale, MessageKind};
 use oncl_pki::cms::SignOptions;
 use oncl_pki::http::{HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::tsp::MockTsa;
+use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, default_clock, entry, p12};
 use oncl_protocol::Reply;
 use oncl_protocol::javab64::decode_java;

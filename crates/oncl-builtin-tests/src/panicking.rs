@@ -1,7 +1,7 @@
 //! A prompter that panics in a window, for the tests of what a host function's panic leaves
 //! behind (the module's instance, the locks, the other connections).
 
-use oncl_flows::testing::ScriptedPrompter;
+use crate::scripted::ScriptedPrompter;
 use oncl_flows::{
     Busy, BusyPrompt, ChoiceAnswer, ChoicePrompt, ConfirmPrompt, CsrAnswer, CsrPrompt, FilePrompt,
     ImportAnswer, ImportPrompt, KeyPrompt, MessagePrompt, PasswordPrompt, PathPrompt, Prompt,

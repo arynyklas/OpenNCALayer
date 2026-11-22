@@ -4,8 +4,8 @@
 
 use crate::common;
 
+use crate::common::scripted::{ScriptedPrompter, Step};
 use common::*;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_pdk::abi::{
     self, Bytes, ChoiceArgs, ErrorCode, HostResult, Import, MAX_SETTINGS_KEYS, MAX_SHARED,
     MAX_SHARED_KEYS, MessageKind, SharedKey, SharedPut,

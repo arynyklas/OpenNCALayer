@@ -2,7 +2,7 @@
 //! process, and the windows of two calls never interleave.
 
 use oncl_builtin_tests::commonutils::{CommonUtils, MODULE_NAME};
-use oncl_flows::testing::{ScriptedPrompter, Step};
+use oncl_builtin_tests::scripted::{ScriptedPrompter, Step};
 use oncl_flows::{Locale, StoragePrompt};
 use oncl_pki::http::{HttpError, HttpReply, HttpRequest, HttpTransport};
 use oncl_protocol::{AddInfo, Module};

@@ -4,8 +4,8 @@
 
 use crate::common;
 
+use crate::common::scripted::{ScriptedPrompter, Step};
 use common::*;
-use oncl_flows::testing::{ScriptedPrompter, Step};
 use oncl_flows::{PathMode, page_path};
 use oncl_pdk::abi::{
     self, Bytes, ChooseFileArgs, ChosenPath, ErrorCode, FileFilter, FileMode, HostResult, Import,

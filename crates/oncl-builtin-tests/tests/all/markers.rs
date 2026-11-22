@@ -7,8 +7,8 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
+use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_builtin_tests::{SOURCES, accessory, applet, basics, commonutils};
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::cms::SignOptions;
 use oncl_pki::info::cert_info;
 use oncl_pki::pkcs12::{KeyEntry, load};

@@ -13,5 +13,8 @@ mod plugins;
 #[cfg(feature = "e2e-prompter")]
 mod ports_e2e;
 mod ports_heavy_e2e;
+/// The scripted dialogs: the crate's one copy, in `src/scripted.rs`.
+#[path = "../../src/scripted.rs"]
+mod scripted;
 #[cfg(all(feature = "e2e-prompter", feature = "token-emulator"))]
 mod tokens;

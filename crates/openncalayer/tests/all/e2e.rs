@@ -2,11 +2,11 @@
 //! `tokio-tungstenite` client over its own `tokio-rustls` stream trusting that CA, a scripted
 //! prompter and an in-process TSA.
 
+use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use oncl_flows::RecentPathStore;
-use oncl_flows::testing::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::cert;
 use oncl_pki::cms::{SignOptions, sign, verify};
 use oncl_pki::key::SigAlg;
