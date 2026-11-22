@@ -30,6 +30,8 @@ mod signal;
 mod strict;
 #[cfg(windows)]
 mod terminal;
+#[cfg(unix)]
+mod terminal_unix;
 #[cfg(feature = "token-emulator")]
 mod token;
 mod wsse;

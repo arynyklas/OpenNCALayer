@@ -74,7 +74,8 @@ impl Drop for Signals {
     }
 }
 #[cfg(unix)]
-extern "C" fn signal(_: libc::c_int) {
+/// Latches cancellation; also the handler of the signals that cancel an open secret prompt.
+pub(crate) extern "C" fn signal(_: libc::c_int) {
     CANCELLED.store(true, Ordering::SeqCst);
 }
 #[cfg(unix)]

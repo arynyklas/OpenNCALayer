@@ -55,7 +55,7 @@ tokio = { workspace = true, features = ["sync"] }
 rcgen.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Console"] }
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Console", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
