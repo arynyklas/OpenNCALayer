@@ -1033,7 +1033,7 @@ struct MachineRun {
 struct RunSource {
     run_key: String,
     view: oncl_registry::View,
-    /// In the native view: `StartupApproved\Run32` holds the switches of the 32-bit view.
+    /// In the 64-bit view: `StartupApproved\Run32` holds the switches of the 32-bit view.
     approved_key: String,
     /// The value as the user reads it, e.g. `HKLM\Software\WOW6432Node\…\Run\NCALayer`.
     shown: String,
@@ -1042,14 +1042,15 @@ struct RunSource {
 #[cfg(windows)]
 impl MachineRun {
     const VALUE: &'static str = "NCALayer";
-    /// The 32-bit view's `Run` key as a 64-bit process names it.
+    /// The 32-bit view's `Run` key as the 64-bit view names it.
     const RUN_KEY_32: &'static str = r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run";
     /// Windows' switches of the 32-bit view's `Run` values.
     const APPROVED_KEY_32: &'static str =
         r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32";
 
-    /// `HKLM`, in the 64-bit view and, for a 32-bit MSI, in the 32-bit one. The switches
-    /// are read in this process's view, the 64-bit one (OpenNCALayer is built for x64).
+    /// `HKLM`, in the 64-bit view and, for a 32-bit MSI, in the 32-bit one, which 32-bit
+    /// Windows does not have (nothing is found there). The switches are read in the 64-bit
+    /// view, where Windows keeps them, by an x86 build as by an x64 one.
     fn local_machine() -> MachineRun {
         use crate::RegistryAutostart as R;
         let shown = |key: &str| format!(r"HKLM\{key}\{}", Self::VALUE);
@@ -1058,7 +1059,7 @@ impl MachineRun {
             sources: vec![
                 RunSource {
                     run_key: R::RUN_KEY.to_owned(),
-                    view: oncl_registry::View::Native,
+                    view: oncl_registry::View::Wow64,
                     approved_key: R::APPROVED_KEY.to_owned(),
                     shown: shown(R::RUN_KEY),
                 },
@@ -1078,7 +1079,7 @@ impl MachineRun {
         use crate::RegistryAutostart as R;
         let source = |run: &str, approved: &str| RunSource {
             run_key: base.key(run),
-            view: oncl_registry::View::Native,
+            view: oncl_registry::View::Wow64,
             approved_key: base.key(approved),
             shown: format!(r"HKCU\{}\{}", base.key(run), Self::VALUE),
         };
@@ -1702,7 +1703,7 @@ mod tests {
             [
                 (
                     r"Software\Microsoft\Windows\CurrentVersion\Run",
-                    View::Native,
+                    View::Wow64,
                     r"HKLM\Software\Microsoft\Windows\CurrentVersion\Run\NCALayer"
                 ),
                 (

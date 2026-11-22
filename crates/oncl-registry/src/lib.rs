@@ -4,7 +4,14 @@
 //! fails with [`std::io::ErrorKind::Unsupported`].
 //!
 //! `key` is a path under the hive; a `None` value name is the key's default value. A key or
-//! value that does not exist reads as `None`.
+//! value that does not exist reads as `None`. Values are read in the 64-bit registry view of
+//! 64-bit Windows ([`View::Wow64`]), by a 32-bit build as by a 64-bit one; [`value_exists`]
+//! reads in either view. Writes and deletes go to this process's view of `HKCU`, where the
+//! two views share `Software` (except `Software\Classes`).
+//!
+//! A key path or value name that contains NUL fails with
+//! [`std::io::ErrorKind::InvalidInput`] (Windows would read only the part before it), and so
+//! does an empty key path given to a write or a delete (it would name `HKCU` itself).
 
 /// A predefined root key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,12 +22,13 @@ pub enum Hive {
     LocalMachine,
 }
 
-/// Which of the two registry views of 64-bit Windows a key of `HKLM\Software` is read in.
+/// A registry view of 64-bit Windows, the same keys for a 32-bit and a 64-bit process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
-    /// This process's own: the 64-bit one for a 64-bit process.
-    Native,
-    /// The 32-bit programs' (`HKLM\Software\WOW6432Node`), `KEY_WOW64_32KEY`.
+    /// The 64-bit programs' view (`KEY_WOW64_64KEY`); on 32-bit Windows, its only one.
+    Wow64,
+    /// The 32-bit programs' view (`KEY_WOW64_32KEY`), where `HKLM\Software` is the 64-bit
+    /// view's `HKLM\Software\WOW6432Node`. 32-bit Windows has none: nothing exists in it.
     Wow32,
 }
 
@@ -46,15 +54,42 @@ mod windows {
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_SUCCESS};
     use windows_sys::Win32::System::Registry::{
         HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE, KEY_SET_VALUE,
-        KEY_WOW64_32KEY, REG_BINARY, REG_DWORD, REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
-        RRF_RT_DWORD, RRF_RT_REG_BINARY, RRF_RT_REG_SZ, RegCloseKey, RegCreateKeyExW,
-        RegDeleteKeyValueW, RegDeleteTreeW, RegGetValueW, RegOpenKeyExW, RegQueryValueExW,
-        RegSetValueExW,
+        KEY_WOW64_32KEY, KEY_WOW64_64KEY, REG_BINARY, REG_DWORD, REG_OPTION_NON_VOLATILE,
+        REG_SAM_FLAGS, REG_SZ, REG_VALUE_TYPE, RRF_RT_DWORD, RRF_RT_REG_BINARY, RRF_RT_REG_SZ,
+        RegCloseKey, RegCreateKeyExW, RegDeleteKeyValueW, RegDeleteTreeW, RegGetValueW,
+        RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    };
+    use windows_sys::Win32::System::SystemInformation::{
+        GetNativeSystemInfo, PROCESSOR_ARCHITECTURE, PROCESSOR_ARCHITECTURE_INTEL, SYSTEM_INFO,
     };
 
-    /// `s` as a NUL-terminated UTF-16 string.
-    fn wide(s: &str) -> Vec<u16> {
-        s.encode_utf16().chain(once(0)).collect()
+    /// The key path or value name `s` as a NUL-terminated UTF-16 string. Fails if `s`
+    /// contains NUL: Windows would read only the part before it.
+    fn wide(s: &str) -> io::Result<Vec<u16>> {
+        if s.contains('\0') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a registry key path or value name cannot contain NUL",
+            ));
+        }
+        Ok(s.encode_utf16().chain(once(0)).collect())
+    }
+
+    /// [`wide`] of an optional value name: `None` is the default value.
+    fn wide_name(name: Option<&str>) -> io::Result<Option<Vec<u16>>> {
+        name.map(wide).transpose()
+    }
+
+    /// [`wide`] of the key path of a write or a delete, which must not be empty: an empty
+    /// path names the hive itself.
+    fn subkey(key: &str) -> io::Result<Vec<u16>> {
+        if key.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "an empty registry key path names the hive itself",
+            ));
+        }
+        wide(key)
     }
 
     fn check(status: u32) -> io::Result<()> {
@@ -73,15 +108,86 @@ mod windows {
         }
     }
 
-    /// The bytes of value `name` of `<hive>\<key>`, of a type `flags` allows.
+    /// The access flag that opens a key in `view`, for a process that is 64-bit or not
+    /// (`process_64bit`) on Windows whose processor is `native`; `None` if that Windows has
+    /// no such view. Windows on an x86 processor is 32-bit and has one view, opened without
+    /// a flag; 64-bit Windows has both, and the flags name them for either process.
+    fn view_access(
+        view: View,
+        process_64bit: bool,
+        native: PROCESSOR_ARCHITECTURE,
+    ) -> Option<REG_SAM_FLAGS> {
+        let windows_64bit = process_64bit || native != PROCESSOR_ARCHITECTURE_INTEL;
+        match (view, windows_64bit) {
+            (View::Wow64, true) => Some(KEY_WOW64_64KEY),
+            (View::Wow32, true) => Some(KEY_WOW64_32KEY),
+            (View::Wow64, false) => Some(0),
+            (View::Wow32, false) => None,
+        }
+    }
+
+    /// [`view_access`] for this process on this Windows.
+    pub(super) fn access_of(view: View) -> Option<REG_SAM_FLAGS> {
+        view_access(view, cfg!(target_pointer_width = "64"), native_processor())
+    }
+
+    /// The processor Windows runs on, not the one this process is built for: x86
+    /// (`PROCESSOR_ARCHITECTURE_INTEL`) for 32-bit Windows only. `GetNativeSystemInfo` exists
+    /// since Windows XP; `IsWow64Process2` would need Windows 10.
+    fn native_processor() -> PROCESSOR_ARCHITECTURE {
+        let mut info = SYSTEM_INFO::default();
+        // SAFETY: `info` is a writable SYSTEM_INFO, which the call fills.
+        unsafe { GetNativeSystemInfo(&mut info) };
+        // SAFETY: both arms of the union are plain integers; the processor is the
+        // documented one.
+        unsafe { info.Anonymous.Anonymous.wProcessorArchitecture }
+    }
+
+    /// An open key, closed when dropped.
+    struct Key(HKEY);
+
+    impl Key {
+        /// `<hive>\<key>` opened for `access` in `view`; `None` if the key does not exist,
+        /// or the view does not on this Windows.
+        fn open(
+            hive: Hive,
+            key: &str,
+            access: REG_SAM_FLAGS,
+            view: View,
+        ) -> io::Result<Option<Key>> {
+            let key = wide(key)?;
+            let Some(view) = access_of(view) else {
+                return Ok(None);
+            };
+            let mut hkey: HKEY = ptr::null_mut();
+            // SAFETY: `key` is NUL-terminated and outlives the call; `hkey` receives the key.
+            match unsafe { RegOpenKeyExW(root(hive), key.as_ptr(), 0, access | view, &mut hkey) } {
+                ERROR_FILE_NOT_FOUND => Ok(None),
+                status => check(status).map(|()| Some(Key(hkey))),
+            }
+        }
+    }
+
+    impl Drop for Key {
+        fn drop(&mut self) {
+            // SAFETY: the key was opened by `RegOpenKeyExW` or `RegCreateKeyExW`, and is
+            // closed once, here.
+            unsafe { RegCloseKey(self.0) };
+        }
+    }
+
+    /// The bytes of value `name` of `<hive>\<key>` in the 64-bit view, of a type `flags`
+    /// allows.
     fn get_bytes(
         hive: Hive,
         key: &str,
         name: Option<&str>,
         flags: u32,
     ) -> io::Result<Option<Vec<u8>>> {
-        let key = wide(key);
-        let name = name.map(wide);
+        let name = wide_name(name)?;
+        let Some(key) = Key::open(hive, key, KEY_QUERY_VALUE, View::Wow64)? else {
+            return Ok(None);
+        };
         let name = name.as_ref().map_or(ptr::null(), |n| n.as_ptr());
         let mut buf: Vec<u8> = Vec::new();
         loop {
@@ -91,13 +197,13 @@ mod windows {
             } else {
                 buf.as_mut_ptr().cast()
             };
-            // SAFETY: `key` is NUL-terminated; `name` is null (the default value) or
-            // NUL-terminated; `data` is null (size query) or `buf`, whose size in bytes
-            // `size` holds.
+            // SAFETY: `key` is open with KEY_QUERY_VALUE and the subkey is null (the key
+            // itself); `name` is null (the default value) or NUL-terminated; `data` is null
+            // (size query) or `buf`, whose size in bytes `size` holds.
             let status = unsafe {
                 RegGetValueW(
-                    root(hive),
-                    key.as_ptr(),
+                    key.0,
+                    ptr::null(),
                     name,
                     flags,
                     ptr::null_mut(),
@@ -155,24 +261,15 @@ mod windows {
 
     /// Whether value `name` of `<hive>\<key>` in `view` exists, of any type.
     pub fn value_exists(hive: Hive, key: &str, name: Option<&str>, view: View) -> io::Result<bool> {
-        let key = wide(key);
-        let name = name.map(wide);
-        let access = KEY_QUERY_VALUE
-            | match view {
-                View::Native => 0,
-                View::Wow32 => KEY_WOW64_32KEY,
-            };
-        let mut hkey: HKEY = ptr::null_mut();
-        // SAFETY: `key` is NUL-terminated and outlives the call; `hkey` receives the key.
-        match unsafe { RegOpenKeyExW(root(hive), key.as_ptr(), 0, access, &mut hkey) } {
-            ERROR_FILE_NOT_FOUND => return Ok(false),
-            status => check(status)?,
-        }
-        // SAFETY: `hkey` is open with KEY_QUERY_VALUE; the name is null (the default value)
+        let name = wide_name(name)?;
+        let Some(key) = Key::open(hive, key, KEY_QUERY_VALUE, view)? else {
+            return Ok(false);
+        };
+        // SAFETY: `key` is open with KEY_QUERY_VALUE; the name is null (the default value)
         // or NUL-terminated; type, data and size are not asked for.
         let status = unsafe {
             RegQueryValueExW(
-                hkey,
+                key.0,
                 name.as_ref().map_or(ptr::null(), |n| n.as_ptr()),
                 ptr::null(),
                 ptr::null_mut(),
@@ -180,8 +277,6 @@ mod windows {
                 ptr::null_mut(),
             )
         };
-        // SAFETY: `hkey` was opened above and is closed once.
-        unsafe { RegCloseKey(hkey) };
         match status {
             ERROR_FILE_NOT_FOUND => Ok(false),
             status => check(status).map(|()| true),
@@ -196,8 +291,8 @@ mod windows {
         kind: REG_VALUE_TYPE,
         data: &[u8],
     ) -> io::Result<()> {
-        let key = wide(key);
-        let name = name.map(wide);
+        let key = subkey(key)?;
+        let name = wide_name(name)?;
         let len = u32::try_from(data.len())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "registry value too long"))?;
         let mut hkey: HKEY = ptr::null_mut();
@@ -216,27 +311,29 @@ mod windows {
                 ptr::null_mut(),
             )
         })?;
-        // SAFETY: `hkey` is open with KEY_SET_VALUE; the name is null (the default value)
+        let key = Key(hkey);
+        // SAFETY: `key` is open with KEY_SET_VALUE; the name is null (the default value)
         // or NUL-terminated; `data` holds `len` bytes.
-        let result = check(unsafe {
+        check(unsafe {
             RegSetValueExW(
-                hkey,
+                key.0,
                 name.as_ref().map_or(ptr::null(), |n| n.as_ptr()),
                 0,
                 kind,
                 data.as_ptr(),
                 len,
             )
-        });
-        // SAFETY: `hkey` was opened above and is closed once.
-        unsafe { RegCloseKey(hkey) };
-        result
+        })
     }
 
     /// Sets value `name` of `HKCU\<key>` to the string `value` (`REG_SZ`).
     pub fn set_string(key: &str, name: Option<&str>, value: &str) -> io::Result<()> {
         // A NUL-terminated UTF-16 string, as REG_SZ wants.
-        let data: Vec<u8> = wide(value).into_iter().flat_map(u16::to_le_bytes).collect();
+        let data: Vec<u8> = value
+            .encode_utf16()
+            .chain(once(0))
+            .flat_map(u16::to_le_bytes)
+            .collect();
         set_bytes(key, name, REG_SZ, &data)
     }
 
@@ -252,7 +349,7 @@ mod windows {
 
     /// Deletes value `name` of `HKCU\<key>`; `false` if it or the key did not exist.
     pub fn delete_value(key: &str, name: &str) -> io::Result<bool> {
-        let (key, name) = (wide(key), wide(name));
+        let (key, name) = (subkey(key)?, wide(name)?);
         // SAFETY: `key` and `name` are NUL-terminated and outlive the call.
         match unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) } {
             ERROR_FILE_NOT_FOUND => Ok(false),
@@ -262,11 +359,91 @@ mod windows {
 
     /// Deletes `HKCU\<key>` with its subkeys and values; `false` if it did not exist.
     pub fn delete_tree(key: &str) -> io::Result<bool> {
-        let key = wide(key);
-        // SAFETY: `key` is NUL-terminated and outlives the call.
-        match unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr()) } {
+        delete_tree_under(HKEY_CURRENT_USER, key)
+    }
+
+    /// [`delete_tree`] under `parent`: a test passes a key of its own, so that a path the
+    /// check lets through cannot empty `HKCU`.
+    fn delete_tree_under(parent: HKEY, key: &str) -> io::Result<bool> {
+        let key = subkey(key)?;
+        // SAFETY: `parent` is a predefined or open key; `key` is NUL-terminated and
+        // outlives the call.
+        match unsafe { RegDeleteTreeW(parent, key.as_ptr()) } {
             ERROR_FILE_NOT_FOUND => Ok(false),
             status => check(status).map(|()| true),
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::TestKey;
+        use windows_sys::Win32::System::SystemInformation::{
+            PROCESSOR_ARCHITECTURE_AMD64, PROCESSOR_ARCHITECTURE_ARM64,
+        };
+
+        #[test]
+        fn views_by_process_and_windows() {
+            let both = (Some(KEY_WOW64_64KEY), Some(KEY_WOW64_32KEY));
+            for (process_64bit, native, expected) in [
+                // 64-bit Windows: the same flags for a 64-bit and a 32-bit process.
+                (true, PROCESSOR_ARCHITECTURE_AMD64, both),
+                (true, PROCESSOR_ARCHITECTURE_ARM64, both),
+                (false, PROCESSOR_ARCHITECTURE_AMD64, both),
+                (false, PROCESSOR_ARCHITECTURE_ARM64, both),
+                // 32-bit Windows: one view, opened without a flag; no 32-bit view.
+                (false, PROCESSOR_ARCHITECTURE_INTEL, (Some(0), None)),
+            ] {
+                let access = |view| view_access(view, process_64bit, native);
+                assert_eq!(
+                    (access(View::Wow64), access(View::Wow32)),
+                    expected,
+                    "64-bit process: {process_64bit}, processor {native}"
+                );
+            }
+        }
+
+        #[test]
+        fn nul_and_empty_paths_are_refused() {
+            let invalid = |e: io::Error| e.kind() == io::ErrorKind::InvalidInput;
+            let base = TestKey::new();
+            set_string(base.path(), Some("v"), "kept").unwrap();
+            // Cut at the NUL, each would name the test key or its value.
+            let nul = format!("{}\0x", base.path());
+            let (key, hkcu) = (base.path(), Hive::CurrentUser);
+            assert!(get_string(hkcu, &nul, Some("v")).is_err_and(invalid));
+            assert!(get_string(hkcu, key, Some("v\0x")).is_err_and(invalid));
+            assert!(get_dword(hkcu, &nul, None).is_err_and(invalid));
+            assert!(get_binary(hkcu, key, Some("v\0")).is_err_and(invalid));
+            for view in [View::Wow64, View::Wow32] {
+                assert!(value_exists(hkcu, &nul, Some("v"), view).is_err_and(invalid));
+                assert!(value_exists(hkcu, key, Some("v\0x"), view).is_err_and(invalid));
+            }
+            assert!(set_string(&nul, Some("v"), "x").is_err_and(invalid));
+            assert!(set_dword(key, Some("v\0x"), 1).is_err_and(invalid));
+            assert!(set_binary(&nul, None, b"x").is_err_and(invalid));
+            assert!(delete_value(&nul, "v").is_err_and(invalid));
+            assert!(delete_value(key, "v\0x").is_err_and(invalid));
+            assert!(delete_tree(&nul).is_err_and(invalid));
+            assert_eq!(
+                get_string(hkcu, key, Some("v")).unwrap().as_deref(),
+                Some("kept")
+            );
+
+            // An empty path names HKCU itself: the writes and deletes refuse it. The empty
+            // `delete_tree` runs under the test key, opened read-only: if the check let it
+            // through, it would fail to empty the test key, not empty HKCU.
+            let absent = format!("OpenNCALayer-test-absent-{}", std::process::id());
+            assert!(set_string("", Some(&absent), "x").is_err_and(invalid));
+            assert!(set_dword("", Some(&absent), 1).is_err_and(invalid));
+            assert!(set_binary("", Some(&absent), b"x").is_err_and(invalid));
+            assert!(delete_value("", &absent).is_err_and(invalid));
+            let parent = Key::open(hkcu, key, KEY_QUERY_VALUE, View::Wow64)
+                .unwrap()
+                .unwrap();
+            assert!(delete_tree_under(parent.0, "").is_err_and(invalid));
+            drop(parent);
+            assert!(value_exists(hkcu, key, Some("v"), View::Wow64).unwrap());
         }
     }
 }
@@ -416,10 +593,16 @@ mod tests {
         assert!(get_dword(hkcu, &key, Some("v")).is_err());
         assert!(get_string(hkcu, &key, Some("d")).is_err());
 
-        // Any type; `HKCU\Software` is the same in both views.
-        for view in [View::Native, View::Wow32] {
+        // Any type; `HKCU\Software` is the same in both views of 64-bit Windows, and
+        // 32-bit Windows has no 32-bit view.
+        for view in [View::Wow64, View::Wow32] {
+            let in_view = windows::access_of(view).is_some();
             for name in [Some("v"), Some("d"), Some("b0"), None] {
-                assert!(value_exists(hkcu, &key, name, view).unwrap(), "{name:?}");
+                assert_eq!(
+                    value_exists(hkcu, &key, name, view).unwrap(),
+                    in_view,
+                    "{name:?} {view:?}"
+                );
             }
             assert!(!value_exists(hkcu, &key, Some("missing"), view).unwrap());
             assert!(!value_exists(hkcu, &format!(r"{key}\No"), Some("v"), view).unwrap());
@@ -443,6 +626,28 @@ mod tests {
         )
         .unwrap();
         assert!(root.is_some_and(|r| !r.is_empty()));
+    }
+
+    /// 64-bit Windows keeps `ProgramFilesDir` in both views: `Program Files` in the 64-bit
+    /// one, as `ProgramW6432Dir`, and `Program Files (x86)` in the 32-bit one. An x86 build
+    /// reads the 64-bit one as an x64 build does.
+    #[cfg(windows)]
+    #[test]
+    fn values_are_read_in_the_64bit_view() {
+        if windows::access_of(View::Wow32).is_none() {
+            return; // 32-bit Windows: one view.
+        }
+        let dir = |name| {
+            get_string(
+                Hive::LocalMachine,
+                r"Software\Microsoft\Windows\CurrentVersion",
+                Some(name),
+            )
+            .unwrap()
+        };
+        let program_files = dir("ProgramW6432Dir");
+        assert!(program_files.as_deref().is_some_and(|d| !d.is_empty()));
+        assert_eq!(dir("ProgramFilesDir"), program_files);
     }
 
     #[cfg(not(windows))]

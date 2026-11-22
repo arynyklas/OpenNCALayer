@@ -17,10 +17,12 @@ testing = []
 
 [target.'cfg(windows)'.dependencies]
 # advapi32 registry functions of Windows Vista and later (`RegGetValueW`,
-# `RegDeleteKeyValueW`, `RegDeleteTreeW`, `RegOpenKeyExW` with `KEY_WOW64_32KEY`);
-# `Win32_Security` for `RegCreateKeyExW`.
+# `RegDeleteKeyValueW`, `RegDeleteTreeW`, `RegOpenKeyExW` with `KEY_WOW64_64KEY` or
+# `KEY_WOW64_32KEY`); `Win32_Security` for `RegCreateKeyExW`; kernel32
+# `GetNativeSystemInfo` (Windows XP and later): whether Windows is 64-bit.
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_System_Registry",
+    "Win32_System_SystemInformation",
 ] }
