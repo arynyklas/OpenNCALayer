@@ -7,11 +7,12 @@
 
 use oncl_update::PublisherPolicy;
 use oncl_update::catalog::MIRROR_BASE;
-use oncl_update::tuf::{RoleName, SigningKey, testing};
+use oncl_update::tuf::{RoleName, SigningKey};
 use serde_json::{Map, Value};
 
 use super::*;
 use crate::plugins::catalog::PUBLISHER_CHECK_EVERY;
+use crate::repository::tests::tuf_repo;
 
 mod replacement;
 
@@ -176,7 +177,7 @@ fn publish_with(
             Some((version, targets)) => {
                 let file = repo.role_file(version, targets, &[&acme_key()]);
                 repo.set_role(&acme_role(), version, file);
-                repo.delegations = Some(testing::delegations(&[(&acme_role(), &acme_key())]));
+                repo.delegations = Some(tuf_repo::delegations(&[(&acme_role(), &acme_key())]));
             }
             None => repo.delegations = None,
         }
@@ -414,7 +415,7 @@ fn an_unavailable_publisher_keeps_its_plugins_unless_the_owner_revoked_them() {
     {
         let mut repo = sandbox.server.repo();
         let stranger = SigningKey::from_seed(&[78; 32]).unwrap();
-        repo.delegations = Some(testing::delegations(&[(&acme_role(), &acme_key())]));
+        repo.delegations = Some(tuf_repo::delegations(&[(&acme_role(), &acme_key())]));
         let file = repo.role_file(5, role(&[first, newer]), &[&stranger]);
         repo.set_role(&acme_role(), 5, file);
         repo.set_target(
@@ -711,7 +712,7 @@ fn an_expired_role_leaves_its_publisher_unavailable_in_the_catalog_rebuilt() {
         let file = repo.role_file(1, role(&[first]), &[&acme_key()]);
         repo.lifetimes = lifetimes;
         repo.set_role(&acme_role(), 1, file);
-        repo.delegations = Some(testing::delegations(&[(&acme_role(), &acme_key())]));
+        repo.delegations = Some(tuf_repo::delegations(&[(&acme_role(), &acme_key())]));
     }
     sandbox.publish(1, Vec::new());
     service.check_now();

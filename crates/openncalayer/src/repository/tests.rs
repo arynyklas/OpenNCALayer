@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use oncl_pki::http::HttpTransport;
 use oncl_update::tuf::store::{FileStore, Store};
-use oncl_update::tuf::testing::{self, Repo};
 use oncl_update::tuf::{PublicKey, RoleName, SigningKey};
 use oncl_update::{Channel, Index, PublisherPolicy, UpdateError};
 use serde_json::{Map, Value, json};
@@ -13,6 +12,9 @@ use time::{Duration as TimeDuration, OffsetDateTime};
 
 use super::{CatalogRead, PUBLISHERS_TIMEOUT, Repository};
 use crate::update::tests::FakeTransport;
+use tuf_repo::Repo;
+
+pub(crate) mod tuf_repo;
 
 /// Where the fake repository is "published".
 pub(crate) const BASE: &str = "https://example.org/tuf/v1";
@@ -537,7 +539,7 @@ fn publish_with_publishers(server: &Server, transport: &FakeTransport, publisher
         let role = publisher_role();
         let file = repo.role_file(1, Map::new(), &[&key]);
         repo.set_role(&role, 1, file);
-        repo.delegations = Some(testing::delegations(&[(&role, &key)]));
+        repo.delegations = Some(tuf_repo::delegations(&[(&role, &key)]));
         repo.set_target(PublisherPolicy::TARGET, publishers);
     }
     server.publish(transport, Channel::Stable, &index(Channel::Stable, 1));
