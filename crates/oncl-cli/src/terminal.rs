@@ -4,6 +4,8 @@ use oncl_pki::resource::ProcessingError;
 use std::io::{self, Read};
 use zeroize::{Zeroize, Zeroizing};
 const MAX: usize = 4096;
+/// How often a secret read that waits for a key re-checks cancellation and the deadline.
+const POLL_MS: u32 = 100;
 
 pub fn finish(bytes: &[u8]) -> Result<Zeroizing<String>, OperationError> {
     let text = std::str::from_utf8(bytes).map_err(|_| OperationError::SecretRequired)?;
@@ -52,8 +54,8 @@ pub fn read_bounded(
         ctx.resources().checkpoint()?;
         let count = match read {
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-            // Ctrl-C/Ctrl-Break aborts a console read before the handler thread
-            // is guaranteed to have latched the control; the abort itself is the
+            // Ctrl-Break aborts a console read before the handler thread is
+            // guaranteed to have latched the control; the abort itself is the
             // cancellation, not an I/O failure.
             Err(error) if is_console_abort(&error) => return Err(ProcessingError::Cancelled.into()),
             result => result.map_err(ProcessingError::from)?,
@@ -72,7 +74,9 @@ pub fn read_bounded(
         };
         match character {
             '\n' | '\r' => return finish(&password[..len]),
-            '\x03' => return Err(ProcessingError::Cancelled.into()),
+            // The secret is read without signal processing: Ctrl-C and Ctrl-\ arrive here
+            // in order with the typed keys instead of as a signal that can race the read.
+            '\x03' | '\x1c' => return Err(ProcessingError::Cancelled.into()),
             '\x04' => return Err(OperationError::SecretRequired),
             '\x08' | '\x7f' => pop(&mut password, &mut len),
             '\x15' => {
@@ -138,9 +142,19 @@ pub fn read(ctx: &mut OperationContext) -> Result<Zeroizing<String>, OperationEr
 mod platform {
     use super::*;
     use std::{fs::File, os::windows::io::AsRawHandle};
-    use windows_sys::Win32::System::Console::{
-        ENABLE_ECHO_INPUT, GetConsoleMode, ReadConsoleW, SetConsoleMode,
+    use windows_sys::Win32::{
+        Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        System::{
+            Console::{
+                ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, GetConsoleMode,
+                INPUT_RECORD, KEY_EVENT, PeekConsoleInputW, ReadConsoleInputW, ReadConsoleW,
+                SetConsoleMode,
+            },
+            Threading::WaitForSingleObject,
+        },
     };
+    /// `VK_MENU` (Alt); a local constant saves the keyboard feature of `windows-sys`.
+    const VK_MENU: u16 = 0x12;
     pub struct Terminal {
         file: File,
         scope: oncl_pki::resource::ResourceScope,
@@ -168,15 +182,62 @@ mod platform {
                 end: 0,
             };
             // SAFETY: affect only this console input handle, preserving all other bits.
-            if unsafe { SetConsoleMode(terminal.file.as_raw_handle(), mode & !ENABLE_ECHO_INPUT) }
-                == 0
+            // Raw and unprocessed: no echo, `read_bounded` edits the line, and Ctrl-C is
+            // queued as 0x03 in order with the typed keys. Processed input would drop it
+            // and raise a control event that a read issued just after it never sees.
+            if unsafe {
+                SetConsoleMode(
+                    terminal.file.as_raw_handle(),
+                    mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT),
+                )
+            } == 0
             {
                 return Err(io::Error::last_os_error());
             }
             Ok(terminal)
         }
+        /// Waits until a record that makes `ReadConsoleW` return a character is queued,
+        /// checking cancellation and the deadline every `POLL_MS`. Records it would skip
+        /// and block on (key releases, bare modifiers, focus, mouse, resize) are discarded.
+        fn wait_for_key(&self) -> io::Result<()> {
+            let handle = self.file.as_raw_handle();
+            loop {
+                self.scope.checkpoint().map_err(io::Error::other)?;
+                // SAFETY: live owned console handle.
+                match unsafe { WaitForSingleObject(handle, POLL_MS) } {
+                    WAIT_OBJECT_0 => {}
+                    WAIT_TIMEOUT => continue,
+                    _ => return Err(io::Error::last_os_error()),
+                }
+                // SAFETY: an all-zero INPUT_RECORD is valid plain data.
+                let mut record: INPUT_RECORD = unsafe { std::mem::zeroed() };
+                let mut count = 0;
+                // SAFETY: one record slot, exact declared count, live owned console handle.
+                let peeked = unsafe { PeekConsoleInputW(handle, &mut record, 1, &mut count) } != 0;
+                let character = count == 1 && u32::from(record.EventType) == KEY_EVENT && {
+                    // SAFETY: a key record holds the key variant of the plain-data union.
+                    let key = unsafe { &record.Event.KeyEvent };
+                    // SAFETY: both union variants are a plain u16.
+                    let unit = unsafe { key.uChar.UnicodeChar };
+                    // A released Alt completes an Alt+numpad character.
+                    unit != 0 && (key.bKeyDown != 0 || key.wVirtualKeyCode == VK_MENU)
+                };
+                let discarded = peeked && count == 1 && !character && {
+                    // SAFETY: as above; removes exactly the peeked record.
+                    unsafe { ReadConsoleInputW(handle, &mut record, 1, &mut count) != 0 }
+                };
+                // SAFETY: the record may hold a typed character; clear it in place.
+                unsafe { std::ptr::write_volatile(&mut record, std::mem::zeroed()) };
+                if !peeked || (count == 1 && !character && !discarded) {
+                    return Err(io::Error::last_os_error());
+                }
+                if character {
+                    return Ok(());
+                }
+            }
+        }
         fn unit(&self) -> io::Result<u16> {
-            self.scope.checkpoint().map_err(io::Error::other)?;
+            self.wait_for_key()?;
             let mut unit = Zeroizing::new([0u16; 1]);
             let mut count = 0;
             // SAFETY: one UTF-16 slot, exact declared count, live owned console handle.
@@ -194,9 +255,9 @@ mod platform {
                 return Err(io::Error::last_os_error());
             }
             if count != 1 {
-                // Ctrl-C/Ctrl-Break with processed input completes the read with
-                // zero units (observed on a ConPTY): report it as the console
-                // abort it is, never as a terminal I/O failure.
+                // Ctrl-Break completes the read with zero units (observed on a
+                // ConPTY): report it as the console abort it is, never as a
+                // terminal I/O failure.
                 return Err(io::Error::from_raw_os_error(995));
             }
             Ok(unit[0])
@@ -257,11 +318,12 @@ mod platform {
     use std::{fs::File, os::fd::AsRawFd};
     pub struct Terminal {
         file: File,
+        scope: oncl_pki::resource::ResourceScope,
         original: libc::termios,
         restored: bool,
     }
     impl Terminal {
-        pub fn open(_scope: &oncl_pki::resource::ResourceScope) -> io::Result<Self> {
+        pub fn open(scope: &oncl_pki::resource::ResourceScope) -> io::Result<Self> {
             let file = File::options().read(true).write(true).open("/dev/tty")?;
             // SAFETY: zero is valid storage; tcgetattr initializes the complete structure.
             let mut original: libc::termios = unsafe { std::mem::zeroed() };
@@ -270,11 +332,17 @@ mod platform {
             }
             let terminal = Self {
                 file,
+                scope: scope.shared_view(),
                 original,
                 restored: false,
             };
             let mut mode = terminal.original;
-            mode.c_lflag &= !libc::ECHO;
+            // Noncanonical, no signals: `read_bounded` edits the line, and Ctrl-C/Ctrl-\
+            // arrive as 0x03/0x1c in order with the typed keys instead of a SIGINT that
+            // can land between the cancellation check and read(2).
+            mode.c_lflag &= !(libc::ECHO | libc::ICANON | libc::ISIG | libc::IEXTEN);
+            mode.c_cc[libc::VMIN] = 1;
+            mode.c_cc[libc::VTIME] = 0;
             // SAFETY: valid original-derived termios and live explicit terminal descriptor.
             if unsafe { libc::tcsetattr(terminal.file.as_raw_fd(), libc::TCSANOW, &mode) } != 0 {
                 return Err(io::Error::last_os_error());
@@ -295,8 +363,28 @@ mod platform {
         }
     }
     impl Read for Terminal {
+        /// Waits for input in `POLL_MS` slices so cancellation and the deadline are
+        /// checked while the user has not typed anything.
         fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
-            self.file.read(output)
+            loop {
+                self.scope.checkpoint().map_err(io::Error::other)?;
+                let mut ready = libc::pollfd {
+                    fd: self.file.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one valid pollfd for a live owned descriptor.
+                match unsafe { libc::poll(&mut ready, 1, POLL_MS as libc::c_int) } {
+                    0 => continue,
+                    n if n < 0 => {
+                        let error = io::Error::last_os_error();
+                        if error.kind() != io::ErrorKind::Interrupted {
+                            return Err(error);
+                        }
+                    }
+                    _ => return self.file.read(output),
+                }
+            }
         }
     }
     impl Drop for Terminal {
@@ -359,11 +447,13 @@ mod tests {
             let secret = read_bounded(&mut input.as_bytes(), &mut context()).unwrap();
             assert_eq!(secret.as_str(), want);
         }
-        assert_eq!(
-            read_bounded(&mut b"\x03".as_slice(), &mut context())
-                .unwrap_err()
-                .code(),
-            oncl_core::ErrorCode::Cancelled
-        );
+        for cancel in [b"typed\x03".as_slice(), b"typed\x1c"] {
+            assert_eq!(
+                read_bounded(&mut &*cancel, &mut context())
+                    .unwrap_err()
+                    .code(),
+                oncl_core::ErrorCode::Cancelled
+            );
+        }
     }
 }
