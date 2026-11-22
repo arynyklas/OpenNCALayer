@@ -1,13 +1,18 @@
 //! `--secret-interactive` on a real Unix terminal: the actual `oncl` process runs with a
 //! pseudo-terminal as its controlling terminal. Keystrokes are written to the master side;
 //! the terminal mode is read from the slave side before and after.
+//!
+//! A shell, not `oncl`, leads the terminal's session and outlives `oncl`: on macOS the
+//! kernel revokes a controlling terminal when its session leader exits (XNU
+//! `bsd/kern/kern_exit.c`, `VNOP_REVOKE(ttyvp, REVOKEALL, …)` for `SESS_LEADER`), which
+//! would invalidate this test's own slave descriptor before the mode could be read back.
 use crate::support::*;
 use std::{
     fs::File,
     io::{Read, Write},
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
-        unix::process::{CommandExt, ExitStatusExt},
+        unix::process::CommandExt,
     },
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -18,7 +23,11 @@ struct Pty {
     master: File,
     slave: OwnedFd,
     screen: Arc<Mutex<Vec<u8>>>,
+    /// The session leader: a shell that runs `oncl`, reports its pid and exit code, and
+    /// then waits to be killed.
     child: Child,
+    /// `oncl`'s pid, as the shell reported it.
+    pid: libc::pid_t,
     /// The terminal mode before `oncl` started.
     before: (
         libc::tcflag_t,
@@ -39,15 +48,18 @@ fn mode(
     // SAFETY: zero is valid storage; tcgetattr initializes the complete structure.
     let mut mode: libc::termios = unsafe { std::mem::zeroed() };
     // SAFETY: live descriptor, valid out-pointer.
-    assert_eq!(unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut mode) }, 0);
+    let got = unsafe { libc::tcgetattr(fd.as_raw_fd(), &mut mode) };
+    assert_eq!(got, 0, "tcgetattr: {}", std::io::Error::last_os_error());
     (mode.c_iflag, mode.c_oflag, mode.c_lflag, mode.c_cc.to_vec())
 }
 impl Pty {
-    /// Starts `oncl` with `args` in a new session whose controlling terminal is a fresh pty.
+    /// Starts `oncl` with `args` under a shell that leads a new session whose controlling
+    /// terminal is a fresh pty. `job_control` runs `oncl` as a background job in its own
+    /// process group; otherwise it is in the terminal's foreground group.
     fn start(args: &[String]) -> Pty {
-        Self::start_program(env!("CARGO_BIN_EXE_oncl"), args)
+        Self::start_with(args, false)
     }
-    fn start_program(program: &str, args: &[String]) -> Pty {
+    fn start_with(args: &[String], job_control: bool) -> Pty {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: valid out-pointers; no name, default mode and size.
         let opened = unsafe {
@@ -64,8 +76,17 @@ impl Pty {
         let (master, slave) = unsafe { (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
         let before = mode(&slave);
         let stdio = || Stdio::from(slave.try_clone().unwrap());
-        let mut command = Command::new(program);
+        // Without job control an asynchronous command's stdin would be /dev/null; `oncl`
+        // reads the secret only when its stdin is the terminal, so pass the shell's along.
+        let script = format!(
+            "{}exec 3<&0; \"$0\" \"$@\" <&3 3<&- & echo PID=$!; wait $!; echo EXIT=$?; exec sleep 1000",
+            if job_control { "set -m; " } else { "" }
+        );
+        let mut command = Command::new("sh");
         command
+            .arg("-c")
+            .arg(script)
+            .arg(env!("CARGO_BIN_EXE_oncl"))
             .args(args)
             .stdin(stdio())
             .stdout(stdio())
@@ -89,12 +110,27 @@ impl Pty {
                 shown.lock().unwrap().extend_from_slice(&chunk[..n]);
             }
         });
-        Pty {
+        let mut pty = Pty {
             master,
             slave,
             screen,
             child,
+            pid: 0,
             before,
+        };
+        pty.pid = pty.field("PID=").parse().unwrap();
+        pty
+    }
+    /// The digits after `key` once the shell has printed them.
+    fn field(&self, key: &str) -> String {
+        self.wait_for(key);
+        loop {
+            let screen = self.screen();
+            let rest = &screen[screen.find(key).unwrap() + key.len()..];
+            if let Some(end) = rest.find(|c: char| !c.is_ascii_digit()) {
+                return rest[..end].to_string();
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
     fn screen(&self) -> String {
@@ -114,22 +150,23 @@ impl Pty {
             std::thread::sleep(Duration::from_millis(20));
         }
     }
-    /// The exit code within `seconds`; a hung child is killed and fails the test.
+    /// `oncl`'s exit code within `seconds`; a hung `oncl` is killed and fails the test.
     fn finish(&mut self, seconds: u64) -> i32 {
         let start = Instant::now();
-        loop {
-            if let Some(status) = self.child.try_wait().unwrap() {
-                return status
-                    .code()
-                    .unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
-            }
+        while !self.screen().contains("EXIT=") {
             if start.elapsed() > Duration::from_secs(seconds) {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                panic!("child did not exit; screen: {:?}", self.screen());
+                // SAFETY: signals only the owned `oncl` process.
+                unsafe { libc::kill(self.pid, libc::SIGKILL) };
+                panic!("oncl did not exit; screen: {:?}", self.screen());
             }
+            assert!(
+                self.child.try_wait().unwrap().is_none(),
+                "the session leader exited; screen: {:?}",
+                self.screen()
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
+        self.field("EXIT=").parse().unwrap()
     }
     /// Whatever input the terminal still holds for the next reader.
     fn unread_input(&self) -> Vec<u8> {
@@ -152,6 +189,17 @@ impl Pty {
             }
             left.extend_from_slice(&chunk[..n as usize]);
         }
+    }
+}
+impl Drop for Pty {
+    /// Ends the session: its leader and anything left in its process groups.
+    fn drop(&mut self) {
+        // SAFETY: signals only the owned session leader's group and the owned `oncl`.
+        unsafe {
+            libc::kill(self.pid, libc::SIGKILL);
+            libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
+        }
+        let _ = self.child.wait();
     }
 }
 fn inspect(w: &World, extra: &[&str]) -> Vec<String> {
@@ -218,11 +266,8 @@ fn terminating_signals_during_the_prompt_restore_the_mode() {
         let mut pty = Pty::start(&inspect(&w, &[]));
         pty.wait_for("input hidden");
         pty.type_keys(b"PARTIAL");
-        // SAFETY: signals only the owned, still running child.
-        assert_eq!(
-            unsafe { libc::kill(pty.child.id() as libc::pid_t, signal) },
-            0
-        );
+        // SAFETY: signals only the owned, still running `oncl`.
+        assert_eq!(unsafe { libc::kill(pty.pid, signal) }, 0);
         assert_eq!(pty.finish(60), 130, "signal {signal}: {:?}", pty.screen());
         assert_eq!(
             mode(&pty.slave),
@@ -249,19 +294,11 @@ fn an_idle_prompt_honours_the_deadline() {
 #[test]
 fn a_background_job_is_refused_before_touching_the_terminal() {
     let w = world();
-    // `set -m` gives the background job its own process group, not the terminal's.
-    let quoted: Vec<String> = inspect(&w, &[]).iter().map(|a| format!("'{a}'")).collect();
-    let script = format!(
-        "set -m; '{}' {} & wait $!; echo EXIT=$?",
-        env!("CARGO_BIN_EXE_oncl"),
-        quoted.join(" ")
-    );
-    let mut pty = Pty::start_program("sh", &["-c".to_string(), script]);
-    pty.wait_for("EXIT=");
-    assert_eq!(pty.finish(30), 0, "{:?}", pty.screen());
+    // Job control gives the background job its own process group, not the terminal's.
+    let mut pty = Pty::start_with(&inspect(&w, &[]), true);
+    assert_ne!(pty.finish(30), 0, "{:?}", pty.screen());
     let screen = pty.screen();
     assert!(screen.contains("TerminalNotForeground"), "{screen:?}");
-    assert!(!screen.contains("EXIT=0"), "{screen:?}");
     assert!(!screen.contains("input hidden"), "{screen:?}");
     assert_eq!(mode(&pty.slave), pty.before);
 }
