@@ -1,39 +1,35 @@
-//! A TUF repository for the tests of whoever consumes this crate (feature `testing`): the
-//! updater, the plugin catalog and their stores read their indexes through [`TufClient`], so
-//! their tests serve one of these.
+//! A TUF repository of synthetic keys for the updater's and the catalog's tests, made with
+//! `oncl_update`'s public builder ([`build`]) as the maintainer's tools make one.
 //!
-//! The keys are **synthetic**, derived from fixed seeds: they sign nothing real. A
-//! repository is made as the maintainer's tools make it ([`super::build`]), root 1 first,
-//! then one publication per [`Repo::publish`] (or [`Repo::republish`]): targets, snapshot and
-//! timestamp each with their own version and expiry, under consistent-snapshot names
-//! ([`super::layout`]). Besides the indexes the top-level targets may list other files
-//! ([`Repo::set_target`]: `publishers.json`), delegate ([`Repo::delegations`],
-//! [`delegations`]) and the snapshot list the delegated roles' files ([`Repo::set_role`]).
+//! The keys are derived from fixed seeds: they sign nothing real. Root 1 first, then one
+//! publication per [`Repo::publish`]: targets, snapshot and timestamp each with their own
+//! version and expiry, under consistent-snapshot names ([`layout`]). Besides the indexes the
+//! top-level targets may list other files ([`Repo::set_target`]: `publishers.json`), delegate
+//! ([`Repo::delegations`], [`delegations`]) and the snapshot list the delegated roles' files
+//! ([`Repo::set_role`]).
 
 use std::collections::BTreeMap;
 
+use oncl_update::Channel;
+use oncl_update::tuf::build::{self, RoleDef, RootDef};
+use oncl_update::tuf::layout;
+use oncl_update::tuf::model::{SPEC_VERSION, format_expires};
+use oncl_update::tuf::{Digest, RoleName, SigningKey, TargetPath};
 use serde_json::{Map, Value, json};
 use time::{Duration, OffsetDateTime};
 
-use super::build::{self, RoleDef, RootDef};
-use super::fetch::MemoryFetcher;
-use super::layout;
-use super::model::{Digest, SPEC_VERSION, format_expires};
-use super::{Profile, RoleName, SigningKey, TufClient};
-use crate::Channel;
-
 /// How long each role stays valid from the moment of signing, the design's values by
 /// default (`docs/design/tuf.md`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Lifetimes {
+#[derive(Clone, Copy)]
+pub(crate) struct Lifetimes {
     /// 365 days.
-    pub root: Duration,
+    pub(crate) root: Duration,
     /// 7 days.
-    pub timestamp: Duration,
+    pub(crate) timestamp: Duration,
     /// 30 days.
-    pub snapshot: Duration,
+    pub(crate) snapshot: Duration,
     /// 30 days.
-    pub targets: Duration,
+    pub(crate) targets: Duration,
 }
 
 impl Default for Lifetimes {
@@ -48,7 +44,7 @@ impl Default for Lifetimes {
 }
 
 /// A repository with root 1 of synthetic keys, and what has been published into it.
-pub struct Repo {
+pub(crate) struct Repo {
     timestamp: SigningKey,
     snapshot: SigningKey,
     targets: SigningKey,
@@ -58,29 +54,26 @@ pub struct Repo {
     top_level: BTreeMap<String, Vec<u8>>,
     /// The delegated roles' files the snapshot lists next, by role: their version and bytes.
     roles: BTreeMap<RoleName, (u64, Vec<u8>)>,
-    /// The moment of the next signature: the roles expire [`Repo::lifetimes`] after it. The
-    /// clock of the repository's creation until a test sets another.
-    pub signed_at: OffsetDateTime,
-    /// How long each role signed next stays valid.
-    pub lifetimes: Lifetimes,
     /// The version of the targets and snapshot published next.
-    pub next_version: u64,
+    next_version: u64,
     /// The version of the timestamp published next (it grows by one with each publication,
     /// as a timestamp signed later has a higher version).
-    pub next_timestamp: u64,
+    next_timestamp: u64,
+    /// The moment of the next signature: the roles expire [`Repo::lifetimes`] after it. The
+    /// clock of the repository's creation until a test sets another.
+    pub(crate) signed_at: OffsetDateTime,
+    /// How long each role signed next stays valid.
+    pub(crate) lifetimes: Lifetimes,
     /// The `delegations` member of the top-level targets published next, as it is signed
     /// (`None`: no member). Anything, also what no client can read as delegations.
-    pub delegations: Option<Value>,
+    pub(crate) delegations: Option<Value>,
 }
 
 impl Repo {
     /// A repository of the keys of `seed` (a different seed, different keys), root 1 valid
-    /// for [`Lifetimes::root`] from now. Nothing is published yet.
-    ///
-    /// # Panics
-    ///
-    /// Never for a seed up to 252: the four keys are derived from it.
-    pub fn with_seed(seed: u8) -> Repo {
+    /// for [`Lifetimes::root`] from now. Nothing is published yet. `seed` is at most 252:
+    /// the four keys are derived from it.
+    pub(crate) fn with_seed(seed: u8) -> Repo {
         let key = |n: u8| SigningKey::from_seed(&[seed + n; 32]).expect("a 32-byte seed");
         let (root, timestamp, snapshot, targets) = (key(0), key(1), key(2), key(3));
         let signed_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
@@ -108,57 +101,53 @@ impl Repo {
             files,
             top_level: BTreeMap::new(),
             roles: BTreeMap::new(),
-            signed_at,
-            lifetimes,
             next_version: 1,
             next_timestamp: 1_000_000,
+            signed_at,
+            lifetimes,
             delegations: None,
         }
     }
 
     /// [`Repo::with_seed`] 1.
-    pub fn new() -> Repo {
+    pub(crate) fn new() -> Repo {
         Repo::with_seed(1)
     }
 
     /// The trust anchor: root 1, what the client is built with.
-    pub fn anchor(&self) -> &[u8] {
+    pub(crate) fn anchor(&self) -> &[u8] {
         &self.anchor
     }
 
     /// Publishes the index `bytes` of `channel` (the others stay as they were published):
     /// signs new targets, snapshot and timestamp at [`Repo::signed_at`] and puts them and the
     /// index under their consistent-snapshot names.
-    pub fn publish(&mut self, channel: Channel, bytes: &[u8]) {
+    pub(crate) fn publish(&mut self, channel: Channel, bytes: &[u8]) {
         self.top_level.insert(channel.target_path(), bytes.to_vec());
         self.republish();
     }
 
     /// Lists `bytes` as the top-level target `path` from the next publication on.
-    pub fn set_target(&mut self, path: &str, bytes: &[u8]) {
+    pub(crate) fn set_target(&mut self, path: &str, bytes: &[u8]) {
         self.top_level.insert(path.to_owned(), bytes.to_vec());
     }
 
     /// Lists no top-level target `path` from the next publication on.
-    pub fn remove_target(&mut self, path: &str) {
+    pub(crate) fn remove_target(&mut self, path: &str) {
         self.top_level.remove(path);
     }
 
     /// Serves `file` as version `version` of the delegated role `role` from the next
     /// publication on, listed in the snapshot by its version, length and sha256 (whatever
     /// the delegations say of the role: [`Repo::delegations`]).
-    pub fn set_role(&mut self, role: &RoleName, version: u64, file: Vec<u8>) {
+    pub(crate) fn set_role(&mut self, role: &RoleName, version: u64, file: Vec<u8>) {
         self.roles.insert(role.clone(), (version, file));
     }
 
-    /// The file of version `version` of a delegated role listing `targets` (by target path:
-    /// `length`, `hashes`, `custom`), expiring [`Lifetimes::targets`] after
+    /// The file of version `version` (above 0) of a delegated role listing `targets` (by
+    /// target path: `length`, `hashes`, `custom`), expiring [`Lifetimes::targets`] after
     /// [`Repo::signed_at`], signed by `keys`.
-    ///
-    /// # Panics
-    ///
-    /// Never for a version above 0.
-    pub fn role_file(
+    pub(crate) fn role_file(
         &self,
         version: u64,
         targets: Map<String, Value>,
@@ -177,7 +166,7 @@ impl Repo {
     /// Signs new targets, snapshot and timestamp at [`Repo::signed_at`] over what is set now
     /// and puts them, the top-level targets and the roles' files under their
     /// consistent-snapshot names.
-    pub fn republish(&mut self) {
+    fn republish(&mut self) {
         let version = self.next_version;
         let timestamp_version = self.next_timestamp;
         self.next_version += 1;
@@ -237,18 +226,13 @@ impl Repo {
     }
 
     /// Every file of the repository, by its path under the base.
-    pub fn files(&self) -> &BTreeMap<String, Vec<u8>> {
+    pub(crate) fn files(&self) -> &BTreeMap<String, Vec<u8>> {
         &self.files
     }
 
     /// The file at `path`.
-    pub fn get(&self, path: &str) -> Option<&[u8]> {
+    pub(crate) fn get(&self, path: &str) -> Option<&[u8]> {
         self.files.get(path).map(Vec::as_slice)
-    }
-
-    /// Puts `bytes` at `path`, replacing the file: how a test serves a tampered or older one.
-    pub fn put(&mut self, path: &str, bytes: Vec<u8>) {
-        self.files.insert(path.to_owned(), bytes);
     }
 
     /// The path of the index file of `channel` as published last, under its hash name.
@@ -256,43 +240,18 @@ impl Repo {
     /// # Panics
     ///
     /// If nothing was published for the channel.
-    pub fn index_file_path(&self, channel: Channel) -> String {
+    pub(crate) fn index_file_path(&self, channel: Channel) -> String {
         let target = channel.target_path();
         let bytes = self.top_level.get(&target).expect("a published channel");
-        let target = super::TargetPath::parse(&target).expect("a valid path");
-        layout::target_file_path(&target, &super::Digest::of(bytes))
-    }
-
-    /// The files in a [`MemoryFetcher`].
-    pub fn fetcher(&self) -> MemoryFetcher {
-        let fetcher = MemoryFetcher::new();
-        for (path, bytes) in &self.files {
-            fetcher.put(path.clone(), bytes.clone());
-        }
-        fetcher
-    }
-
-    /// A client of `fetcher` and `store` that trusts this repository's root, in the profile
-    /// of the program ([`Profile::Delegating`]).
-    ///
-    /// # Panics
-    ///
-    /// Never: the root is made here.
-    pub fn client<F: super::Fetcher, S: super::Store>(
-        &self,
-        fetcher: F,
-        store: S,
-    ) -> TufClient<F, S> {
-        TufClient::new(&self.anchor, fetcher, store, super::Limits::default())
-            .expect("this repository's own root")
-            .with_profile(Profile::Delegating)
+        let target = TargetPath::parse(&target).expect("a valid path");
+        layout::target_file_path(&target, &Digest::of(bytes))
     }
 }
 
 /// A `delegations` member delegating to each of `roles` with its one key, threshold 1, the
 /// paths `plugins/<publisher>/*/*`, terminating: what the maintainer's tools write for a
 /// publisher.
-pub fn delegations(roles: &[(&RoleName, &SigningKey)]) -> Value {
+pub(crate) fn delegations(roles: &[(&RoleName, &SigningKey)]) -> Value {
     let keys: Map<String, Value> = roles
         .iter()
         .map(|(_, key)| (key.public().key_id().to_hex(), key.public().to_value()))
@@ -310,10 +269,4 @@ pub fn delegations(roles: &[(&RoleName, &SigningKey)]) -> Value {
         })
         .collect();
     json!({"keys": keys, "roles": roles})
-}
-
-impl Default for Repo {
-    fn default() -> Repo {
-        Repo::new()
-    }
 }
