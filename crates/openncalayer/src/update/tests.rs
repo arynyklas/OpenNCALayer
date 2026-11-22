@@ -3,12 +3,12 @@
 
 use super::*;
 use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
-use oncl_update::tuf::testing::Repo;
 use oncl_update::{Channel, CoreRelease, FlavorPackage, Index, Package, Sha256};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use time::Duration as TimeDuration;
 
+use crate::repository::tests::tuf_repo::Repo;
 use crate::repository::tests::{BASE, Server, delegations_members, timestamp_url, url};
 
 /// Something done while a request is being answered.
@@ -1109,7 +1109,7 @@ fn a_refused_index_changes_nothing_and_is_not_notified() {
 
     // A repository of other keys than the root built in.
     let hostile = Server::new();
-    *hostile.repo() = oncl_update::tuf::testing::Repo::with_seed(41);
+    *hostile.repo() = Repo::with_seed(41);
     let body = serde_json::to_vec(&Index {
         schema: 1,
         channel: Channel::Stable,

@@ -44,7 +44,6 @@ libloading.workspace = true
 
 [dev-dependencies]
 oncl-xml.workspace = true
-oncl-pki = { workspace = true, features = ["testing"] }
 oncl-testkit.workspace = true
 time = { workspace = true, features = ["macros"] }
 # Catches the APDU trace of a test.
