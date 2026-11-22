@@ -377,6 +377,46 @@ fn a_version_the_owner_revoked_is_withdrawn_even_if_the_role_dropped_it() {
 }
 
 #[test]
+fn a_revoked_version_moves_only_to_a_release_rolled_out_to_this_installation() {
+    let mut publisher = ecc_entry();
+    publisher["revoked_versions"] =
+        json!([{"id": MARKET, "version": "1.1.0", "date": "2027-02-10"}]);
+    let with = |fix_rollout: u8, older: bool| {
+        let mut fix = entry(MARKET, "1.2.0");
+        fix["rollout"] = json!(fix_rollout);
+        let mut entries = vec![entry(MARKET, "1.1.0"), fix];
+        if older {
+            entries.push(entry(MARKET, "1.0.0"));
+        }
+        build(
+            index(vec![]),
+            vec![publisher.clone()],
+            &[("ecc", Some(&role(&entries)))],
+        )
+    };
+    // The fix at rollout 0 and nothing older: off until the fix is rolled out to it.
+    let catalog = with(0, false);
+    assert_eq!(choose(&catalog, MARKET, "1.1.0"), PluginChoice::Withdrawn);
+    let ecc = ecc();
+    assert_eq!(
+        choose_recorded(&catalog, MARKET, Some(&ecc), "1.1.0"),
+        PluginChoice::Withdrawn
+    );
+    // An older version rolled out to it: back to that one.
+    let catalog = with(0, true);
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.1.0"),
+        PluginChoice::Downgrade(r) if r.version == v("1.0.0")
+    ));
+    // The fix rolled out to it: the fix.
+    let catalog = with(100, true);
+    assert!(matches!(
+        choose(&catalog, MARKET, "1.1.0"),
+        PluginChoice::Update(r) if r.version == v("1.2.0")
+    ));
+}
+
+#[test]
 fn a_revoked_publisher_hides_its_plugins_and_withdraws_them() {
     let revoked = json!({
         "name": "ecc", "state": "revoked", "display": display(),

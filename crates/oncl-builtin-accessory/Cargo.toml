@@ -9,8 +9,11 @@ repository.workspace = true
 publish.workspace = true
 
 [lib]
-# `cdylib`: the module the core embeds (wasm32); `rlib`: its texts for the core's tools.
-crate-type = ["cdylib", "rlib"]
+# `rlib` only: its texts for the core's tools. The module the core embeds (wasm32) is the
+# `cdylib` `oncl-builtins-build` asks for (`cargo rustc --crate-type cdylib`): a `cdylib` here
+# would have no hash in its host file names, and the host builds of the workspace and of
+# `cargo xtask`, with other features, would rebuild it and its dependents in turn.
+crate-type = ["rlib"]
 
 [dependencies]
 oncl-pdk.workspace = true

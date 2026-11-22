@@ -260,10 +260,13 @@ opt-level = 3
 opt-level = 3
 
 # The built-in modules' WebAssembly (`oncl-builtins-build`): small, one unit, no unwinding.
+# No LTO, as the modules have always been built: Cargo performed none while the guests were a
+# `cdylib` and an `rlib` at once, and their `cdylib`-only build (`cargo rustc --crate-type
+# cdylib`) would otherwise start doing it.
 [profile.builtin-wasm]
 inherits = "release"
 opt-level = "s"
-lto = true
+lto = false
 codegen-units = 1
 panic = "abort"
 debug = false
