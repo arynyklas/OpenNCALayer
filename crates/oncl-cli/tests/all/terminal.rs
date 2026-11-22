@@ -370,3 +370,35 @@ fn wrong_interactive_secret_and_ctrl_c_fail_closed_and_stay_silent() {
     assert_eq!(code, 130, "{screen:?}");
     assert!(!screen.contains("PARTIALSENTINEL"), "{screen:?}");
 }
+#[test]
+fn keys_a_raw_read_skips_never_hold_off_the_deadline() {
+    if !pseudoconsole_or_skip() {
+        return;
+    }
+    let w = world();
+    // Esc and Ctrl+J (a bare line feed) are keys the console stream read skips: the
+    // prompt must still give up at the deadline instead of waiting for another key.
+    for keys in [b"\x1b".as_slice(), b"\n"] {
+        let line = inspect_command(&w).replacen(" inspect ", " --timeout-seconds 3 inspect ", 1);
+        let pty = Pty::start(&line);
+        pty.wait_for("input hidden", 60);
+        pty.type_keys(keys);
+        let (code, screen) = pty.finish(30);
+        assert_eq!(code, 1, "{keys:?}: {screen:?}");
+        assert!(screen.contains("DeadlineExceeded"), "{keys:?}: {screen:?}");
+    }
+}
+#[test]
+fn an_astral_character_is_one_scalar_for_editing() {
+    if !pseudoconsole_or_skip() {
+        return;
+    }
+    let w = world();
+    let pty = Pty::start(&inspect_command(&w));
+    pty.wait_for("input hidden", 60);
+    // U+10348 arrives as a surrogate pair; one backspace removes all of it.
+    pty.type_keys(format!("\u{10348}\x7f{PASSWORD}\r").as_bytes());
+    let (code, screen) = pty.finish(60);
+    assert_eq!(code, 0, "{screen:?}");
+    assert!(screen.contains("\"entries\""), "{screen:?}");
+}
