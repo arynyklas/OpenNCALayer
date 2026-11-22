@@ -135,11 +135,12 @@ mod platform {
     use std::{fs::File, os::windows::io::AsRawHandle};
     use windows_sys::Win32::{
         Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        Globalization::MultiByteToWideChar,
         System::{
             Console::{
-                ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
-                ENABLE_VIRTUAL_TERMINAL_INPUT, FlushConsoleInputBuffer, GetConsoleMode,
-                INPUT_RECORD, KEY_EVENT, ReadConsoleInputW, SetConsoleMode,
+                ALTNUMPAD_BIT, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT,
+                ENABLE_VIRTUAL_TERMINAL_INPUT, FlushConsoleInputBuffer, GetConsoleCP,
+                GetConsoleMode, INPUT_RECORD, KEY_EVENT, ReadConsoleInputW, SetConsoleMode,
             },
             Threading::WaitForSingleObject,
         },
@@ -178,9 +179,20 @@ mod platform {
         if key.bKeyDown != 0 {
             // A stream read skips Esc and a bare line feed (Ctrl+J).
             (key.wVirtualKeyCode != VK_ESCAPE && unit != 0x0a).then_some((unit, repeats))
+        } else if key.wVirtualKeyCode != VK_MENU {
+            None
+        } else if key.dwControlKeyState & ALTNUMPAD_BIT != 0 {
+            // A released Alt completes an Alt+numpad character, which arrives as a byte of
+            // the console input code page: convert it as conhost's stream read does.
+            let byte = [unit as u8];
+            let mut wide = [0u16; 1];
+            // SAFETY: one input byte and one output unit, both with their exact lengths.
+            let converted = unsafe {
+                MultiByteToWideChar(GetConsoleCP(), 0, byte.as_ptr(), 1, wide.as_mut_ptr(), 1)
+            };
+            (converted == 1 && wide[0] != 0).then_some((wide[0], 1))
         } else {
-            // A released Alt completes an Alt+numpad character.
-            (key.wVirtualKeyCode == VK_MENU).then_some((unit, 1))
+            Some((unit, 1))
         }
     }
     impl Terminal {
@@ -430,6 +442,17 @@ mod platform {
             Err(error)
         }
     }
+    /// Cleared for the secret read (as cfmakeraw, output processing kept for the prompt).
+    const LFLAGS: libc::tcflag_t =
+        libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN;
+    const IFLAGS: libc::tcflag_t = libc::IXON
+        | libc::BRKINT
+        | libc::ISTRIP
+        | libc::INLCR
+        | libc::IGNCR
+        | libc::ICRNL
+        | libc::PARMRK
+        | libc::IGNBRK;
     pub struct Terminal {
         file: File,
         scope: oncl_pki::resource::ResourceScope,
@@ -442,6 +465,16 @@ mod platform {
         pub fn open(scope: &oncl_pki::resource::ResourceScope) -> io::Result<Self> {
             let file = File::options().read(true).write(true).open("/dev/tty")?;
             let fd = file.as_raw_fd();
+            // A background job must not change (or read) the terminal its foreground uses.
+            // SAFETY: plain queries on a live descriptor and on this process.
+            if unsafe { libc::tcgetpgrp(fd) != libc::getpgrp() } {
+                crate::diagnostic(format_args!(
+                    "oncl: TerminalNotForeground; run the command in the foreground to enter the secret"
+                ));
+                return Err(io::Error::other(
+                    "not the terminal's foreground process group",
+                ));
+            }
             // SAFETY: zero is valid storage; tcgetattr initializes the complete structure.
             let mut original: libc::termios = unsafe { std::mem::zeroed() };
             if unsafe { libc::tcgetattr(fd, &mut original) } != 0 {
@@ -460,15 +493,8 @@ mod platform {
             // cfmakeraw, output processing kept for the prompt): `read_bounded` edits the
             // line, and Ctrl-C/Ctrl-\ arrive as 0x03/0x1c in order with the typed keys
             // instead of a SIGINT that can land between the cancellation check and read(2).
-            mode.c_lflag &= !(libc::ECHO | libc::ECHONL | libc::ICANON | libc::ISIG | libc::IEXTEN);
-            mode.c_iflag &= !(libc::IXON
-                | libc::BRKINT
-                | libc::ISTRIP
-                | libc::INLCR
-                | libc::IGNCR
-                | libc::ICRNL
-                | libc::PARMRK
-                | libc::IGNBRK);
+            mode.c_lflag &= !LFLAGS;
+            mode.c_iflag &= !IFLAGS;
             mode.c_cc[libc::VMIN] = 1;
             mode.c_cc[libc::VTIME] = 0;
             // SAFETY: valid original-derived termios and live explicit terminal descriptor.
@@ -482,8 +508,9 @@ mod platform {
             if unsafe { libc::tcgetattr(fd, &mut applied) } != 0 {
                 return Err(io::Error::last_os_error());
             }
-            if applied.c_lflag != mode.c_lflag
-                || applied.c_iflag != mode.c_iflag
+            // Only the cleared bits are checked: a pty may normalize the others.
+            if applied.c_lflag & LFLAGS != 0
+                || applied.c_iflag & IFLAGS != 0
                 || applied.c_cc[libc::VMIN] != 1
                 || applied.c_cc[libc::VTIME] != 0
             {

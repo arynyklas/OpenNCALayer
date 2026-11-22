@@ -45,6 +45,9 @@ fn mode(
 impl Pty {
     /// Starts `oncl` with `args` in a new session whose controlling terminal is a fresh pty.
     fn start(args: &[String]) -> Pty {
+        Self::start_program(env!("CARGO_BIN_EXE_oncl"), args)
+    }
+    fn start_program(program: &str, args: &[String]) -> Pty {
         let (mut master, mut slave) = (0, 0);
         // SAFETY: valid out-pointers; no name, default mode and size.
         let opened = unsafe {
@@ -61,7 +64,7 @@ impl Pty {
         let (master, slave) = unsafe { (File::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) };
         let before = mode(&slave);
         let stdio = || Stdio::from(slave.try_clone().unwrap());
-        let mut command = Command::new(env!("CARGO_BIN_EXE_oncl"));
+        let mut command = Command::new(program);
         command
             .args(args)
             .stdin(stdio())
@@ -241,5 +244,24 @@ fn an_idle_prompt_honours_the_deadline() {
         "{:?}",
         pty.screen()
     );
+    assert_eq!(mode(&pty.slave), pty.before);
+}
+#[test]
+fn a_background_job_is_refused_before_touching_the_terminal() {
+    let w = world();
+    // `set -m` gives the background job its own process group, not the terminal's.
+    let quoted: Vec<String> = inspect(&w, &[]).iter().map(|a| format!("'{a}'")).collect();
+    let script = format!(
+        "set -m; '{}' {} & wait $!; echo EXIT=$?",
+        env!("CARGO_BIN_EXE_oncl"),
+        quoted.join(" ")
+    );
+    let mut pty = Pty::start_program("sh", &["-c".to_string(), script]);
+    pty.wait_for("EXIT=");
+    assert_eq!(pty.finish(30), 0, "{:?}", pty.screen());
+    let screen = pty.screen();
+    assert!(screen.contains("TerminalNotForeground"), "{screen:?}");
+    assert!(!screen.contains("EXIT=0"), "{screen:?}");
+    assert!(!screen.contains("input hidden"), "{screen:?}");
     assert_eq!(mode(&pty.slave), pty.before);
 }
