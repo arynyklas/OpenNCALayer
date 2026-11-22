@@ -39,8 +39,6 @@ pub mod layout;
 pub mod model;
 pub mod names;
 pub mod store;
-#[cfg(any(test, feature = "testing"))]
-pub mod testing;
 
 pub use client::{Delegated, Limits, Trusted, TufClient, VerifiedRole};
 pub use delegation::{DelegatedRole, Delegations, RefusedRole};

@@ -68,8 +68,6 @@ oncl-flows = { path = "../oncl-flows", features = ["testing"] }
 # `testing`: `tsp::MockTsa`, `RouteTransport`.
 oncl-pki = { path = "../oncl-pki", features = ["testing"] }
 oncl-testkit.workspace = true
-# `testing`: the TUF repository the catalog's store tests are served by.
-oncl-update = { workspace = true, features = ["testing"] }
 # `emulator`: software tokens for the `keys` capability's token tests.
 oncl-token = { path = "../oncl-token", features = ["emulator"] }
 tempfile.workspace = true

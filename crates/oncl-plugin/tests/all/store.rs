@@ -3,10 +3,11 @@
 
 use oncl_plugin::{Package, Source, Store, StoreError};
 use oncl_testkit::plugin::{example_package, example_package_with};
-use oncl_update::tuf::testing::Repo;
-use oncl_update::tuf::{FileStore, MemoryFetcher, TufClient};
+use oncl_update::tuf::{FileStore, Limits, MemoryFetcher, Profile, TufClient};
 use oncl_update::{Channel, Index, Version};
 use time::{Duration, OffsetDateTime};
+
+use repo::Repo;
 
 const ID: &str = "io.github.arynyklas.openncalayer.example";
 
@@ -172,9 +173,16 @@ fn index(seq: u64, generated: OffsetDateTime) -> Vec<u8> {
 type Client = TufClient<MemoryFetcher, FileStore>;
 
 /// A client of `repo` with the TUF state in `tuf_dir` (the one a refresh and the store's
-/// checks share).
+/// checks share), in the profile of the program.
 fn client(repo: &Repo, tuf_dir: &std::path::Path) -> Client {
-    repo.client(repo.fetcher(), FileStore::in_data_dir(tuf_dir))
+    TufClient::new(
+        repo.anchor(),
+        repo.fetcher(),
+        FileStore::in_data_dir(tuf_dir),
+        Limits::default(),
+    )
+    .unwrap()
+    .with_profile(Profile::Delegating)
 }
 
 /// The beta index as the TUF client downloads it from `repo`.
@@ -279,7 +287,7 @@ fn a_kept_index_that_no_longer_matches_the_verified_targets_is_not_used() {
         repo.anchor(),
         repo.fetcher(),
         FileStore::in_data_dir(tuf.path()),
-        oncl_update::tuf::Limits::default(),
+        Limits::default(),
     )
     .unwrap();
     let fresh = downloaded(&mut newer, now);
@@ -723,4 +731,111 @@ fn prune_roles_removes_only_undelegated() {
     // `publishers.json` is not a role's file.
     assert!(dir.path().join("plugins/catalog/publishers.json").is_file());
     assert!(roles.join("pub-gone.json.123-4.tmp").is_file());
+}
+
+/// A TUF repository of synthetic keys serving the indexes, made with `oncl_update`'s public
+/// builder as the maintainer's tools make one: root 1, then targets, snapshot and timestamp
+/// per [`Repo::publish`], under consistent-snapshot names.
+mod repo {
+    use std::collections::BTreeMap;
+
+    use oncl_update::Channel;
+    use oncl_update::tuf::build::{self, RoleDef, RootDef};
+    use oncl_update::tuf::{MemoryFetcher, SigningKey, layout};
+    use time::{Duration, OffsetDateTime};
+
+    /// Root 1 of synthetic keys and what has been published into it.
+    pub(super) struct Repo {
+        timestamp: SigningKey,
+        snapshot: SigningKey,
+        targets: SigningKey,
+        anchor: Vec<u8>,
+        files: BTreeMap<String, Vec<u8>>,
+        /// The indexes published so far, by target path.
+        top_level: BTreeMap<String, Vec<u8>>,
+        /// The version of the targets and snapshot published next.
+        next_version: u64,
+        /// The moment of every signature: the targets expire 30 days after it.
+        pub(super) signed_at: OffsetDateTime,
+    }
+
+    impl Repo {
+        /// Root 1, valid for a year from now; nothing published yet.
+        pub(super) fn new() -> Repo {
+            let key = |n: u8| SigningKey::from_seed(&[1 + n; 32]).expect("a 32-byte seed");
+            let (root, timestamp, snapshot, targets) = (key(0), key(1), key(2), key(3));
+            let signed_at = OffsetDateTime::now_utc().replace_nanosecond(0).unwrap();
+            let role = |key: &SigningKey| RoleDef {
+                keys: vec![key.public()],
+                threshold: 1,
+            };
+            let def = RootDef {
+                root: role(&root),
+                timestamp: role(&timestamp),
+                snapshot: role(&snapshot),
+                targets: role(&targets),
+            };
+            let signed = build::root(1, signed_at + Duration::days(365), &def).expect("a root");
+            let anchor = build::sign(&signed, &[&root]).expect("a root file");
+            let files = BTreeMap::from([(layout::root_path(1), anchor.clone())]);
+            Repo {
+                timestamp,
+                snapshot,
+                targets,
+                anchor,
+                files,
+                top_level: BTreeMap::new(),
+                next_version: 1,
+                signed_at,
+            }
+        }
+
+        /// The trust anchor: root 1, what the client is built with.
+        pub(super) fn anchor(&self) -> &[u8] {
+            &self.anchor
+        }
+
+        /// Publishes the index `bytes` of `channel`: signs new targets (30 days), snapshot
+        /// (30 days) and timestamp (7 days) at [`Repo::signed_at`] and puts them and the index
+        /// under their consistent-snapshot names.
+        pub(super) fn publish(&mut self, channel: Channel, bytes: &[u8]) {
+            self.top_level.insert(channel.target_path(), bytes.to_vec());
+            let version = self.next_version;
+            self.next_version += 1;
+            let at = self.signed_at;
+            let listed: Vec<(&str, &[u8])> = self
+                .top_level
+                .iter()
+                .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+                .collect();
+            let targets_signed = build::targets(version, at + Duration::days(30), &listed)
+                .expect("targets of valid paths");
+            let targets = build::sign(&targets_signed, &[&self.targets]).expect("a targets file");
+            let snapshot_signed =
+                build::snapshot(version, at + Duration::days(30), version, &targets)
+                    .expect("a snapshot");
+            let snapshot =
+                build::sign(&snapshot_signed, &[&self.snapshot]).expect("a snapshot file");
+            let timestamp_signed =
+                build::timestamp(version, at + Duration::days(7), version, &snapshot)
+                    .expect("a timestamp");
+            let timestamp =
+                build::sign(&timestamp_signed, &[&self.timestamp]).expect("a timestamp file");
+            self.files
+                .extend(build::target_files(&listed).expect("target files"));
+            self.files.insert(layout::targets_path(version), targets);
+            self.files.insert(layout::snapshot_path(version), snapshot);
+            self.files
+                .insert(layout::TIMESTAMP_PATH.to_owned(), timestamp);
+        }
+
+        /// The files in a [`MemoryFetcher`].
+        pub(super) fn fetcher(&self) -> MemoryFetcher {
+            let fetcher = MemoryFetcher::new();
+            for (path, bytes) in &self.files {
+                fetcher.put(path.clone(), bytes.clone());
+            }
+            fetcher
+        }
+    }
 }

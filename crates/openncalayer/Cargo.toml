@@ -79,9 +79,6 @@ oncl-pki = { path = "../oncl-pki", features = ["testing"] }
 # A `log` record must reach the log file through the `tracing-log` bridge.
 log.workspace = true
 oncl-testkit.workspace = true
-# `testing`: the TUF repository of synthetic keys the updater's and the catalog's tests read
-# their indexes from.
-oncl-update = { workspace = true, features = ["testing"] }
 # A fake mkcert CA in the renewal tests.
 rcgen.workspace = true
 sha2.workspace = true
