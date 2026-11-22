@@ -29,8 +29,6 @@ zeroize.workspace = true
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 
 [dev-dependencies]
-# `testing`: `tsp::MockTsa`, `ocsp::MockOcsp`, `testing::issue_cert`.
-oncl-pki = { path = "../oncl-pki", features = ["testing"] }
 oncl-testkit.workspace = true
 # `emulator`: software tokens in the storage dialog's tests.
 oncl-token = { path = "../oncl-token", features = ["emulator"] }
