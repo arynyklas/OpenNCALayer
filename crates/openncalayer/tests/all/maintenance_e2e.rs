@@ -17,7 +17,6 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use oncl_ipc::maintenance::{self, Client, Reply};
 use oncl_ipc::{IpcStream, connect, endpoint, read_frame, write_frame};
-use oncl_registry::TestKey;
 use oncl_testkit::synthetic;
 use oncl_winget_setup::Exit;
 use oncl_winget_setup::payload::{self, Arch};
@@ -36,6 +35,35 @@ fn harness() -> PathBuf {
         .join("oncl-winget-harness.exe");
     assert!(path.is_file(), "{IGNORE}: {}", path.display());
     path
+}
+
+/// A key `HKCU\Software\OpenNCALayer-test-<pid>-<n>-<time>` (nothing is created until a value
+/// is written), deleted with its subkeys when dropped, also when the test fails.
+struct TestKey(String);
+
+impl TestKey {
+    fn new() -> TestKey {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        TestKey(format!(
+            r"Software\OpenNCALayer-test-{:x}-{}-{nanos:x}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn path(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for TestKey {
+    fn drop(&mut self) {
+        let _ = oncl_winreg::delete_tree(&self.0);
+    }
 }
 
 struct Fixture {

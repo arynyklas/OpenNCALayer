@@ -17,13 +17,14 @@ Docs are in Russian and written for simple readers. Code, comments, commit messa
 | `oncl-pki`, `oncl-gost`, `oncl-xml`, `oncl-pdf` | Certificates, CMS/CAdES, GOST crypto, XML and PDF signing |
 | `oncl-token` | Hardware tokens (experimental) |
 | `oncl-tls`, `oncl-trust` | Local TLS certificate and trust roots |
-| `oncl-plugin`, `oncl-pdk`, `oncl-registry` | Plugin host (wasm), plugin SDK, plugin registry data |
+| `oncl-plugin`, `oncl-pdk` | Plugin host (wasm), plugin SDK |
 | `oncl-flows`, `oncl-ui` | Signing windows and flows (Slint) |
 | `oncl-update` | Update index and TUF client |
 | `oncl-api`, `oncl-server`, `oncl-cli` | Library API, HTTP service, `oncl` command |
 | `oncl-desktop`, `openncalayer`, `oncl-nmhost` | Desktop app, the main binary, browser native-messaging host |
 | `oncl-builtin-*`, `oncl-builtins-build` | Built-in modules (wasm guests) and their build |
 | `oncl-winget-setup`, `oncl-win7shim-*` | WinGet installer entry, Windows 7 shims |
+| `oncl-winreg` | Win32 registry calls of the Windows programs (autostart, native-messaging keys, installer entry); not in the SDK |
 | `oncl-testkit`, `oncl-builtin-tests`, `oncl-port-tests` | Test support and test suites |
 | `xtask` | Every automation: `cargo xtask <command>` |
 

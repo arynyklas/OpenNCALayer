@@ -1908,7 +1908,7 @@ fn a_revoked_version_is_off_until_its_replacement_installs_on_the_same_snapshot(
     service.scheduled_check();
     assert_eq!(
         sandbox.notices(),
-        [PluginNotice::Withdrawn { name: name() }]
+        [PluginNotice::WithdrawnUntilReplaced { name: name() }]
     );
     assert!(sandbox.modules.names().is_empty());
     assert_eq!(sandbox.installed_version(), Some(v("0.1.0")));
@@ -2048,7 +2048,7 @@ fn a_revoked_version_stays_off_when_its_replacement_cannot_be_recorded() {
     service.scheduled_check();
     assert_eq!(
         sandbox.notices(),
-        [PluginNotice::Withdrawn { name: name() }]
+        [PluginNotice::WithdrawnUntilReplaced { name: name() }]
     );
     // 0.2.0 loads, but its package file cannot be written: nothing runs.
     sandbox
@@ -2095,7 +2095,7 @@ fn a_revoked_version_is_off_while_its_replacement_waits_for_the_user() {
     service.check_now();
     assert_eq!(
         sandbox.notices(),
-        [PluginNotice::Withdrawn { name: name() }]
+        [PluginNotice::WithdrawnUntilReplaced { name: name() }]
     );
     assert!(sandbox.modules.names().is_empty());
     assert_eq!(pending_sha(&service), sha, "the update still waits");

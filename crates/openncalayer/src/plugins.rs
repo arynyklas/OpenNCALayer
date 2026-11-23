@@ -217,6 +217,10 @@ pub enum PluginNotice {
     Updated { name: Localized, version: Version },
     /// A plugin's version is revoked with nothing to move to: it is off.
     Withdrawn { name: Localized },
+    /// A plugin's version is revoked and the version to move to (rolled out to this
+    /// install) is not installed in this check (download or check failed, or it waits for
+    /// the user): it is off until a later check installs it.
+    WithdrawnUntilReplaced { name: Localized },
     /// The publisher of a plugin is revoked in the catalog: the plugin is off.
     PublisherRevoked {
         name: Localized,
@@ -493,6 +497,16 @@ enum Download {
     Unreachable(String),
     /// It is not what the index says: the version is marked bad.
     Bad(String),
+}
+
+/// Why [`PluginService::withdraw`] turns a plugin off, which decides what the user is told.
+enum Withdrawal {
+    /// Its version is revoked with nothing to move to.
+    Revoked,
+    /// Its version is revoked; the version to move to is not installed in this check.
+    UntilReplaced,
+    /// Its publisher (the display name) is revoked.
+    Publisher(Localized),
 }
 
 impl PluginService {
@@ -1301,7 +1315,7 @@ impl PluginService {
                             // A revoked version stays off until the one to move to is
                             // installed; one no longer revoked runs on meanwhile.
                             let off = if revoked {
-                                self.withdraw(id, snapshot, None)
+                                self.withdraw(id, snapshot, Withdrawal::UntilReplaced)
                             } else {
                                 self.unwithdraw(catalog, id, snapshot)
                             };
@@ -1312,15 +1326,15 @@ impl PluginService {
                 // Revocations only: off a revoked version, never onto another one.
                 PluginChoice::Update(_) | PluginChoice::Downgrade(_) => {
                     if revoked {
-                        self.withdraw(id, snapshot, None)
+                        self.withdraw(id, snapshot, Withdrawal::Revoked)
                     } else {
                         self.unwithdraw(catalog, id, snapshot)
                     }
                 }
-                PluginChoice::Withdrawn => self.withdraw(id, snapshot, None),
+                PluginChoice::Withdrawn => self.withdraw(id, snapshot, Withdrawal::Revoked),
                 PluginChoice::PublisherRevoked(publisher) => {
                     let display = publisher_display(catalog, publisher);
-                    self.withdraw(id, snapshot, Some(display))
+                    self.withdraw(id, snapshot, Withdrawal::Publisher(display))
                 }
                 // A choice this core does not know leaves the plugin as it is, but is logged:
                 // a newer library may mean a withdrawal by it.
@@ -1689,9 +1703,9 @@ impl PluginService {
     }
 
     /// Turns the installed `id` (`snapshot`) off: its version is revoked, or its publisher
-    /// (`publisher`, its display name) is. Told once: a plugin withdrawn already is left as
-    /// it is. Whether it settled (not changed meanwhile, recorded).
-    fn withdraw(&self, id: &str, snapshot: &Installed, publisher: Option<Localized>) -> bool {
+    /// is (`why`). Told once: a plugin withdrawn already is left as it is. Whether it
+    /// settled (not changed meanwhile, recorded).
+    fn withdraw(&self, id: &str, snapshot: &Installed, why: Withdrawal) -> bool {
         if snapshot.withdrawn {
             // Told already; whatever loaded it meanwhile, it does not run.
             let _change = lock(&self.changing);
@@ -1707,11 +1721,11 @@ impl PluginService {
         if self.still(id, snapshot).is_none() {
             return false;
         }
-        match &publisher {
-            Some(publisher) => {
+        match &why {
+            Withdrawal::Publisher(publisher) => {
                 warn!(plugin = %id, publisher = %publisher.en, "the plugin's publisher is revoked; it is turned off");
             }
-            None => {
+            Withdrawal::Revoked | Withdrawal::UntilReplaced => {
                 warn!(plugin = %id, version = %snapshot.version, "the plugin's version is revoked; it is turned off");
             }
         }
@@ -1722,9 +1736,10 @@ impl PluginService {
             warn!(plugin = %id, error = %e, "cannot record the plugin's state");
         }
         let name = self.name_of(id);
-        (self.cfg.notify)(match publisher {
-            Some(publisher) => PluginNotice::PublisherRevoked { name, publisher },
-            None => PluginNotice::Withdrawn { name },
+        (self.cfg.notify)(match why {
+            Withdrawal::Publisher(publisher) => PluginNotice::PublisherRevoked { name, publisher },
+            Withdrawal::Revoked => PluginNotice::Withdrawn { name },
+            Withdrawal::UntilReplaced => PluginNotice::WithdrawnUntilReplaced { name },
         });
         recorded.is_ok()
     }

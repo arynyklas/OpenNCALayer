@@ -32,7 +32,6 @@ oncl-ipc.workspace = true
 oncl-pki.workspace = true
 oncl-plugin = { workspace = true, features = ["distribution"] }
 oncl-protocol.workspace = true
-oncl-registry.workspace = true
 oncl-tls.workspace = true
 oncl-ui.workspace = true
 # Hardware tokens and ID cards over the system's smart card service (experimental, off by
@@ -63,8 +62,6 @@ zeroize.workspace = true
 [dev-dependencies]
 # The installer entry finds the data directory by the daemon's rule: one test compares them.
 oncl-winget-setup.workspace = true
-# `TestKey`: the throw-away Apps & Features key of the maintenance end-to-end tests.
-oncl-registry = { workspace = true, features = ["testing"] }
 semver.workspace = true
 # The SDK's CMS validation, which replaced the daemon's own checker, in the end-to-end tests.
 oncl-core.workspace = true
@@ -90,6 +87,11 @@ zip.workspace = true
 [build-dependencies]
 # The built-in modules' WebAssembly, built (or taken from `ONCL_BUILTINS_DIR`) and embedded.
 oncl-builtins-build.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# The native-messaging host keys of the browsers under `HKCU` (`nm install`, `uninstall`,
+# `status`).
+oncl-winreg.workspace = true
 
 [target.'cfg(windows)'.dev-dependencies]
 # Ending the processes the maintenance end-to-end tests start.
