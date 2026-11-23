@@ -74,10 +74,12 @@ pub const REBUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// The largest binary file of a source archive that need not be in `binary_files` (check 18).
 pub const MAX_PLAIN_BINARY: usize = 64 * 1024;
 
-/// The oldest core a publisher's release may name in `min_core` (check 6): Y, the first
-/// release whose client reads the publishers' catalog (`docs/design/publishers.md`, «Цели
-/// издателя»).
-pub const MIN_CORE: &str = "0.1.3";
+/// The oldest core a publisher's release may name in `min_core` (check 6): the first
+/// prerelease of Y, the first release whose client reads the publishers' catalog
+/// (`docs/design/publishers.md`, «Цели издателя», Р39). The client offers a release only if
+/// `min_core <= core` in semver order, where `0.1.3-beta.1 < 0.1.3`: a publisher names
+/// `0.1.3-beta.1` to reach Y's betas, `0.1.3` to reach stable cores only.
+pub const MIN_CORE: &str = "0.1.3-0";
 
 /// [`MIN_CORE`] as a version.
 pub fn min_core() -> Version {
