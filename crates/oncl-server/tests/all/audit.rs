@@ -1619,7 +1619,7 @@ fn deadline_expiry_before_use_refuses_that_request_without_poisoning_service_hea
 
 // ---- MP3a-3: plugin records -------------------------------------------------------------
 use oncl_core::OperationError;
-use oncl_core::keys::{KeyRequest, KeySelector, KeySources};
+use oncl_core::keys::{KeyRequest, KeySelector};
 use oncl_core::plugins::{
     CallerContext, ManualLimits, PluginAuditRecord, PluginBindings, PluginCall, PluginKeyBinding,
     PluginPermission, PluginRefusalCode, PluginRegistry, PluginUse, TicketRefusal,
@@ -1651,11 +1651,14 @@ impl KeyUseGuard for Capture {
 struct Example {
     engine: Engine,
     capture: Arc<Capture>,
-    key: KeySelector,
-    password: String,
     permission: PluginPermission,
     /// The events of earlier runs, by the bytes signed.
     events: Mutex<HashMap<Vec<u8>, KeyUseEvent>>,
+}
+
+/// The host-named key the example signs with; the tests bind the same name in the journal.
+fn example_key() -> KeyId {
+    KeyId::new("key").unwrap()
 }
 
 static EXAMPLE_RIG: LazyLock<Example> = LazyLock::new(|| {
@@ -1679,22 +1682,35 @@ name = "f"
 kind = "document"
 [operations.uses]
 network = "pki"
-imports = ["keys_sign_raw"]
+imports = ["keys_sign_raw", "random"]
 [[operations.uses.key]]
 kind = "raw"
 content = "param:f"
 "#
     );
     let wasm = oncl_testkit::read(oncl_testkit::plugin::example_wasm());
-    let fixture = oncl_testkit::synthetic("user-rsa-sign");
-    let key = KeySelector::inline(oncl_testkit::read(&fixture.path), None);
     let permission = PluginPermission::new(
         EXAMPLE,
         "sign",
         CallerContext::ServiceClient(EXAMPLE_TOKEN.to_owned()),
-        [oncl_pdk::abi::Import::KeysSignRaw],
+        // `random`: the example's module calls it before its key use, and a declared call
+        // may use only the imports its operation lists.
+        [
+            oncl_pdk::abi::Import::KeysSignRaw,
+            oncl_pdk::abi::Import::Random,
+        ],
     )
-    .with_keys([key.key_id()]);
+    .with_keys([example_key()])
+    // The signer's validation reaches the synthetic OCSP and CRLs of `batch_support`.
+    .with_pki_endpoints(
+        [
+            "http://ocsp.synthetic.test",
+            "http://crl.synthetic.test/root-gost2015.crl",
+            "http://crl.synthetic.test/inter-gost2015.crl",
+        ]
+        .map(|url| (oncl_pki::http::HttpMethod::Get, url)),
+    )
+    .unwrap();
     let limits = ManualLimits::desktop();
     let mut registry = PluginRegistry::new();
     registry
@@ -1707,17 +1723,20 @@ content = "param:f"
         )
         .unwrap();
     let capture = Arc::new(Capture::default());
+    let keys = batch_support::Provider(HashMap::from([(
+        example_key(),
+        batch_support::issued("user-rsa-sign"),
+    )]));
     let engine = Engine::new(
         EngineServices::hash_only(limits.resources)
-            .with_keys(Arc::new(KeySources::new()), capture.clone())
+            .with_keys(Arc::new(keys), capture.clone())
+            .with_validation(batch_support::validation())
             .with_plugins(registry),
     )
     .unwrap();
     Example {
         engine,
         capture,
-        key,
-        password: fixture.password,
         permission,
         events: Mutex::new(HashMap::new()),
     }
@@ -1734,9 +1753,9 @@ fn example_event(content: &[u8]) -> KeyUseEvent {
         .engine
         .begin(
             ExecutionGrant::new([Action::Sign])
-                .with_keys([rig.key.key_id()])
+                .with_keys([example_key()])
                 .with_plugins([rig.permission.clone()]),
-            OperationPolicy::ncalayer_compatibility(),
+            OperationPolicy::strict_online(),
             Arc::new(Control),
         )
         .unwrap();
@@ -1748,12 +1767,10 @@ fn example_event(content: &[u8]) -> KeyUseEvent {
         r#"{{"module":"{EXAMPLE_MODULE}","class":"Example","method":"rawSign","args":{{"handle":1,"data_b64":"{encoded}"}}}}"#
     );
     let caller = CallerContext::ServiceClient(EXAMPLE_TOKEN.to_owned());
-    let keys = [PluginKeyBinding::new(
-        1,
-        KeyRequest::new(&rig.key, Some(&rig.password)),
-    )];
+    let selector = KeySelector::named(example_key());
+    let keys = [PluginKeyBinding::new(1, KeyRequest::new(&selector, None))];
     // The capturing guard refuses the key, so the plugin's answer is a refusal.
-    let _ = rig.engine.plugin_call(
+    let answer = rig.engine.plugin_call(
         &PluginCall {
             plugin_id: EXAMPLE,
             operation: "sign",
@@ -1767,7 +1784,12 @@ fn example_event(content: &[u8]) -> KeyUseEvent {
         let at = seen
             .iter()
             .position(|e| e.operation_id == ctx.id())
-            .expect("the example asked for the key");
+            .unwrap_or_else(|| {
+                panic!(
+                    "the example did not ask for the key: {:?}",
+                    answer.as_ref().map(|r| r.response())
+                )
+            });
         seen.remove(at)
     };
     let ticket = event
@@ -1781,11 +1803,11 @@ fn example_event(content: &[u8]) -> KeyUseEvent {
     event
 }
 
-/// [`example_event`] addressed to `key` of the operation `ctx`, which the journal binds.
+/// [`example_event`] of the operation `ctx`, which the journal binds with `key`.
 fn plugin_event(ctx: &OperationContext, key: &KeyId, content: &[u8]) -> KeyUseEvent {
     let mut event = example_event(content);
+    assert_eq!(event.key_id, *key, "the journal binds the example's key");
     event.operation_id = ctx.id();
-    event.key_id = key.clone();
     event
 }
 
