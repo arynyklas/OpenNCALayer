@@ -418,6 +418,30 @@ impl TrayStatus {
                     None,
                 )
             }
+            // The kk and en texts are drafts for the translator.
+            PluginNotice::WithdrawnUntilReplaced { name } => {
+                let name = name.get(l);
+                (
+                    match l {
+                        Locale::Ru => "Плагин выключен",
+                        Locale::Kk => "Плагин өшірілді",
+                        Locale::En => "Plugin turned off",
+                    }
+                    .to_owned(),
+                    match l {
+                        Locale::Ru => format!(
+                            "Версия плагина «{name}» отозвана в каталоге OpenNCALayer: плагин выключен, замена будет поставлена при следующей проверке."
+                        ),
+                        Locale::Kk => format!(
+                            "«{name}» плагинінің нұсқасы OpenNCALayer каталогында кері қайтарылды: плагин өшірілді, алмастыратын нұсқа келесі тексеруде орнатылады."
+                        ),
+                        Locale::En => format!(
+                            "The version of the plugin «{name}» is revoked in the OpenNCALayer catalog: the plugin is turned off, its replacement will be installed at the next check."
+                        ),
+                    },
+                    None,
+                )
+            }
             PluginNotice::PublisherRevoked { name, publisher } => {
                 let (name, publisher) = (name.get(l), publisher.get(l));
                 (
@@ -1200,6 +1224,7 @@ mod tests {
                 },
                 name: name.clone(),
             },
+            PluginNotice::WithdrawnUntilReplaced { name: name.clone() },
         ];
         let t0 = Instant::now();
         let mut ru = TrayStatus::new(Locale::Ru, None);
@@ -1224,6 +1249,14 @@ mod tests {
         assert_eq!(
             ru.plugin_notification(&notices[6], t0).unwrap().body,
             "Порт «Порт» заменён плагином издателя «Пример»."
+        );
+        assert_eq!(
+            ru.plugin_notification(&notices[2], t0).unwrap().body,
+            "Версия плагина «Пример» отозвана в каталоге OpenNCALayer, а замены нет: плагин выключен."
+        );
+        assert_eq!(
+            ru.plugin_notification(&notices[7], t0).unwrap().body,
+            "Версия плагина «Пример» отозвана в каталоге OpenNCALayer: плагин выключен, замена будет поставлена при следующей проверке."
         );
         for l in [Locale::Kk, Locale::En] {
             let mut status = TrayStatus::new(l, None);
