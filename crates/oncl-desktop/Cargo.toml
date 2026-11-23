@@ -18,7 +18,7 @@ tracing.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # Our `Run` value and its `StartupApproved` state; the original's `HKLM` `Run` value, read.
-oncl-registry.workspace = true
+oncl-winreg.workspace = true
 # kernel32 `GetUserDefaultUILanguage`: the default language. The Startup folder
 # (`SHGetKnownFolderPath`), the port's owner (`GetExtendedTcpTable`) and its process
 # (image, times, command line, ending it).
@@ -39,7 +39,3 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-
-[target.'cfg(windows)'.dev-dependencies]
-# `TestKey`: the registry sandbox of the tests.
-oncl-registry = { path = "../oncl-registry", features = ["testing"] }

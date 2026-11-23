@@ -52,11 +52,11 @@ webpki-root-certs = { workspace = true, optional = true }
 zeroize.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-# Read only: the Internet Options proxy of `ProxySetting::System`.
-oncl-registry.workspace = true
 # Private SDK spool directories: explicit owner-only protected DACL at creation.
-# These security/filesystem functions are available on Windows 7.
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Threading"] }
+# These security/filesystem functions are available on Windows 7. `Win32_System_Registry`:
+# `RegGetValueW` (Windows Vista and later) reads the Internet Options proxy of
+# `ProxySetting::System`.
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Cryptography", "Win32_Storage_FileSystem", "Win32_System_Registry", "Win32_System_Threading"] }
 
 [target.'cfg(unix)'.dependencies]
 # Descriptor-relative private spool creation, unlink and no-clobber publication.
@@ -73,8 +73,10 @@ tempfile.workspace = true
 time = { workspace = true, features = ["macros"] }
 
 [target.'cfg(windows)'.dev-dependencies]
-# `TestKey`: the registry sandbox of the Internet Options test.
-oncl-registry = { path = "../oncl-registry", features = ["testing"] }
+# The registry sandbox of the Internet Options test: its values are written, and compared,
+# with the programs' registry crate. Path only, no version: `cargo package` drops it, and the
+# crate is not part of the SDK.
+oncl-winreg = { path = "../oncl-winreg" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `listen` with a backlog of 0: a local address whose connections never complete.

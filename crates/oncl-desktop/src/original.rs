@@ -1023,7 +1023,7 @@ fn startup_folder() -> io::Result<PathBuf> {
 #[cfg(windows)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct MachineRun {
-    hive: oncl_registry::Hive,
+    hive: oncl_winreg::Hive,
     sources: Vec<RunSource>,
 }
 
@@ -1032,7 +1032,7 @@ struct MachineRun {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct RunSource {
     run_key: String,
-    view: oncl_registry::View,
+    view: oncl_winreg::View,
     /// In the 64-bit view: `StartupApproved\Run32` holds the switches of the 32-bit view.
     approved_key: String,
     /// The value as the user reads it, e.g. `HKLM\Software\WOW6432Node\…\Run\NCALayer`.
@@ -1055,17 +1055,17 @@ impl MachineRun {
         use crate::RegistryAutostart as R;
         let shown = |key: &str| format!(r"HKLM\{key}\{}", Self::VALUE);
         MachineRun {
-            hive: oncl_registry::Hive::LocalMachine,
+            hive: oncl_winreg::Hive::LocalMachine,
             sources: vec![
                 RunSource {
                     run_key: R::RUN_KEY.to_owned(),
-                    view: oncl_registry::View::Wow64,
+                    view: oncl_winreg::View::Wow64,
                     approved_key: R::APPROVED_KEY.to_owned(),
                     shown: shown(R::RUN_KEY),
                 },
                 RunSource {
                     run_key: R::RUN_KEY.to_owned(),
-                    view: oncl_registry::View::Wow32,
+                    view: oncl_winreg::View::Wow32,
                     approved_key: Self::APPROVED_KEY_32.to_owned(),
                     shown: shown(Self::RUN_KEY_32),
                 },
@@ -1079,12 +1079,12 @@ impl MachineRun {
         use crate::RegistryAutostart as R;
         let source = |run: &str, approved: &str| RunSource {
             run_key: base.key(run),
-            view: oncl_registry::View::Wow64,
+            view: oncl_winreg::View::Wow64,
             approved_key: base.key(approved),
             shown: format!(r"HKCU\{}\{}", base.key(run), Self::VALUE),
         };
         MachineRun {
-            hive: oncl_registry::Hive::CurrentUser,
+            hive: oncl_winreg::Hive::CurrentUser,
             sources: vec![
                 source(R::RUN_KEY, R::APPROVED_KEY),
                 source(Self::RUN_KEY_32, Self::APPROVED_KEY_32),
@@ -1097,7 +1097,7 @@ impl MachineRun {
     fn entries(&self) -> io::Result<Vec<AutostartEntry>> {
         let mut entries = Vec::new();
         for s in &self.sources {
-            if !oncl_registry::value_exists(self.hive, &s.run_key, Some(Self::VALUE), s.view)? {
+            if !oncl_winreg::value_exists(self.hive, &s.run_key, Some(Self::VALUE), s.view)? {
                 continue;
             }
             let disabled =
@@ -1634,7 +1634,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn machine_run_is_only_read() {
-        use oncl_registry::{Hive, TestKey, View, get_string, set_binary, set_string};
+        use crate::test_key::TestKey;
+        use oncl_winreg::{Hive, View, get_string, set_binary, set_string};
 
         let root = TestKey::new();
         let base = crate::RegistryBase::sandbox(root.path());

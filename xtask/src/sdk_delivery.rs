@@ -28,9 +28,8 @@ use serde_json::Value;
 /// The SDK chain in publication order: every crate comes after the crates it depends on.
 /// `oncl-core` is the entry point; the rest is its transitive closure with every feature and
 /// `oncl-plugin`'s `distribution` feature (through `oncl-update`).
-pub const CHAIN: [&str; 12] = [
+pub const CHAIN: [&str; 11] = [
     "oncl-gost",
-    "oncl-registry",
     "oncl-pki",
     "oncl-pdf",
     "oncl-protocol",
@@ -44,7 +43,7 @@ pub const CHAIN: [&str; 12] = [
 ];
 
 /// Crates that must not appear in the normal-dependency closure of the SDK.
-pub const FORBIDDEN: [&str; 24] = [
+pub const FORBIDDEN: [&str; 25] = [
     "slint",
     "slint-build",
     "i-slint-core",
@@ -68,6 +67,8 @@ pub const FORBIDDEN: [&str; 24] = [
     "oncl-cli",
     "openncalayer",
     "oncl-nmhost",
+    // The Win32 registry calls of the Windows programs: not an SDK crate.
+    "oncl-winreg",
     "multer",
 ];
 
