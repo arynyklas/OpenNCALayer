@@ -40,7 +40,7 @@ oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 | `plugins` (включает `xml`) | 152 | + oncl-flows, oncl-pdk, oncl-plugin, oncl-protocol, oncl-token, oncl-xml |
 | `full` | 153 | всё перечисленное, + oncl-pdf |
 
-Ни один набор не содержит Slint, winit, tokio, axum, hyper, velopack, tray-icon, rfd, webbrowser, а также `oncl-ui`, `oncl-desktop`, `oncl-api`, `oncl-server`, `oncl-cli`, `openncalayer` и `oncl-nmhost`; если какой-то из них появится, `cargo xtask sdk closure` завершится ошибкой. `oncl-update` в `full` не входит. Он подключается только через собственную feature `distribution` крейта `oncl-plugin` (хранилище пакетов плагинов), которую потребитель включает отдельно; её тесты и место в цепочке публикации описаны ниже.
+Ни один набор не содержит Slint, winit, tokio, axum, hyper, velopack, tray-icon, rfd, webbrowser, а также `oncl-ui`, `oncl-desktop`, `oncl-api`, `oncl-server`, `oncl-cli`, `openncalayer`, `oncl-nmhost` и `oncl-winreg`; если какой-то из них появится, `cargo xtask sdk closure` завершится ошибкой. `oncl-update` в `full` не входит. Он подключается только через собственную feature `distribution` крейта `oncl-plugin` (хранилище пакетов плагинов), которую потребитель включает отдельно; её тесты и место в цепочке публикации описаны ниже.
 
 | feature | что добавляет |
 |---|---|
@@ -260,6 +260,7 @@ Core выполняет три шага в указанном порядке (`d
 | 0.1.1 → 0.1.2-beta.1 | Несовместимо меняется публичный API `oncl-update` (каталог плагинов и делегированные роли TUF), см. «Переход с 0.1.1 на 0.1.2». У остальных крейтов SDK меняется только номер версии. Номер патча не означает совместимость: до 1.0 SDK и программа выходят под одной версией. |
 | 0.1.2-beta.1 → 0.1.2 | Публичный API крейтов SDK не меняется: `0.1.2` собирается из коммита `0.1.2-beta.1`. |
 | 0.1.2 → 0.1.3-beta.1 | Несовместимо меняется публичный API `oncl-plugin` (feature `distribution`): `Store::install` принимает издателя, у `Installed` и `StoreState` новые поля. `oncl-flows` удаляет feature `testing` и её модуль `testing` (`Step`, `ScriptedPrompter`, `MemoryRecentPath`). В `oncl-update` добавлены `choose_installed` и методы каталога для записанного издателя, удалены тестовые feature `testing` и модуль `tuf::testing`. В `oncl-registry` вариант `View::Native` заменён на `View::Wow64`, чтение идёт в 64-битном представлении, пути с NUL и пустые пути записи и удаления отклоняются. См. «Переход с 0.1.2 на 0.1.3». |
+| 0.1.3-beta.1 → 0.1.3 | Крейт `oncl-registry` уходит из SDK: `oncl-pki` сам читает прокси «Свойств браузера» для `ProxySetting::System` (поведение прежнее), а обёртка над реестром переименована во внутренний крейт `oncl-winreg` программ для Windows, не входящий в SDK. Цепочка SDK — 11 крейтов. См. «Переход с 0.1.2 на 0.1.3». |
 
 ### Переход с 0.1.1 на 0.1.2
 
@@ -296,7 +297,7 @@ Core выполняет три шага в указанном порядке (`d
 
 Сравнение с `v0.1.2`. Несовместимо меняется публичный API `oncl-plugin` с feature `distribution` и `oncl-flows` с feature `testing`; в `oncl-update` добавления и удалён тестовый модуль `tuf::testing` с feature `testing`. Крейт `oncl-registry` из SDK убран. У остальных крейтов SDK API прежний.
 
-`oncl-registry` больше не входит в SDK. Это обёртка над вызовами реестра Windows (Win32), и в SDK она была только потому, что `oncl-pki` читает из реестра прокси «Свойств браузера» для `ProxySetting::System`. Теперь `oncl-pki` читает эти значения сам. Обёртка переименована в `oncl-winreg`, ей пользуются только программы OpenNCALayer для Windows (автозапуск, ключи native messaging, запись установщика), и она не публикуется (`publish = false`). Цепочка SDK стала на один крейт короче (раздел 7).
+`oncl-registry` больше не входит в SDK. Это обёртка над вызовами реестра Windows (Win32), и в SDK она была только потому, что `oncl-pki` читает из реестра прокси «Свойств браузера» для `ProxySetting::System`. Теперь `oncl-pki` читает эти значения сам. Обёртка переименована в `oncl-winreg`, ей пользуются только программы OpenNCALayer для Windows: автозапуск, ключи native messaging и установщик WinGet, который читает свою запись в «Приложениях и возможностях» (пишет её настоящий Setup, а в тестах — тестовый стенд установщика). Обёртка не публикуется (`publish = false`). Цепочка SDK стала на один крейт короче (раздел 7).
 
 Для потребителя SDK в Windows системный прокси работает как раньше. `ProxySetting::System` сначала берёт прокси из переменных окружения, затем ручной прокси «Свойств браузера»: пользователя или, если политика `ProxySettingsPerUser` в `HKLM` равна 0, компьютера. Значения читаются в 64-битном представлении реестра. В Linux и macOS прокси, как и раньше, берётся только из окружения.
 

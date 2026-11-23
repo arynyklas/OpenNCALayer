@@ -43,7 +43,7 @@ pub const CHAIN: [&str; 11] = [
 ];
 
 /// Crates that must not appear in the normal-dependency closure of the SDK.
-pub const FORBIDDEN: [&str; 24] = [
+pub const FORBIDDEN: [&str; 25] = [
     "slint",
     "slint-build",
     "i-slint-core",
@@ -67,6 +67,8 @@ pub const FORBIDDEN: [&str; 24] = [
     "oncl-cli",
     "openncalayer",
     "oncl-nmhost",
+    // The Win32 registry calls of the Windows programs: not an SDK crate.
+    "oncl-winreg",
     "multer",
 ];
 

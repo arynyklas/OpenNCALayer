@@ -423,6 +423,15 @@ mod windows {
                     "{k} {name}"
                 );
             }
+            // `Program Files (x86)` would mean the 32-bit view; 32-bit Windows has only
+            // `Program Files`.
+            let program_files = get_string(HKEY_LOCAL_MACHINE, current, "ProgramFilesDir");
+            assert!(
+                program_files
+                    .as_deref()
+                    .is_some_and(|v| !v.ends_with("(x86)")),
+                "{program_files:?}"
+            );
             assert_eq!(
                 get_string(HKEY_CURRENT_USER, &format!("{key}\0x"), "s"),
                 None
