@@ -431,6 +431,31 @@ fn edited(edit: impl FnOnce(&mut Value)) -> Map<String, Value> {
 }
 
 #[test]
+fn check_6_takes_min_core_from_the_first_prerelease_of_the_publishers_core() {
+    for (min_core, passes) in [
+        ("0.1.3-0", true),
+        ("0.1.3-beta.1", true),
+        ("0.1.3", true),
+        ("0.1.4-alpha.1", true),
+        ("0.1.2", false),
+        ("0.1.2-beta.1", false),
+    ] {
+        let found = entries_of(&edited(|t| {
+            t["custom"]["oncl"]["min_core"] = json!(min_core);
+        }));
+        if passes {
+            assert!(
+                found.findings.is_empty(),
+                "{min_core}: {:?}",
+                found.findings
+            );
+        } else {
+            assert_eq!(checks_of(&found.findings), [6], "{min_core}");
+        }
+    }
+}
+
+#[test]
 fn check_6_reads_each_entry_as_the_client_and_more_strictly() {
     let found = entries_of(&good());
     assert!(found.findings.is_empty(), "{:?}", found.findings);

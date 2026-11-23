@@ -262,6 +262,28 @@ fn offer_finds_a_plugin_by_module_and_skips_bad_and_revoked_ones() {
     );
 }
 
+/// `min_core` compares in semver order, where a prerelease precedes its release: a publisher
+/// names `0.1.3-beta.1` to reach the betas of `0.1.3`, and `0.1.3` to reach stable only.
+#[test]
+fn min_core_of_a_prerelease_reaches_its_betas_and_of_a_release_only_stable() {
+    let offered = |min_core: &str, core: &str| {
+        let mut entry = release("kz.example.one", "1.0.0");
+        entry["min_core"] = json!(min_core);
+        offer(
+            &catalog(vec![entry]),
+            &version(core),
+            &[7; 16],
+            &BTreeMap::new(),
+            |_| true,
+        )
+        .is_some()
+    };
+    assert!(offered("0.1.3-beta.1", "0.1.3-beta.1"));
+    assert!(offered("0.1.3-beta.1", "0.1.3"));
+    assert!(offered("0.1.3", "0.1.3"));
+    assert!(!offered("0.1.3", "0.1.3-beta.1"));
+}
+
 #[test]
 fn rollout_cutoff_is_exact_and_offers_match_the_requested_original_bundle() {
     let id = "kz.example.one";
