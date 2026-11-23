@@ -29,7 +29,7 @@ fn raw(name: &str) -> KeyEntry {
         .unwrap()
         .remove(0)
 }
-fn issued(name: &str) -> KeyEntry {
+pub fn issued(name: &str) -> KeyEntry {
     // Same real synthetic issuer/status profile used by the accepted Core B01 fixture.
     let mut entry = raw(name);
     let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&entry.cert);
@@ -51,7 +51,7 @@ fn issued(name: &str) -> KeyEntry {
     entry.cert = oncl_pki::testing::issue_cert(&raw("inter-gost2015.key"), spec);
     entry
 }
-fn validation() -> ValidationServices {
+pub fn validation() -> ValidationServices {
     use oncl_pki::{
         crl::MockCrl,
         http::{HttpTransport, RouteTransport},
@@ -118,7 +118,7 @@ impl KeyUseGuard for ObservedAudit {
         result
     }
 }
-struct Provider(HashMap<KeyId, KeyEntry>);
+pub struct Provider(pub HashMap<KeyId, KeyEntry>);
 impl KeyProvider for Provider {
     fn open(
         &self,

@@ -6,27 +6,15 @@
 //! binary has one; `plugin_ports_manual` is run alone by `cargo xtask plugin-ports-manual`,
 //! which passes the user's filters to it as they are.
 
-// The probe's fixtures, one copy for the plugin modules; they name the batch fixture
-// `crate::plugin_crypto`.
-#[cfg(all(
-    feature = "plugins",
-    feature = "tokens",
-    any(feature = "testing", feature = "xml")
-))]
+// The probe's fixtures, one copy for the plugin module; they name the batch fixture
+// `crate::plugin_crypto`. The unit tests of `plugins::ticket` share them too.
+#[cfg(all(feature = "plugins", feature = "tokens"))]
 #[path = "../../examples/sdk_probe/batch_fixture.rs"]
 pub(crate) mod plugin_crypto;
-#[cfg(all(
-    feature = "plugins",
-    feature = "tokens",
-    any(feature = "testing", feature = "xml")
-))]
+#[cfg(all(feature = "plugins", feature = "tokens"))]
 #[path = "../../examples/sdk_probe/plugin_fixture.rs"]
 mod plugin_fixture;
-#[cfg(all(
-    feature = "plugins",
-    feature = "tokens",
-    any(feature = "testing", feature = "xml")
-))]
+#[cfg(all(feature = "plugins", feature = "tokens"))]
 #[path = "../../examples/sdk_probe/plugin_xml_fixture.rs"]
 mod plugin_xml_fixture;
 
@@ -45,11 +33,7 @@ mod jose;
 mod key_sources;
 #[cfg(feature = "pdf")]
 mod pdf;
-#[cfg(all(feature = "plugins", feature = "tokens", feature = "testing"))]
-mod plugin_approval;
-#[cfg(all(feature = "plugins", feature = "tokens", feature = "testing"))]
-mod plugin_ticket;
-#[cfg(all(feature = "plugins", feature = "tokens", feature = "xml"))]
+#[cfg(all(feature = "plugins", feature = "tokens"))]
 mod plugin_xml;
 mod resource_edges;
 mod timestamp;

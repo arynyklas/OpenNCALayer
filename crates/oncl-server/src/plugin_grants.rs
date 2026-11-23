@@ -233,35 +233,37 @@ impl ServerPluginPolicy {
             .len()
     }
 
-    fn decide(&self, operation: OperationId, ticket: &PluginUse) -> Result<&Rule, TicketRefusal> {
-        let CallerContext::ServiceClient(token) = ticket.caller() else {
+    fn decide(
+        &self,
+        operation: OperationId,
+        ticket: &UseFacts<'_>,
+    ) -> Result<&Rule, TicketRefusal> {
+        let CallerContext::ServiceClient(token) = ticket.caller else {
             return Err(TicketRefusal::Caller);
         };
         let rule = self
             .rules
             .iter()
             .find(|r| {
-                r.token == *token
-                    && r.plugin == ticket.identity().id
-                    && r.operation == ticket.operation()
+                r.token == *token && r.plugin == ticket.plugin && r.operation == ticket.operation
             })
             .filter(|r| r.plugin_bytes)
             .ok_or(TicketRefusal::NotGranted)?;
-        if ticket.identity().package != rule.package {
+        if *ticket.package != rule.package {
             return Err(TicketRefusal::Identity);
         }
-        if ticket.max_uses() != oncl_plugin::operations::MAX_USES {
+        if ticket.max_uses != oncl_plugin::operations::MAX_USES {
             return Err(TicketRefusal::Uses);
         }
-        if !rule.keys.contains(ticket.key()) {
+        if !rule.keys.contains(ticket.key) {
             return Err(TicketRefusal::Key);
         }
-        let Some((_, options)) = rule.uses.iter().find(|(kind, _)| *kind == ticket.kind()) else {
+        let Some((_, options)) = rule.uses.iter().find(|(kind, _)| *kind == ticket.kind) else {
             return Err(TicketRefusal::Kind);
         };
         // A declared profile that names a parameter cannot be matched without a value the
         // server has no way to receive: refused, never guessed.
-        if *options != Some(*ticket.options_sha256()) {
+        if *options != Some(*ticket.options_sha256) {
             return Err(TicketRefusal::Options);
         }
         // Only checked here: the use is spent in `accepted`, once the journal took it.
@@ -275,25 +277,13 @@ impl ServerPluginPolicy {
         }
         Ok(rule)
     }
-}
 
-impl PluginTicketPolicy for ServerPluginPolicy {
-    fn accepted(&self, operation: OperationId, _ticket: &PluginUse) {
-        self.spent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(operation);
-    }
-    fn operation_ended(&self, operation: OperationId) {
-        self.spent
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&operation);
-    }
-    fn check(
+    /// [`PluginTicketPolicy::check`] on the facts of the ticket: a refusal is kept for the
+    /// answer.
+    fn check_use(
         &self,
         operation_id: OperationId,
-        ticket: &PluginUse,
+        ticket: &UseFacts<'_>,
     ) -> Result<PluginGrantFacts, TicketRefusal> {
         match self.decide(operation_id, ticket) {
             Ok(rule) => Ok(PluginGrantFacts {
@@ -309,6 +299,60 @@ impl PluginTicketPolicy for ServerPluginPolicy {
                 Err(refusal)
             }
         }
+    }
+
+    /// The one use of `operation` is spent: the journal took it.
+    fn spend(&self, operation: OperationId) {
+        self.spent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(operation);
+    }
+}
+
+/// What [`ServerPluginPolicy`] decides on of a plugin key-use ticket. Only Core builds a
+/// ticket; the decision is over these plain facts of it.
+struct UseFacts<'a> {
+    caller: &'a CallerContext,
+    plugin: &'a str,
+    package: &'a PackageHash,
+    operation: &'a str,
+    max_uses: u8,
+    key: &'a KeyId,
+    kind: KeyKind,
+    options_sha256: &'a [u8; 32],
+}
+impl<'a> UseFacts<'a> {
+    fn of(ticket: &'a PluginUse) -> Self {
+        Self {
+            caller: ticket.caller(),
+            plugin: &ticket.identity().id,
+            package: &ticket.identity().package,
+            operation: ticket.operation(),
+            max_uses: ticket.max_uses(),
+            key: ticket.key(),
+            kind: ticket.kind(),
+            options_sha256: ticket.options_sha256(),
+        }
+    }
+}
+
+impl PluginTicketPolicy for ServerPluginPolicy {
+    fn accepted(&self, operation: OperationId, _ticket: &PluginUse) {
+        self.spend(operation);
+    }
+    fn operation_ended(&self, operation: OperationId) {
+        self.spent
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&operation);
+    }
+    fn check(
+        &self,
+        operation_id: OperationId,
+        ticket: &PluginUse,
+    ) -> Result<PluginGrantFacts, TicketRefusal> {
+        self.check_use(operation_id, &UseFacts::of(ticket))
     }
 }
 
@@ -616,8 +660,6 @@ element = "param:tbs"
 
     // --- the ticket policy: every rule killed on its own --------------------------------
 
-    use oncl_core::plugins::{ContentBinding, PluginIdentity};
-
     fn package() -> PackageHash {
         oncl_core::plugins::loose_package_hash(DECLARED.as_bytes(), b"wasm")
     }
@@ -665,11 +707,13 @@ element = "param:tbs"
         }
         id.unwrap()
     }
+    /// The facts of a ticket, the declared one by default.
     struct Ticket {
         plugin: &'static str,
         operation: &'static str,
         caller: CallerContext,
         package: PackageHash,
+        max_uses: u8,
         kind: KeyKind,
         key: &'static str,
         options: Option<[u8; 32]>,
@@ -681,6 +725,7 @@ element = "param:tbs"
                 operation: "run",
                 caller: CallerContext::ServiceClient("svc".into()),
                 package: package(),
+                max_uses: oncl_plugin::operations::MAX_USES,
                 kind: KeyKind::Raw,
                 key: "ops-key",
                 options: None,
@@ -688,26 +733,31 @@ element = "param:tbs"
         }
     }
     impl Ticket {
-        fn build(self) -> PluginUse {
+        /// `policy`'s check of this ticket for `operation`.
+        fn check(
+            &self,
+            policy: &ServerPluginPolicy,
+            operation: OperationId,
+        ) -> Result<PluginGrantFacts, TicketRefusal> {
             let manifest = declared();
             let none: &dyn Fn(&str) -> Option<String> = &|_| None;
             let declared = manifest.operations()[0].uses().keys()[0]
                 .options_sha256(none)
                 .unwrap();
-            PluginUse::for_tests(
-                PluginIdentity {
-                    id: self.plugin.into(),
-                    package: self.package,
-                    version: "1.0.0".into(),
+            let key = KeyId::new(self.key).unwrap();
+            let options = self.options.unwrap_or(declared);
+            policy.check_use(
+                operation,
+                &UseFacts {
+                    caller: &self.caller,
+                    plugin: self.plugin,
+                    package: &self.package,
+                    operation: self.operation,
+                    max_uses: self.max_uses,
+                    key: &key,
+                    kind: self.kind,
+                    options_sha256: &options,
                 },
-                self.operation,
-                self.caller,
-                self.kind,
-                1,
-                KeyId::new(self.key).unwrap(),
-                ContentBinding::bytes(b"anything the plugin chose"),
-                self.options.unwrap_or(declared),
-                [7; 32],
             )
         }
     }
@@ -716,21 +766,19 @@ element = "param:tbs"
     fn a_matching_ticket_under_plugin_bytes_is_allowed_once_per_operation() {
         let policy = policy(true);
         let id = operation_id(0);
-        let facts = policy.check(id, &Ticket::default().build()).unwrap();
+        let facts = Ticket::default().check(&policy, id).unwrap();
         assert_eq!(facts.grant_id, "svc:test.declared:run");
         assert!(facts.declared);
         // Checking does not spend the use: only the journal's acceptance does, so a refusal
         // by the journal leaves the plugin's retry a policy decision again.
-        policy.check(id, &Ticket::default().build()).unwrap();
-        policy.accepted(id, &Ticket::default().build());
+        Ticket::default().check(&policy, id).unwrap();
+        policy.spend(id);
         assert_eq!(
-            policy.check(id, &Ticket::default().build()).unwrap_err(),
+            Ticket::default().check(&policy, id).unwrap_err(),
             TicketRefusal::AlreadyUsed
         );
         // Another operation is its own first use.
-        policy
-            .check(operation_id(1), &Ticket::default().build())
-            .unwrap();
+        Ticket::default().check(&policy, operation_id(1)).unwrap();
     }
 
     #[test]
@@ -777,6 +825,14 @@ element = "param:tbs"
                 TicketRefusal::Identity,
             ),
             (
+                "uses",
+                Ticket {
+                    max_uses: 2,
+                    ..Ticket::default()
+                },
+                TicketRefusal::Uses,
+            ),
+            (
                 "key",
                 Ticket {
                     key: "other-key",
@@ -804,11 +860,7 @@ element = "param:tbs"
         for (name, ticket, refusal) in cases {
             let policy = policy(true);
             let id = operation_id(0);
-            assert_eq!(
-                policy.check(id, &ticket.build()).unwrap_err(),
-                refusal,
-                "{name}"
-            );
+            assert_eq!(ticket.check(&policy, id).unwrap_err(), refusal, "{name}");
             assert_eq!(
                 policy.take_refusal(id),
                 Some(refusal),
@@ -823,41 +875,37 @@ element = "param:tbs"
         let policy = policy(false);
         let id = operation_id(0);
         assert_eq!(
-            policy.check(id, &Ticket::default().build()).unwrap_err(),
+            Ticket::default().check(&policy, id).unwrap_err(),
             TicketRefusal::NotGranted
         );
         let granted = self::policy(true);
         assert_eq!(
-            granted
-                .check(
-                    id,
-                    &Ticket {
-                        key: "other-key",
-                        ..Ticket::default()
-                    }
-                    .build()
-                )
-                .unwrap_err(),
+            Ticket {
+                key: "other-key",
+                ..Ticket::default()
+            }
+            .check(&granted, id)
+            .unwrap_err(),
             TicketRefusal::Key
         );
-        granted.check(id, &Ticket::default().build()).unwrap();
+        Ticket::default().check(&granted, id).unwrap();
     }
 
     #[test]
     fn churn_of_other_operations_never_frees_a_spent_use_and_the_end_of_the_operation_does() {
         let policy = policy(true);
         let first = operation_id(0);
-        policy.check(first, &Ticket::default().build()).unwrap();
-        policy.accepted(first, &Ticket::default().build());
+        Ticket::default().check(&policy, first).unwrap();
+        policy.spend(first);
         // 4104 other operations each take their one use while `first` is still running.
         for _ in 1..=4104 {
             let other = operation_id(0);
-            policy.check(other, &Ticket::default().build()).unwrap();
-            policy.accepted(other, &Ticket::default().build());
+            Ticket::default().check(&policy, other).unwrap();
+            policy.spend(other);
             policy.operation_ended(other);
         }
         assert_eq!(
-            policy.check(first, &Ticket::default().build()).unwrap_err(),
+            Ticket::default().check(&policy, first).unwrap_err(),
             TicketRefusal::AlreadyUsed
         );
         policy.operation_ended(first);
