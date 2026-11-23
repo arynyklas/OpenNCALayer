@@ -242,7 +242,7 @@ cargo test --workspace --all-features
 
 Сначала выполните шаги из раздела «Что нужно для тестов». Полный набор тестов большой, CI делит его на три части (раздел [«Что запускает CI»](#что-запускает-ci)).
 
-Команда `cargo test -p <крейт>` не включает необязательные возможности (features), которые нужны тестам. Тест, которому нужна возможность, без неё отключён: модуль в `tests/all/main.rs` помечен `#[cfg(feature = …)]` или отдельная тестовая программа описана в `Cargo.toml` с `required-features`. Cargo такие тесты молча не собирает и не запускает: ошибки нет, просто тестов в выводе меньше. Так у `oncl-core` без возможностей `plugins` и `tokens` не собираются программы `plugin_access` и `plugin_manual`, а без `xml` и `pdf` выпадают модули `tests/all`. Так же у `oncl-api`, `oncl-flows`, `oncl-plugin`, `oncl-token`, `oncl-winget-setup`, `oncl-cli` и `openncalayer`. Когда работаете над одним крейтом, запускайте с `--all-features`, как в CI:
+Команда `cargo test -p <крейт>` не включает необязательные возможности (features), которые нужны тестам. Тест, которому нужна возможность, без неё отключён: модуль в `tests/all/main.rs` помечен `#[cfg(feature = …)]` или отдельная тестовая программа описана в `Cargo.toml` с `required-features`. Cargo такие тесты молча не собирает и не запускает: ошибки нет, просто тестов в выводе меньше. Так у `oncl-core` без возможностей `plugins` и `tokens` не собираются программы `plugin_access` и `plugin_manual`, а без `xml` и `pdf` выпадают модули `tests/all`. Так же у `oncl-api`, `oncl-plugin`, `oncl-token`, `oncl-winget-setup`, `oncl-cli` и `openncalayer`. Когда работаете над одним крейтом, запускайте с `--all-features`, как в CI:
 
 ```sh
 cargo test -p oncl-core --all-features

@@ -26,7 +26,3 @@ oncl-testkit.workspace = true
 tempfile.workspace = true
 time = { workspace = true, features = ["macros"] }
 x509-cert.workspace = true
-
-# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files, each
-# a module of it), and `signed_intake` and `xades_large_crl`, which install their own
-# `#[global_allocator]`.

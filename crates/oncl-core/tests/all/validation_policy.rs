@@ -215,6 +215,33 @@ impl HttpTransport for FixedCrl {
         })
     }
 }
+#[test]
+fn static_crls_fit_the_validation_time() {
+    use der::Decode;
+    let secs = |t: OffsetDateTime| std::time::Duration::from_secs(t.unix_timestamp() as u64);
+    for name in [
+        "root-gost2015",
+        "root-gost2015-stale",
+        "inter-gost2015",
+        "inter-gost2015-stale",
+        "inter-gost2015-revoked",
+        "inter-gost2015-revoked-stale",
+    ] {
+        let crl: x509_cert::crl::CertificateList =
+            x509_cert::crl::CertificateList::from_der(&static_crl(name)).unwrap();
+        let tbs = &crl.tbs_cert_list;
+        assert!(tbs.this_update.to_unix_duration() < secs(NOW), "{name}");
+        let next = tbs.next_update.unwrap().to_unix_duration();
+        assert_eq!(next > secs(NOW), !name.ends_with("-stale"), "{name}");
+        let revoked: Vec<_> = tbs.revoked_certificates.iter().flatten().collect();
+        if name.contains("-revoked") {
+            assert_eq!(revoked.len(), 1, "{name}");
+            assert_eq!(revoked[0].revocation_date.to_unix_duration(), secs(REVOKED));
+        } else {
+            assert!(revoked.is_empty(), "{name}");
+        }
+    }
+}
 /// The committed CRL `synthetic/<name>.crl`.
 fn static_crl(name: &str) -> Vec<u8> {
     oncl_testkit::read(oncl_testkit::fixture(&format!("synthetic/{name}.crl")))

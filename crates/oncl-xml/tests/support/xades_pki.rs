@@ -113,6 +113,7 @@ impl Pki {
         let mut issuer = key("root-gost2015.key");
         if wrong_key {
             issuer.key = key("tsa-gost2015").key;
+            assert_eq!(issuer.key.alg(), key("root-gost2015.key").key.alg());
         }
         let mut crl = MockCrl::new(issuer)
             .with_this_update(NOW - time::Duration::MINUTE)

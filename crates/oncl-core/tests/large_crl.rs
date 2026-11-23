@@ -336,6 +336,7 @@ fn a_crl_signed_by_another_key_is_not_scanned_into_a_status() {
     // The issuer's name, another GOST-2015 key (the TSA's).
     let mut issuer = entry("inter-gost2015.key");
     issuer.key = entry("tsa-gost2015").key;
+    assert_eq!(issuer.key.alg(), entry("inter-gost2015.key").key.alg());
     let mut crl = MockCrl::new(issuer)
         .with_this_update(NOW - time::Duration::MINUTE)
         .next_update(Some(NOW + time::Duration::HOUR));

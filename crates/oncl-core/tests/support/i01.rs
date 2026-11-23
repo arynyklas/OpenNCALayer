@@ -242,6 +242,10 @@ impl HttpTransport for SignedFixtures {
             match self.tsa_tamper {
                 TsaTamper::None => self.tsa.send(request),
                 TsaTamper::Nonce => {
+                    // The nonce is flipped in a POSTed request; a GET carries it in the URL.
+                    if request.body.is_empty() {
+                        return Err(HttpError::other("the nonce tamper needs a POSTed request"));
+                    }
                     let body = other_nonce(request.body);
                     self.tsa.send(&HttpRequest {
                         body: &body,

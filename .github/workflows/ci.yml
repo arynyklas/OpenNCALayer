@@ -582,12 +582,12 @@ jobs:
       - name: CMS interop with OpenSSL
         run: cargo xtask interop-openssl
       # Offline and read-only: `cargo tree -p <program> -e normal -f "{p} [{f}]"` of the four
-      # release programs (openncalayer, oncl-cli, oncl-server, oncl-ui) must show the `testing`
-      # feature on no crate. Releases build with `-p`, but `cargo build --workspace
-      # --all-targets` and `cargo test` unify the dev-dependencies' `testing` into the same
-      # binaries; this fails if it ever reaches the normal tree (test doubles such as
-      # `oncl-pki`'s mocks must never ship).
-      - name: No testing feature in release programs
+      # release programs (openncalayer, oncl-cli, oncl-server, oncl-ui) must show no test-only
+      # crate (`oncl-pki-testing`, `oncl-testkit`) and the `testing` feature on no crate.
+      # Releases build with `-p`, but `cargo build --workspace --all-targets` and `cargo test`
+      # unify dev-dependencies into the same binaries; this fails if test code ever reaches
+      # the normal tree (the NCA service doubles must never ship).
+      - name: No test code in release programs
         run: cargo xtask check-release-features
       # Offline and read-only (about 3 s): the SDK's dependency closure against the forbidden
       # crates. `cargo xtask sdk smoke` (packs and builds the chain, about 75 s warm) stays a

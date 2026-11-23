@@ -39,11 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // The CA's CRL distribution point stands in for the network.
-    let transport: Arc<dyn oncl_pki::http::HttpTransport> =
-        Arc::new(oncl_pki_testing::RouteTransport::new(vec![(
-            support::CRL_ORIGIN.to_owned(),
-            Arc::new(pki.crl_responder()),
-        )]));
+    let transport: Arc<dyn oncl_pki::http::HttpTransport> = Arc::new(pki.crl_responder());
     let guard = Arc::new(AuditGuard::default());
     let engine = support::engine(&pki, guard.clone(), transport);
 

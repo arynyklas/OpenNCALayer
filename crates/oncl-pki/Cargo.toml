@@ -77,8 +77,3 @@ oncl-winreg = { path = "../oncl-winreg" }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `listen` with a backlog of 0: a local address whose connections never complete.
 libc.workspace = true
-
-# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files,
-# each a module of it) and `cms_stream` and `metadata_intake`, which install their own
-# `#[global_allocator]`. `tests/doubles/` (the TSA, OCSP and CRL doubles, spoiled answers
-# included) is a module of the first two.

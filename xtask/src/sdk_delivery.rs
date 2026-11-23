@@ -337,6 +337,22 @@ pub(crate) fn target_directory(root: &Path) -> anyhow::Result<PathBuf> {
         .context("`cargo metadata`: no target_directory")
 }
 
+/// Copies the directory `from` (files and subdirectories) to `to`.
+fn copy_tree(from: &Path, to: &Path) -> anyhow::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from).with_context(|| format!("listing {}", from.display()))? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), &target)
+                .with_context(|| format!("copying {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn toml_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -455,6 +471,9 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         consumer.join("src/main.rs"),
         include_str!("../sdk_consumer/main.rs.in").replace("@SUPPORT@", &toml_path(&support)),
     )?;
+    // The examples oncl-core packages (`include` in its manifest) build from the package
+    // alone: they become the consumer's examples, `mod support;` resolving next to them.
+    copy_tree(&core.join("examples"), &consumer.join("examples"))?;
     // The workspace's lock file pins the third-party versions already in the local registry.
     fs::copy(root.join("Cargo.lock"), consumer.join("Cargo.lock"))?;
 
@@ -526,6 +545,8 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
 
     // 5. Build and run it: a real sign and verify.
     run_in_consumer(&["build", "--offline"])?;
+    run_in_consumer(&["build", "--offline", "--examples"])?;
+    println!("packaged oncl-core examples build");
     let output = run_in_consumer(&["run", "--offline", "--quiet"])?;
     if !output.contains("SDK-CONSUMER-OK") {
         bail!("the consumer did not report success:\n{output}");
