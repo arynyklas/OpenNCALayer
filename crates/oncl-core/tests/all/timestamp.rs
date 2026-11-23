@@ -358,15 +358,8 @@ fn actual_digest_tag_not_only_length_is_checked_by_timestamp_adapter() {
 
 #[test]
 fn host_intermediates_are_candidates_but_never_promoted_to_anchors() {
-    use oncl_pki::{
-        crl::MockCrl,
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        pkix::CaSet,
-        testing::{TestCertSpec, issue_cert},
-        tsp::MockTsa,
-        validation::NetworkPolicy,
-    };
+    use oncl_pki::{http::HttpTransport, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
     let root = fixture::entry("root-gost2015.key");
     let intermediate = fixture::entry("inter-gost2015.key");
     let mut tsa = fixture::entry("tsa-gost2015");
@@ -451,7 +444,7 @@ fn host_intermediates_are_candidates_but_never_promoted_to_anchors() {
 }
 #[test]
 fn required_tsa_eku_and_validity_at_proven_time_are_real_checks() {
-    use oncl_pki::tsp::MockTamper;
+    use fixture::TsaTamper;
     let proven = NOW - time::Duration::MINUTE;
     for (eku, expires, expected, validity) in [
         (false, None, Verdict::Invalid, CheckStatus::Passed),
@@ -474,7 +467,7 @@ fn required_tsa_eku_and_validity_at_proven_time_are_real_checks() {
             Status::Good,
             eku,
             expires,
-            MockTamper::None,
+            TsaTamper::None,
         );
         let mut spec = f.spec();
         spec.check_skew = None;
@@ -508,7 +501,7 @@ fn acquisition_nonce_mismatch_preserves_original_tsp_cause_without_output() {
         Status::Good,
         true,
         None,
-        oncl_pki::tsp::MockTamper::Nonce,
+        fixture::TsaTamper::Nonce,
     );
     let engine = engine(&f, true);
     let mut ctx = begin(&engine, Action::Stamp);
@@ -847,7 +840,8 @@ fn acquisition_samples_host_after_actual_hash_and_signed_reply() {
 }
 #[test]
 fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
-    use oncl_pki::tsp::{MockTamper, TspError};
+    use fixture::TsaTamper;
+    use oncl_pki::tsp::TspError;
     let checked = NOW + time::Duration::seconds(2);
     for (issued, started, post, status, trusted, tamper, expected) in [
         (
@@ -856,7 +850,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             checked,
             Status::Good,
             true,
-            MockTamper::None,
+            TsaTamper::None,
             "future",
         ),
         (
@@ -865,7 +859,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             NOW,
             Status::Good,
             true,
-            MockTamper::None,
+            TsaTamper::None,
             "backwards",
         ),
         (
@@ -874,7 +868,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             checked,
             Status::Stale,
             true,
-            MockTamper::None,
+            TsaTamper::None,
             "validation",
         ),
         (
@@ -883,7 +877,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             checked,
             Status::Good,
             false,
-            MockTamper::None,
+            TsaTamper::None,
             "validation",
         ),
         (
@@ -892,7 +886,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             checked,
             Status::Good,
             true,
-            MockTamper::Nonce,
+            TsaTamper::Nonce,
             "nonce",
         ),
         (
@@ -901,7 +895,7 @@ fn post_reply_host_clock_does_not_relax_timestamp_rejection_checks() {
             checked,
             Status::Good,
             true,
-            MockTamper::None,
+            TsaTamper::None,
             "imprint",
         ),
     ] {

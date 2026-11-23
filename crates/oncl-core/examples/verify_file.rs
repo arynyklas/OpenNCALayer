@@ -25,7 +25,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     let dir = std::path::PathBuf::from(dir);
     let pki = support::DemoPki::open(&dir);
     let transport: Arc<dyn oncl_pki::http::HttpTransport> =
-        Arc::new(oncl_pki::http::RouteTransport::new(vec![(
+        Arc::new(oncl_pki_testing::RouteTransport::new(vec![(
             support::CRL_ORIGIN.to_owned(),
             Arc::new(pki.crl_responder()),
         )]));

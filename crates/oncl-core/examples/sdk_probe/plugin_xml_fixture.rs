@@ -7,9 +7,10 @@ use oncl_pdk::abi::{self, Import};
 use oncl_pki::{
     evidence::EvidenceLimits,
     http::{HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport},
-    tsp::{MockTsa, TsaProfile, TsaSpec},
+    tsp::{TsaProfile, TsaSpec},
     validation::NetworkPolicy,
 };
+use oncl_pki_testing::MockTsa;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -138,14 +139,8 @@ pub(crate) fn matching_issuer_with_certificate(
     oncl_pki::cert::Certificate,
 ) {
     use der::Encode;
-    use oncl_pki::{
-        crl::MockCrl,
-        http::RouteTransport,
-        pkcs12,
-        pkix::CaSet,
-        testing::{TestCertSpec, issue_cert},
-        validation::NetworkPolicy,
-    };
+    use oncl_pki::{pkcs12, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::{MockCrl, RouteTransport, TestCertSpec, issue_cert};
     use std::sync::Arc;
     let mut root = crypto::raw("root-gost2015.key");
     let leaf = crypto::raw(name);

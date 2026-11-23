@@ -12,7 +12,6 @@ use oncl_core::{
 use oncl_pki::{
     cert,
     cms::{self, AttrSpec, CertSpec, CoSign, Content, SignSpec},
-    crl::MockCrl,
     evidence::{AdesLevel, EvidenceLimits},
     http::{HttpError, HttpReply, HttpRequest, HttpTransport},
     io::{Source, TemporaryStore},
@@ -21,6 +20,7 @@ use oncl_pki::{
     resource::{OperationControl, ProcessingError, Progress, ResourceLimits},
     validation::{CheckStatus, NetworkPolicy, Verdict},
 };
+use oncl_pki_testing::MockCrl;
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::io::Cursor;
@@ -333,10 +333,12 @@ fn a_crl_signed_by_another_key_is_not_scanned_into_a_status() {
         .serial_number()
         .as_bytes()
         .to_vec();
-    let mut crl = MockCrl::new(entry("inter-gost2015.key"))
+    // The issuer's name, another GOST-2015 key (the TSA's).
+    let mut issuer = entry("inter-gost2015.key");
+    issuer.key = entry("tsa-gost2015").key;
+    let mut crl = MockCrl::new(issuer)
         .with_this_update(NOW - time::Duration::MINUTE)
-        .next_update(Some(NOW + time::Duration::HOUR))
-        .wrong_key();
+        .next_update(Some(NOW + time::Duration::HOUR));
     for index in 0..REVOKED {
         crl = crl.revoke(
             &(0x0100_0000_u32 + index).to_be_bytes(),

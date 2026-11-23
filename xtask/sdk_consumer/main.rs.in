@@ -22,10 +22,7 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("oncl-sdk-consumer-{}", std::process::id()));
     let _cleanup = Cleanup(dir.clone());
     let pki = support::open_or_create(&dir);
-    let crl: Arc<dyn HttpTransport> = Arc::new(oncl_pki::http::RouteTransport::new(vec![(
-        support::CRL_ORIGIN.to_owned(),
-        Arc::new(pki.crl_responder()),
-    )]));
+    let crl: Arc<dyn HttpTransport> = Arc::new(pki.crl_responder());
     let guard = Arc::new(AuditGuard::default());
     let engine = support::engine(&pki, guard.clone(), crl);
     let key = pki.user_key();

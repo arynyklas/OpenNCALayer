@@ -419,7 +419,7 @@ pub fn smoke(root: &Path, keep: bool) -> anyhow::Result<()> {
         "[package]\nname = \"sdk-consumer\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n\
          [workspace]\n\n[dependencies]\n\
          oncl-core = {{ path = \"{}\", default-features = false, features = [\"full\"] }}\n\
-         oncl-pki = {{ path = \"{}\", features = [\"testing\"] }}\n\
+         oncl-pki = {{ path = \"{}\" }}\n\
          rcgen = {{ version = \"={}\", default-features = false, features = [\"ring\", \"pem\", \"crypto\", \"zeroize\"] }}\n\
          getrandom = \"={}\"\nder = \"={}\"\ntime = \"={}\"\n\n[patch.crates-io]",
         toml_path(&core),

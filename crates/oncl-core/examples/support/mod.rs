@@ -2,10 +2,10 @@
 //! (clock, transport, trust, key-use guard, cancellation) an embedding application supplies.
 //!
 //! Nothing here is part of the SDK and nothing is committed: every run issues a fresh root and
-//! a fresh user key. The "certification authority" is an in-process CRL responder
-//! (`oncl_pki::crl::MockCrl`, feature `testing` of `oncl-pki`) standing in for the CA's
-//! distribution point, so the examples need no network. A real host passes its own trust
-//! anchors and an HTTP transport instead.
+//! a fresh user key. The "certification authority" is an in-process CRL distribution point
+//! ([`DemoCrl`], a CRL the demo root signs with `rcgen`) standing in for the CA's, so the
+//! examples need no network. A real host passes its own trust anchors and an HTTP transport
+//! instead.
 #![allow(dead_code)]
 
 use oncl_core::keys::{
@@ -14,7 +14,6 @@ use oncl_core::keys::{
 use oncl_core::{Engine, EngineServices, OperationError, ValidationServices};
 use oncl_pki::{
     cert,
-    crl::MockCrl,
     http::{HttpError, HttpReply, HttpRequest, HttpTransport},
     key::PrivateKey,
     keygen::{self, KeySpec},
@@ -24,8 +23,8 @@ use oncl_pki::{
     validation::NetworkPolicy,
 };
 use rcgen::{
-    CertificateParams, CrlDistributionPoint, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
-    KeyUsagePurpose, SerialNumber,
+    CertificateParams, CertificateRevocationListParams, CrlDistributionPoint, DistinguishedName,
+    DnType, IsCa, Issuer, KeyIdMethod, KeyPair, KeyUsagePurpose, SerialNumber,
 };
 use std::{
     fs,
@@ -79,6 +78,32 @@ fn name(common_name: &str) -> DistinguishedName {
     dn
 }
 
+/// The name, CA flag and key usages of the demo root (what its certificate and its CRLs
+/// share).
+fn root_params() -> CertificateParams {
+    let mut params = CertificateParams::default();
+    params.distinguished_name = name("OpenNCALayer SDK example root");
+    params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+    params
+}
+
+/// The demo CA's CRL distribution point, answering every request with its CRL.
+pub struct DemoCrl {
+    der: Vec<u8>,
+}
+
+impl HttpTransport for DemoCrl {
+    fn send(&self, _: &HttpRequest<'_>) -> Result<HttpReply, HttpError> {
+        Ok(HttpReply {
+            status: 200,
+            content_type: Some("application/pkix-crl".to_owned()),
+            location: None,
+            body: self.der.clone(),
+        })
+    }
+}
+
 impl DemoPki {
     /// Issues a new root and a user key under it and writes both as PKCS#12 into `dir`.
     pub fn create(dir: &Path) -> DemoPki {
@@ -88,13 +113,10 @@ impl DemoPki {
         let root_pair = rcgen_key(&root_key);
         let user_pair = rcgen_key(&user_key);
 
-        let mut root_params = CertificateParams::default();
-        root_params.distinguished_name = name("OpenNCALayer SDK example root");
+        let mut root_params = root_params();
         root_params.serial_number = Some(SerialNumber::from(vec![0x5d, 0x01]));
         root_params.not_before = now - Duration::hours(1);
         root_params.not_after = now + Duration::days(2);
-        root_params.is_ca = IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        root_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         let root_cert = root_params.clone().self_signed(&root_pair).unwrap();
 
         let mut user_params = CertificateParams::default();
@@ -152,9 +174,24 @@ impl DemoPki {
         KeySelector::inline(self.user_p12.clone(), None)
     }
 
-    /// The in-process distribution point of the demo CA.
-    pub fn crl_responder(&self) -> MockCrl {
-        MockCrl::new(self.root.clone())
+    /// The in-process distribution point of the demo CA: a CRL of the demo root, current
+    /// for an hour, revoking nothing.
+    pub fn crl_responder(&self) -> DemoCrl {
+        let now = OffsetDateTime::now_utc();
+        let root_pair = rcgen_key(&self.root.key);
+        let crl = CertificateRevocationListParams {
+            this_update: now - Duration::minutes(1),
+            next_update: now + Duration::hours(1),
+            crl_number: SerialNumber::from(vec![1]),
+            issuing_distribution_point: None,
+            revoked_certs: Vec::new(),
+            key_identifier_method: KeyIdMethod::Sha256,
+        }
+        .signed_by(&Issuer::new(root_params(), &root_pair))
+        .unwrap();
+        DemoCrl {
+            der: crl.der().to_vec(),
+        }
     }
 
     /// Trust, status transport and clock for `Engine`: the demo root is the only anchor.

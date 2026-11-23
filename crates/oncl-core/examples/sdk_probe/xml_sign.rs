@@ -22,14 +22,13 @@ use oncl_pki::{
     io::{Region, Source, TemporaryStore},
     key::{HashAlg, SigAlg},
     keygen::{self, KeySpec},
-    ocsp::MockOcsp,
     pkcs12::{self, KeyEntry},
     pkix::CaSet,
     resource::{ResourceLimits, SharedBudget},
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaProfile, TsaSpec},
+    tsp::{TsaProfile, TsaSpec},
     validation::{NetworkPolicy, Verdict},
 };
+use oncl_pki_testing::{MockOcsp, MockTsa, TestCertSpec, issue_cert};
 use std::{
     error::Error,
     fmt::Write as _,

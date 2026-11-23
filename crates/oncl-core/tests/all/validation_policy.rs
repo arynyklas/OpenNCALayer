@@ -10,18 +10,19 @@ use oncl_core::{
 };
 use oncl_pki::cert::{self, Certificate};
 use oncl_pki::cms::{self, AttrSpec, CertSpec, CoSign, Content, SignSpec};
-use oncl_pki::crl::MockCrl;
 use oncl_pki::digest::HashState;
-use oncl_pki::http::{
-    GetOptions, HttpError, HttpReply, HttpRequest, HttpTransport, RouteTransport, UreqTransport,
-};
+use oncl_pki::http::{GetOptions, HttpError, HttpReply, HttpRequest, HttpTransport, UreqTransport};
 use oncl_pki::key::{AppliedState, HashAlg, SigAlg};
-use oncl_pki::ocsp::{CertStatus, MockOcsp};
+use oncl_pki::ocsp::CertStatus;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
 use oncl_pki::resource::{OperationControl, ProcessingError, Progress, ResourceLimits};
-use oncl_pki::tsp::{self, MockTsa, SignerSel, StampMode, TokenForm, TsaProfile, TsaSpec};
+use oncl_pki::tsp::{self, SignerSel, StampMode, TokenForm, TsaProfile, TsaSpec};
 use oncl_pki::validation::{CheckStatus, NetworkPolicy, TimeBasis, Verdict};
+use oncl_pki_testing::MockCrl;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::MockTsa;
+use oncl_pki_testing::RouteTransport;
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -600,7 +601,7 @@ fn with_internal_urls() -> Vec<u8> {
         tlv(input[0], any.value())
     }
     let mut leaf = entry("inter-user-gost2015-sign");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&leaf.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&leaf.cert);
     for extension in &mut spec.extensions {
         let oid = extension.extn_id.to_string();
         if oid == "1.3.6.1.5.5.7.1.1" || oid == "2.5.29.31" {
@@ -608,7 +609,7 @@ fn with_internal_urls() -> Vec<u8> {
                 der::asn1::OctetString::new(rewrite(extension.extn_value.as_bytes())).unwrap();
         }
     }
-    leaf.cert = oncl_pki::testing::issue_cert(&entry("inter-gost2015.key"), spec);
+    leaf.cert = oncl_pki_testing::issue_cert(&entry("inter-gost2015.key"), spec);
     signed_entry(&leaf)
 }
 #[test]
@@ -1109,9 +1110,9 @@ fn offline_embedded_revocation_reports_invalid_without_network() {
 #[test]
 fn trusted_but_unrelated_ocsp_responder_cannot_authorize_signer_status() {
     let mut responder = entry("ocsp-gost2015");
-    responder.cert = oncl_pki::testing::issue_cert(
+    responder.cert = oncl_pki_testing::issue_cert(
         &entry("root-gost2015.key"),
-        oncl_pki::testing::TestCertSpec::from_cert(&responder.cert),
+        oncl_pki_testing::TestCertSpec::from_cert(&responder.cert),
     );
     let transport = Arc::new(RouteTransport::new(vec![(
         "http://ocsp.synthetic.test".into(),
@@ -1199,9 +1200,9 @@ fn rewrite_fixture_uris(input: &[u8], uri: &[u8]) -> Vec<u8> {
 impl TsaFixture {
     fn new(ocsp_url: &str) -> Self {
         let mut authority = entry("user-gost2015-sign");
-        let original = oncl_pki::testing::TestCertSpec::from_cert(&authority.cert);
+        let original = oncl_pki_testing::TestCertSpec::from_cert(&authority.cert);
         let mut ca_spec =
-            oncl_pki::testing::TestCertSpec::from_cert(&entry("inter-gost2015.key").cert);
+            oncl_pki_testing::TestCertSpec::from_cert(&entry("inter-gost2015.key").cert);
         ca_spec.subject = original.subject;
         ca_spec.public_key = original.public_key;
         ca_spec.serial = vec![0x71, 0x04];
@@ -1214,11 +1215,11 @@ impl TsaFixture {
                 .unwrap();
             }
         }
-        authority.cert = oncl_pki::testing::issue_cert(&entry("root-gost2015.key"), ca_spec);
+        authority.cert = oncl_pki_testing::issue_cert(&entry("root-gost2015.key"), ca_spec);
         let mut signer = entry("tsa-gost2015");
-        let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&signer.cert);
+        let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&signer.cert);
         let leaf =
-            oncl_pki::testing::TestCertSpec::from_cert(&entry("inter-user-gost2015-sign").cert);
+            oncl_pki_testing::TestCertSpec::from_cert(&entry("inter-user-gost2015-sign").cert);
         spec.extensions.retain(|ext| {
             !matches!(
                 ext.extn_id.to_string().as_str(),
@@ -1240,11 +1241,11 @@ impl TsaFixture {
                 spec.extensions.push(extension);
             }
         }
-        signer.cert = oncl_pki::testing::issue_cert(&authority, spec);
+        signer.cert = oncl_pki_testing::issue_cert(&authority, spec);
         let mut responder = entry("ocsp-gost2015");
-        responder.cert = oncl_pki::testing::issue_cert(
+        responder.cert = oncl_pki_testing::issue_cert(
             &authority,
-            oncl_pki::testing::TestCertSpec::from_cert(&responder.cert),
+            oncl_pki_testing::TestCertSpec::from_cert(&responder.cert),
         );
         Self {
             authority,

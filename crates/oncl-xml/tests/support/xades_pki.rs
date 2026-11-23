@@ -3,17 +3,15 @@
 //! signer producing a baseline XAdES document at the requested level.
 #![allow(dead_code)]
 use oncl_pki::{
-    crl::MockCrl,
     evidence::AdesLevel,
-    http::{HttpError, HttpReply, HttpRequest, HttpTransport, RouteTransport},
+    http::{HttpError, HttpReply, HttpRequest, HttpTransport},
     io::{Source, TemporaryStore},
-    ocsp::MockOcsp,
     pkcs12::{KeyEntry, load},
     resource::{OperationControl, ProcessingError, Progress, ResourceLimits, SharedBudget},
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaProfile, TsaSpec},
+    tsp::{TsaProfile, TsaSpec},
     validation::{NetworkPolicy, ValidationContext, ValidationPolicy},
 };
+use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
 use oncl_testkit::{read, synthetic};
 use oncl_xml::{
     XmlSignProfile,
@@ -111,12 +109,14 @@ impl Pki {
     /// The root's complete CRL: `revoked` unrelated serials and, when asked, the signer in
     /// the middle of the list; `wrong_key` makes the list not issued by the root.
     pub fn crl(&self, revoked: u32, revoke_signer: bool, wrong_key: bool) -> Vec<u8> {
-        let mut crl = MockCrl::new(key("root-gost2015.key"))
+        // Not issued by the root: its name, another GOST-2015 key (the TSA's).
+        let mut issuer = key("root-gost2015.key");
+        if wrong_key {
+            issuer.key = key("tsa-gost2015").key;
+        }
+        let mut crl = MockCrl::new(issuer)
             .with_this_update(NOW - time::Duration::MINUTE)
             .next_update(Some(NOW + time::Duration::HOUR));
-        if wrong_key {
-            crl = crl.wrong_key();
-        }
         let serial = self.serial();
         for index in 0..revoked {
             if revoke_signer && index == revoked / 2 {

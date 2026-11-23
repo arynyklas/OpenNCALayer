@@ -10,11 +10,10 @@ use der::{
 };
 use oncl_pki::{
     http::{GetOptions, HttpRequest, HttpTransport},
-    ocsp::{MockOcsp, request_der},
+    ocsp::request_der,
     pkcs12::{self, KeyEntry},
-    testing::{TestCertSpec, issue_cert},
-    tsp::MockTsa,
 };
+use oncl_pki_testing::{MockOcsp, MockTsa, TestCertSpec, issue_cert};
 use std::{
     error::Error,
     io::{Read, Write},

@@ -102,7 +102,7 @@ pub fn run(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
         "Qwerty12",
     )?
     .remove(0);
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&first.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&first.cert);
     spec.public_key = second
         .cert
         .tbs_certificate()
@@ -111,7 +111,7 @@ pub fn run(out: &Path) -> Result<(), Box<dyn std::error::Error>> {
     spec.serial = vec![0x70, 0x02];
     spec.extensions
         .retain(|e| e.extn_id.to_string() != "2.5.29.14");
-    second.cert = oncl_pki::testing::issue_cert(&super::fixture_entry("inter-gost2015.key"), spec);
+    second.cert = oncl_pki_testing::issue_cert(&super::fixture_entry("inter-gost2015.key"), spec);
     let first_certificate = first.cert.to_der()?;
     let second_certificate = second.cert.to_der()?;
     if first.cert.tbs_certificate().subject_public_key_info()

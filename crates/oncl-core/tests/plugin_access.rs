@@ -722,7 +722,8 @@ fn forbidden_bound_token_sends_no_apdu() {
 
 #[test]
 fn explicit_pki_endpoint_grants_are_not_guest_http_authority() {
-    use oncl_pki::{http::*, pkix::CaSet, tsp::MockTsa, validation::NetworkPolicy};
+    use oncl_pki::{http::*, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::MockTsa;
     use std::sync::Arc;
     struct Counted {
         tsa: MockTsa,
@@ -1037,7 +1038,8 @@ fn mandatory_private_status_checks_require_invocation_pki_grants() {
 
 #[test]
 fn root_pki_get_grant_is_not_a_fixed_path_or_post_wildcard() {
-    use oncl_pki::{http::*, pkix::CaSet, tsp::MockTsa, validation::NetworkPolicy};
+    use oncl_pki::{http::*, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::MockTsa;
     use std::sync::{Arc, atomic::AtomicUsize};
     struct Counted {
         inner: MockTsa,
@@ -1132,9 +1134,9 @@ fn assert_bound_chain_admission(import: Import) {
     let issuer = crypto::raw("root-gost2015.key");
     let mut chain = vec![issuer.cert.clone(); 8192];
     for ordinal in 1u16..=32 {
-        let mut certificate = oncl_pki::testing::TestCertSpec::from_cert(&issuer.cert);
+        let mut certificate = oncl_pki_testing::TestCertSpec::from_cert(&issuer.cert);
         certificate.serial = ordinal.to_be_bytes().to_vec();
-        chain.push(oncl_pki::testing::issue_cert(&issuer, certificate));
+        chain.push(oncl_pki_testing::issue_cert(&issuer, certificate));
     }
     let methods = [import];
     let p = permission(&methods, &keys);
@@ -1443,8 +1445,8 @@ fn actual_wasm_nonroot_ocsp_binding_uses_real_pinned_http_only_after_exact_grant
         http::{HttpMethod, ProxySetting, UreqTransport},
         key::PrivateKey,
         pkcs12,
-        testing::{TestCertSpec, issue_cert},
     };
+    use oncl_pki_testing::{TestCertSpec, issue_cert};
     use std::sync::Arc;
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
