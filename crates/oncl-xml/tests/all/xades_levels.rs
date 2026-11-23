@@ -2282,29 +2282,30 @@ fn serial_hex(key: &oncl_pki::pkcs12::KeyEntry) -> String {
         .collect()
 }
 
-/// Every control case must not be Valid at any verification time (signing may itself
-/// already refuse it: then the case is rejected at signing).
-fn lt_control_never_valid(
+/// A control case: signing at `sign_now` must be refused by the final validation for the
+/// signer's revocation status (the status evidence is stale, forged, for another
+/// certificate, from an unauthorized responder, or says revoked), so no document exists.
+/// Each call also signs the same level with the good responders first, so the refusal is
+/// the case's and not the fixture's.
+fn lt_control_refused_at_signing(
     label: &str,
     pki: &mut Pki,
     level: oncl_pki::evidence::AdesLevel,
     sign_now: time::OffsetDateTime,
 ) {
-    use oncl_pki::validation::Verdict;
-    let Ok((bytes, signed)) = lt_sign(pki, level, sign_now) else {
-        return;
-    };
-    if signed == Verdict::Valid {
-        // Sign-time evidence is judged as Valid there: it must be judged so only if the
-        // evidence is in order at every later time too, so verify later.
-    }
-    for delta in [
-        time::Duration::ZERO,
-        time::Duration::HOUR,
-        time::Duration::DAY,
-    ] {
-        let (verdict, ..) = lt_verify(pki, &bytes, T0 + delta, ValidationPolicy::StrictOnline);
-        assert_ne!(verdict, Verdict::Valid, "{label} {level:?} +{delta}");
+    let (_, good) = lt_sign(&mut Pki::at("user-rsa-sign", T0), level, sign_now)
+        .unwrap_or_else(|e| panic!("control {label} {level:?}: good responders refused: {e}"));
+    assert_eq!(
+        good,
+        oncl_pki::validation::Verdict::Valid,
+        "control {label} {level:?}"
+    );
+    match lt_sign(pki, level, sign_now) {
+        Ok((_, verdict)) => panic!("{label} {level:?}: signed ({verdict:?}), expected a refusal"),
+        Err(e) => assert!(
+            e.contains("final XAdES validation failed: signer revocation status"),
+            "{label} {level:?}: refused for another reason: {e}"
+        ),
     }
 }
 
@@ -2355,7 +2356,7 @@ fn lt_lta_control_cases_stay_rejected_at_proof_time() {
         let mut pki = Pki::at("user-rsa-sign", T0).with_ocsp(|r, _| {
             MockOcsp::new(r).with_now(T0 - time::Duration::hours(2) + time::Duration::MINUTE)
         });
-        lt_control_never_valid("stale", &mut pki, level, T0);
+        lt_control_refused_at_signing("stale", &mut pki, level, T0);
         // From the future of the verifier: minted two hours after the proof, verified
         // an hour after it.
         let mut pki = Pki::at_split("user-rsa-sign", T0 + time::Duration::hours(2), T0, None);
@@ -2391,14 +2392,14 @@ fn lt_lta_control_cases_stay_rejected_at_proof_time() {
             });
             pki
         };
-        lt_control_never_valid("revoked at P", &mut pki, level, T0);
+        lt_control_refused_at_signing("revoked at P", &mut pki, level, T0);
         // The response's signature is wrong: the responder's certificate, the TSA's key.
         let mut pki = Pki::at("user-rsa-sign", T0).with_ocsp(|mut r, tsa| {
             assert_eq!(r.key.alg(), tsa.key.alg());
             r.key = tsa.key;
             MockOcsp::new(r).with_now(T0)
         });
-        lt_control_never_valid("bad signature", &mut pki, level, T0);
+        lt_control_refused_at_signing("bad signature", &mut pki, level, T0);
         // The CertID is another certificate's: the answer is for the signer's serial number
         // with its lowest bit flipped.
         let pki = Pki::at("user-rsa-sign", T0);
@@ -2407,11 +2408,11 @@ fn lt_lta_control_cases_stay_rejected_at_proof_time() {
             ocsp: MockOcsp::new(r).with_now(T0),
             request: other,
         });
-        lt_control_never_valid("wrong CertID", &mut pki, level, T0);
+        lt_control_refused_at_signing("wrong CertID", &mut pki, level, T0);
         // The responder is not an OCSP responder.
         let mut pki =
             Pki::at("user-rsa-sign", T0).with_ocsp(|_, tsa| MockOcsp::new(tsa).with_now(T0));
-        lt_control_never_valid("not authorized", &mut pki, level, T0);
+        lt_control_refused_at_signing("not authorized", &mut pki, level, T0);
     }
 }
 
