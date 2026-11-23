@@ -12,7 +12,7 @@ use oncl_builtin_tests::{SOURCES, accessory, applet, basics, commonutils};
 use oncl_pki::cms::SignOptions;
 use oncl_pki::info::cert_info;
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::core::{Bundles, CoreHooks, UiCallback};
 use oncl_plugin::{BuiltinLimits, Builtins, Engine, HostServices};
 use oncl_protocol::{AddInfo, Reply};

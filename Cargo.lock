@@ -4174,6 +4174,7 @@ dependencies = [
  "oncl-builtins-build",
  "oncl-flows",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-protocol",
  "oncl-testkit",

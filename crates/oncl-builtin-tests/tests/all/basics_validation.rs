@@ -14,16 +14,17 @@ use oncl_flows::{
     Prompt, Prompter, StorageAnswer, StorageKind, StoragePrompt, availabilities,
 };
 use oncl_pki::cert::{self, Certificate};
-use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
+use oncl_pki::http::{HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::info::{CertInfo, cert_info};
-use oncl_pki::ocsp::{CertStatus, MockOcsp, OcspTamper};
+use oncl_pki::ocsp::CertStatus;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
+use oncl_pki_testing::MockOcsp;
 use oncl_protocol::{AddInfo, Module};
 use oncl_testkit::{fixture, read, synthetic, synthetic_cert};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, Mutex, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 use time::OffsetDateTime;
@@ -44,14 +45,104 @@ fn serial(name: &str) -> String {
 }
 
 /// The synthetic responder, answering `revoked` for `inter-revoked-…` and `good` otherwise.
-fn responder() -> MockOcsp {
-    MockOcsp::new(entry("ocsp-gost2015")).status(
+fn responder() -> Responder {
+    responder_signing_with(entry("ocsp-gost2015"))
+}
+
+/// The responder of [`responder`] signing as `signer`.
+fn responder_signing_with(signer: KeyEntry) -> Responder {
+    Responder::new(MockOcsp::new(signer).status(
         &serial("inter-revoked-gost2015-sign"),
         CertStatus::Revoked {
             time: REVOKED_AT,
             reason: Some(1),
         },
-    )
+    ))
+}
+
+/// The responder of [`responder`] with the responder certificate but another GOST-2015 key
+/// (the TSA's): every answer fails verification. Spoiled answers of every other kind are
+/// the business of the tests of `oncl-pki`; this one is the representative here.
+fn wrong_key_responder() -> Responder {
+    let mut signer = entry("ocsp-gost2015");
+    signer.key = entry("tsa-gost2015").key;
+    responder_signing_with(signer)
+}
+
+/// How a [`Responder`] misbehaves on the wire; its OCSP answers stay correct.
+#[derive(Clone, Copy, Debug)]
+enum Wire {
+    /// No answer for this long: past the request timeout a timeout error once the timeout
+    /// has elapsed, else the answer after it.
+    Hang(Duration),
+    /// This HTTP status, a `text/plain` body.
+    HttpStatus(u16),
+}
+
+/// A `MockOcsp` behind a connection that may misbehave; every requested URL is recorded.
+struct Responder {
+    ocsp: MockOcsp,
+    wire: Option<Wire>,
+    calls: Mutex<Vec<String>>,
+}
+
+impl Responder {
+    fn new(ocsp: MockOcsp) -> Self {
+        Responder {
+            ocsp,
+            wire: None,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn status(self, serial_hex: &str, status: CertStatus) -> Self {
+        Responder {
+            ocsp: self.ocsp.status(serial_hex, status),
+            ..self
+        }
+    }
+
+    fn wire(self, wire: Wire) -> Self {
+        Responder {
+            wire: Some(wire),
+            ..self
+        }
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl HttpTransport for Responder {
+    fn send(&self, request: &HttpRequest<'_>) -> Result<HttpReply, HttpError> {
+        self.calls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(request.url.to_owned());
+        match self.wire {
+            Some(Wire::Hang(hang)) => {
+                let timeout = request.opts.timeout;
+                thread::sleep(hang.min(timeout));
+                if hang > timeout {
+                    return Err(HttpError::new(HttpErrorKind::Timeout, "timed out"));
+                }
+            }
+            Some(Wire::HttpStatus(status)) => {
+                return Ok(HttpReply {
+                    status,
+                    content_type: Some("text/plain".to_owned()),
+                    location: None,
+                    body: b"unwell".to_vec(),
+                });
+            }
+            None => {}
+        }
+        self.ocsp.send(request)
+    }
 }
 
 /// PEM of the synthetic certificate `name`, lines ended by `nl`.
@@ -427,7 +518,7 @@ fn settled(keys: &[(Certificate, CertInfo)], http: &Arc<dyn HttpTransport>) -> V
 fn ocsp_unreachable_keeps_key_enabled() {
     // A responder hanging past the request timeout: the dialog opens with the key being
     // checked, the request fails, and the key becomes enabled.
-    let ocsp = Arc::new(responder().tamper(OcspTamper::Hang(Duration::from_secs(30))));
+    let ocsp = Arc::new(responder().wire(Wire::Hang(Duration::from_secs(30))));
     let (basics, prompter) = module(
         vec![open("inter-revoked-gost2015-sign"), Step::CancelKey],
         ocsp.clone(),
@@ -496,7 +587,7 @@ fn dialog_opens_while_the_responder_hangs() {
     // The responder answers `good` after 2 s: the key dialog is up long before, with the
     // key pending; the pick comes once it is enabled and signs.
     let hang = Duration::from_secs(2);
-    let ocsp = Arc::new(responder().tamper(OcspTamper::Hang(hang)));
+    let ocsp = Arc::new(responder().wire(Wire::Hang(hang)));
     let dialog = Arc::new(Barrier::new(2));
     let (basics, prompter) = module(
         vec![
@@ -529,7 +620,7 @@ fn dialog_opens_while_the_responder_hangs() {
 
     // The dialog does not wait for the checks: the key list is back at once.
     let keys = [key("inter-user-gost2015-sign")];
-    let http: Arc<dyn HttpTransport> = Arc::new(responder().tamper(OcspTamper::Hang(hang)));
+    let http: Arc<dyn HttpTransport> = Arc::new(responder().wire(Wire::Hang(hang)));
     let start = Instant::now();
     let live = availabilities(
         &inter_filter(),
@@ -563,7 +654,7 @@ fn revoked_update_keeps_the_key_unselectable() {
                 reason: None,
             },
         )
-        .tamper(OcspTamper::Hang(Duration::from_millis(500)));
+        .wire(Wire::Hang(Duration::from_millis(500)));
     let http: Arc<dyn HttpTransport> = Arc::new(ocsp);
     let live = availabilities(
         &inter_filter(),
@@ -665,7 +756,7 @@ fn unreachable_responder_is_skipped_for_10_min() {
     assert_eq!(refused.calls(), 3);
 
     // A responder that answers, even with an error status, is asked every time.
-    let ocsp = Arc::new(responder().tamper(OcspTamper::HttpStatus(503)));
+    let ocsp = Arc::new(responder().wire(Wire::HttpStatus(503)));
     let http: Arc<dyn HttpTransport> = ocsp.clone();
     let cache = Arc::new(OcspCache::new());
     settled_at(&keys[..1], &http, &cache, now);
@@ -700,21 +791,12 @@ fn verified_answers_are_remembered() {
     );
     assert_eq!(ocsp.calls().len(), 4);
 
-    // Without nextUpdate, until thisUpdate + 300 s: thisUpdate 4 min ago leaves a minute.
-    let ocsp = Arc::new(responder().tamper(OcspTamper::NoNextUpdate {
-        age: Duration::from_secs(240),
-    }));
-    let http: Arc<dyn HttpTransport> = ocsp.clone();
-    let cache = Arc::new(OcspCache::new());
+    // How long an answer without nextUpdate lasts is `OcspCache`'s own unit test
+    // (oncl-flows), with no responder.
     let user = &keys[..1];
-    settled_at(user, &http, &cache, now);
-    settled_at(user, &http, &cache, now + time::Duration::seconds(30));
-    assert_eq!(ocsp.calls().len(), 1);
-    settled_at(user, &http, &cache, now + 2 * minute);
-    assert_eq!(ocsp.calls().len(), 2);
 
     // Answers that fail verification are not remembered.
-    let ocsp = Arc::new(responder().tamper(OcspTamper::WrongKey));
+    let ocsp = Arc::new(wrong_key_responder());
     let http: Arc<dyn HttpTransport> = ocsp.clone();
     let cache = Arc::new(OcspCache::new());
     settled_at(&keys[1..], &http, &cache, now);
@@ -749,7 +831,7 @@ fn ocsp_checks_run_in_parallel() {
         Availability::Revoked { time: REVOKED_AT },
         Availability::Enabled,
     ];
-    let timed = |ocsp: MockOcsp| {
+    let timed = |ocsp: Responder| {
         let ocsp = Arc::new(ocsp);
         let http: Arc<dyn HttpTransport> = ocsp.clone();
         let start = Instant::now();
@@ -764,7 +846,7 @@ fn ocsp_checks_run_in_parallel() {
     // Each answer delayed by `hang`: at once they add about `hang`, one after the other
     // they would add three times as much.
     let hang = Duration::from_millis(1500);
-    let elapsed = timed(responder().tamper(OcspTamper::Hang(hang)));
+    let elapsed = timed(responder().wire(Wire::Hang(hang)));
     assert!(
         elapsed < baseline + 2 * hang,
         "{elapsed:?}, baseline {baseline:?}"
@@ -773,37 +855,23 @@ fn ocsp_checks_run_in_parallel() {
 
 #[test]
 fn tampered_ocsp_never_revokes() {
-    let check = |ocsp: MockOcsp| {
+    // How a PKI failure reaches the key list: a refused answer or a failed request leaves
+    // the key enabled, never revoked. Which answers `ocsp::check` refuses is the matrix of
+    // the tests of `oncl-pki`; one refused answer and one HTTP failure stand for it here.
+    let check = |ocsp: Responder| {
         let ocsp = Arc::new(ocsp);
         let http: Arc<dyn HttpTransport> = ocsp.clone();
         let shown = settled(&[key("inter-revoked-gost2015-sign")], &http);
         assert_eq!(ocsp.calls().len(), 1);
         shown.into_iter().next().unwrap()
     };
-    let hour = Duration::from_secs(3600);
-    // Answers `ocsp::check` refuses: the key stays enabled.
-    for tamper in [
-        OcspTamper::WrongKey,
-        OcspTamper::NoCerts,
-        OcspTamper::OtherResponderId,
-        OcspTamper::OtherCertId,
-        OcspTamper::NoSingleResponse,
-        OcspTamper::Stale,
-        OcspTamper::FutureThisUpdate,
-        OcspTamper::ThisUpdateAhead(hour),
-        OcspTamper::NoNextUpdate { age: hour },
-        OcspTamper::HttpStatus(503),
-        OcspTamper::ContentType("text/html"),
-        OcspTamper::Garbage,
-    ] {
-        assert_eq!(
-            check(responder().tamper(tamper)),
-            Availability::Enabled,
-            "{tamper:?}"
-        );
-    }
+    assert_eq!(check(wrong_key_responder()), Availability::Enabled);
+    assert_eq!(
+        check(responder().wire(Wire::HttpStatus(503))),
+        Availability::Enabled
+    );
     // A responder without id-pkix-ocsp-nocheck is not trusted.
-    let nocheckless = MockOcsp::new(entry("ocsp-nocheckless-gost2015")).status(
+    let nocheckless = Responder::new(MockOcsp::new(entry("ocsp-nocheckless-gost2015"))).status(
         &serial("inter-revoked-gost2015-sign"),
         CertStatus::Revoked {
             time: REVOKED_AT,
@@ -811,22 +879,13 @@ fn tampered_ocsp_never_revokes() {
         },
     );
     assert_eq!(check(nocheckless), Availability::Enabled);
-    // Variants that still give a valid answer revoke.
-    let minute = Duration::from_secs(60);
-    for tamper in [
-        OcspTamper::None,
-        OcspTamper::ByKeyResponderId,
-        OcspTamper::ContentType("application/ocsp-response"),
-        OcspTamper::ThisUpdateAhead(minute),
-        OcspTamper::NoNextUpdate { age: minute },
-        OcspTamper::Hang(Duration::from_millis(100)),
-    ] {
-        assert_eq!(
-            check(responder().tamper(tamper)),
-            Availability::Revoked { time: REVOKED_AT },
-            "{tamper:?}"
-        );
-    }
+    // A valid answer revokes, also one that comes late within the timeout.
+    let revoked = Availability::Revoked { time: REVOKED_AT };
+    assert_eq!(check(responder()), revoked);
+    assert_eq!(
+        check(responder().wire(Wire::Hang(Duration::from_millis(100)))),
+        revoked
+    );
 }
 
 #[test]
@@ -1007,7 +1066,7 @@ impl Prompter for Hasty {
 fn picking_a_key_still_being_checked_is_refused() {
     // The responder answers `good` after a second: a pick while the key is pending (a click
     // racing the update) is refused at the answer and the dialog asks again.
-    let ocsp = Arc::new(responder().tamper(OcspTamper::Hang(Duration::from_secs(1))));
+    let ocsp = Arc::new(responder().wire(Wire::Hang(Duration::from_secs(1))));
     let prompter = Arc::new(Hasty::default());
     let basics = Basics::new(
         prompter.clone(),

@@ -9,7 +9,7 @@ use oncl_builtin_tests::panicking::PanicOnKey;
 use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::info::cert_info;
 use oncl_pki::pkcs12::load;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::{BuiltinLimits, Builtins, Engine, HostServices};
 use oncl_protocol::{AddInfo, Reply};
 use oncl_testkit::{read, synthetic};

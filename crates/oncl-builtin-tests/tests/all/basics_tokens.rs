@@ -11,7 +11,7 @@ use oncl_flows::{
 };
 use oncl_pki::cms::verify;
 use oncl_pki::pkcs12::load;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_protocol::{AddInfo, Module};
 use oncl_testkit::{read, synthetic};
 use oncl_token::emulator::{CardSpec, EmuKey, EmulatorBackend, card};

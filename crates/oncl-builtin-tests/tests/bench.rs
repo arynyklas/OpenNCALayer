@@ -21,10 +21,10 @@ use oncl_flows::{
 use oncl_pki::cms::SignOptions;
 use oncl_pki::http::HttpTransport;
 use oncl_pki::info::cert_info;
-use oncl_pki::ocsp::MockOcsp;
 use oncl_pki::pkcs12::{KeyEntry, WriteEntry, WriteOptions, load, write};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::MockTsa;
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use oncl_plugin::{BuiltinLimits, BuiltinStats, Builtins, Engine as WasmEngine, HostServices};
 use oncl_protocol::{AddInfo, Module, Reply};
 use oncl_testkit::{read, synthetic, synthetic_cert};

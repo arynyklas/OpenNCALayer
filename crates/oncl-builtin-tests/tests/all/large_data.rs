@@ -13,7 +13,7 @@ use oncl_pki::cms::SignOptions;
 use oncl_pki::info::cert_info;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_protocol::{AddInfo, Module};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use serde_json::{Value, json};
