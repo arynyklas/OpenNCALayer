@@ -190,6 +190,9 @@ impl HttpTransport for FixedOcsp {
         Ok(reply)
     }
 }
+/// The committed CRLs of the synthetic PKI at the validation time (`cargo xtask
+/// gen-fixtures`): the root's and the intermediate's, current or stale (nextUpdate before
+/// [`NOW`]), the intermediate's listing `inter-revoked-…` at [`REVOKED`] when `revoked`.
 struct FixedCrl {
     revoked: bool,
     stale: bool,
@@ -197,42 +200,24 @@ struct FixedCrl {
 impl HttpTransport for FixedCrl {
     fn send(&self, request: &HttpRequest<'_>) -> Result<HttpReply, HttpError> {
         let issuer = if request.url.ends_with("/root-gost2015.crl") {
-            "root-gost2015.key"
+            "root-gost2015"
+        } else if self.revoked {
+            "inter-gost2015-revoked"
         } else {
-            "inter-gost2015.key"
+            "inter-gost2015"
         };
-        let key = entry(issuer);
-        let mut source = MockCrl::new(entry(issuer));
-        if self.revoked && issuer == "inter-gost2015.key" {
-            source = source.revoke(
-                entry("inter-revoked-gost2015-sign")
-                    .cert
-                    .tbs_certificate()
-                    .serial_number()
-                    .as_bytes(),
-                REVOKED,
-            );
-        }
-        let mut crl = children(&source.der());
-        let mut tbs = children(&crl[0]);
-        tbs[3] = tlv(0x17, b"261102115900Z");
-        tbs[4] = tlv(
-            0x17,
-            if self.stale {
-                b"261102115930Z"
-            } else {
-                b"261102130000Z"
-            },
-        );
-        crl[0] = seq(&tbs);
-        crl[2] = bit_signature(&key, &crl[0]);
+        let stale = if self.stale { "-stale" } else { "" };
         Ok(HttpReply {
             status: 200,
             content_type: Some("application/pkix-crl".into()),
             location: None,
-            body: seq(&crl),
+            body: static_crl(&format!("{issuer}{stale}")),
         })
     }
+}
+/// The committed CRL `synthetic/<name>.crl`.
+fn static_crl(name: &str) -> Vec<u8> {
+    oncl_testkit::read(oncl_testkit::fixture(&format!("synthetic/{name}.crl")))
 }
 fn pki(status: CertStatus, stale: bool) -> Arc<dyn HttpTransport> {
     let leaf = entry("inter-revoked-gost2015-sign");
@@ -1305,10 +1290,7 @@ impl TsaFixture {
             ("http://ocsp.synthetic.test".into(), document.clone()),
             ("http://crl.synthetic.test".into(), document),
         ];
-        let root = MockCrl::new(entry("root-gost2015.key"))
-            .with_this_update(NOW - time::Duration::MINUTE)
-            .next_update(Some(NOW + time::Duration::HOUR))
-            .der();
+        let root = static_crl("root-gost2015");
         routes.push((TSA_ROOT_CRL.into(), Arc::new(StaticCrl(root))));
         if !matches!(status, TsaStatus::Missing) {
             let serial: String = self
