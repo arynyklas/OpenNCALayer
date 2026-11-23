@@ -28,9 +28,8 @@ use serde_json::Value;
 /// The SDK chain in publication order: every crate comes after the crates it depends on.
 /// `oncl-core` is the entry point; the rest is its transitive closure with every feature and
 /// `oncl-plugin`'s `distribution` feature (through `oncl-update`).
-pub const CHAIN: [&str; 12] = [
+pub const CHAIN: [&str; 11] = [
     "oncl-gost",
-    "oncl-registry",
     "oncl-pki",
     "oncl-pdf",
     "oncl-protocol",

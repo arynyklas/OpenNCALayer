@@ -171,7 +171,12 @@ fn wildcard_match(pattern: &[u8], text: &[u8]) -> bool {
 #[cfg(windows)]
 mod windows {
     use super::InternetOptions;
-    use oncl_registry::{Hive, get_dword, get_string};
+    use std::ptr;
+    use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS};
+    use windows_sys::Win32::System::Registry::{
+        HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, REG_ROUTINE_FLAGS, RRF_RT_DWORD,
+        RRF_RT_REG_SZ, RRF_SUBKEY_WOW6464KEY, RegGetValueW,
+    };
 
     const SETTINGS: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
     const POLICY: &str = r"Software\Policies\Microsoft\Windows\CurrentVersion\Internet Settings";
@@ -179,9 +184,9 @@ mod windows {
     /// Where the options are: the policy choosing per-user or per-machine settings, and
     /// those two.
     pub(super) struct Keys {
-        policy: (Hive, String),
-        user: (Hive, String),
-        machine: (Hive, String),
+        policy: (HKEY, String),
+        user: (HKEY, String),
+        machine: (HKEY, String),
     }
 
     impl Keys {
@@ -189,16 +194,16 @@ mod windows {
         /// `HKCU`.
         pub(super) fn system() -> Keys {
             Keys {
-                policy: (Hive::LocalMachine, POLICY.to_owned()),
-                user: (Hive::CurrentUser, SETTINGS.to_owned()),
-                machine: (Hive::LocalMachine, SETTINGS.to_owned()),
+                policy: (HKEY_LOCAL_MACHINE, POLICY.to_owned()),
+                user: (HKEY_CURRENT_USER, SETTINGS.to_owned()),
+                machine: (HKEY_LOCAL_MACHINE, SETTINGS.to_owned()),
             }
         }
 
         /// All three under `HKCU\<root>\HKCU` and `HKCU\<root>\HKLM`, for tests.
         #[cfg(test)]
         pub(super) fn sandbox(root: &str) -> Keys {
-            let hkcu = Hive::CurrentUser;
+            let hkcu = HKEY_CURRENT_USER;
             Keys {
                 policy: (hkcu, format!(r"{root}\HKLM\{POLICY}")),
                 user: (hkcu, format!(r"{root}\HKCU\{SETTINGS}")),
@@ -211,32 +216,112 @@ mod windows {
     /// machine's when the policy `ProxySettingsPerUser` is 0, otherwise the user's. A value
     /// that cannot be read counts as missing.
     pub(super) fn internet_options(keys: &Keys) -> Option<InternetOptions> {
-        let (policy_hive, policy) = &keys.policy;
-        let per_user = get_dword(*policy_hive, policy, Some("ProxySettingsPerUser"))
-            .ok()
-            .flatten()
-            != Some(0);
-        let (hive, key) = if per_user { &keys.user } else { &keys.machine };
-        let enabled = get_dword(*hive, key, Some("ProxyEnable")).ok().flatten();
-        if enabled.unwrap_or(0) == 0 {
+        let (policy_root, policy) = &keys.policy;
+        let per_user = get_dword(*policy_root, policy, "ProxySettingsPerUser") != Some(0);
+        let (root, key) = if per_user { &keys.user } else { &keys.machine };
+        if get_dword(*root, key, "ProxyEnable").unwrap_or(0) == 0 {
             return None;
         }
-        let server = get_string(*hive, key, Some("ProxyServer")).ok().flatten()?;
         Some(InternetOptions {
-            server,
-            bypass: get_string(*hive, key, Some("ProxyOverride")).ok().flatten(),
+            server: get_string(*root, key, "ProxyServer")?,
+            bypass: get_string(*root, key, "ProxyOverride"),
         })
+    }
+
+    /// The `REG_DWORD` value `name` of `<root>\<key>`.
+    fn get_dword(root: HKEY, key: &str, name: &str) -> Option<u32> {
+        let bytes = get_bytes(root, key, name, RRF_RT_DWORD)?;
+        Some(u32::from_le_bytes(bytes.try_into().ok()?))
+    }
+
+    /// The string (`REG_SZ`) value `name` of `<root>\<key>`, without its terminating NULs.
+    fn get_string(root: HKEY, key: &str, name: &str) -> Option<String> {
+        let bytes = get_bytes(root, key, name, RRF_RT_REG_SZ)?;
+        let mut units: Vec<u16> = bytes
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
+            .collect();
+        while units.last() == Some(&0) {
+            units.pop();
+        }
+        String::from_utf16(&units).ok()
+    }
+
+    /// The bytes of value `name` of `<root>\<key>`, of a type `flags` allows, read in the
+    /// 64-bit registry view of 64-bit Windows by a 32-bit build too (32-bit Windows ignores
+    /// the flag). `None` if the key or the value does not exist, has another type or cannot
+    /// be read, or a path contains NUL (Windows would read only the part before it).
+    fn get_bytes(root: HKEY, key: &str, name: &str, flags: REG_ROUTINE_FLAGS) -> Option<Vec<u8>> {
+        let wide = |s: &str| {
+            (!s.contains('\0')).then(|| s.encode_utf16().chain([0]).collect::<Vec<u16>>())
+        };
+        let (key, name) = (wide(key)?, wide(name)?);
+        let mut buf = vec![0_u8; 256];
+        loop {
+            let mut size = u32::try_from(buf.len()).ok()?;
+            // SAFETY: `root` is a predefined key; `key` and `name` are NUL-terminated and
+            // outlive the call; `buf` is writable for `size` bytes; the type is not asked for.
+            let status = unsafe {
+                RegGetValueW(
+                    root,
+                    key.as_ptr(),
+                    name.as_ptr(),
+                    flags | RRF_SUBKEY_WOW6464KEY,
+                    ptr::null_mut(),
+                    buf.as_mut_ptr().cast(),
+                    &mut size,
+                )
+            };
+            match status {
+                // `size` counts the bytes written.
+                ERROR_SUCCESS => {
+                    buf.truncate(size as usize);
+                    return Some(buf);
+                }
+                // The value is longer than `buf`: `size` is its length.
+                ERROR_MORE_DATA if size as usize > buf.len() => buf.resize(size as usize, 0),
+                _ => return None,
+            }
+        }
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use oncl_registry::{TestKey, set_dword, set_string};
+        use oncl_winreg::{Hive, delete_tree, set_dword, set_string};
+
+        /// A key `HKCU\Software\OpenNCALayer-test-<pid>-<n>-<time>` (nothing is created until
+        /// a value is written), deleted with its subkeys when dropped, also when the test
+        /// fails.
+        struct TestKey(String);
+
+        impl TestKey {
+            fn new() -> TestKey {
+                use std::sync::atomic::{AtomicU64, Ordering};
+                static NEXT: AtomicU64 = AtomicU64::new(0);
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_nanos());
+                TestKey(format!(
+                    r"Software\OpenNCALayer-test-{:x}-{}-{nanos:x}",
+                    std::process::id(),
+                    NEXT.fetch_add(1, Ordering::Relaxed)
+                ))
+            }
+        }
+
+        impl Drop for TestKey {
+            fn drop(&mut self) {
+                let _ = delete_tree(&self.0);
+            }
+        }
 
         #[test]
         fn options_are_read_from_the_user_or_the_machine() {
             let root = TestKey::new();
-            let keys = Keys::sandbox(root.path());
+            let keys = Keys::sandbox(&root.0);
             let (user, machine, policy) = (&keys.user.1, &keys.machine.1, &keys.policy.1);
             assert_eq!(internet_options(&keys), None);
 
@@ -275,6 +360,73 @@ mod windows {
             // A value of the wrong type counts as missing.
             set_string(user, Some("ProxyEnable"), "1").unwrap();
             assert_eq!(internet_options(&keys), None);
+        }
+
+        /// The reader returns what the programs' registry crate reads, in the same view, for
+        /// every value the proxy needs, and nothing where that crate reads nothing or fails.
+        #[test]
+        fn values_read_as_the_programs_registry_crate_reads_them() {
+            let root = TestKey::new();
+            let key = format!(r"{}\Values", root.0);
+            set_string(&key, Some("s"), "proxy.corp:3128").unwrap();
+            set_string(&key, Some("empty"), "").unwrap();
+            set_string(&key, Some("long"), &"д".repeat(300)).unwrap();
+            set_dword(&key, Some("d"), 0x0102_0304).unwrap();
+            let shared_string = |hive, key: &str, name| {
+                oncl_winreg::get_string(hive, key, Some(name))
+                    .ok()
+                    .flatten()
+            };
+            let shared_dword = |hive, key: &str, name| {
+                oncl_winreg::get_dword(hive, key, Some(name)).ok().flatten()
+            };
+            let missing = format!(r"{key}\Missing");
+            for (k, name) in [
+                (key.as_str(), "s"),
+                (&key, "empty"),
+                (&key, "long"),
+                (&key, "d"),
+                (&key, "absent"),
+                (&missing, "s"),
+            ] {
+                let hkcu = HKEY_CURRENT_USER;
+                assert_eq!(
+                    get_string(hkcu, k, name),
+                    shared_string(Hive::CurrentUser, k, name),
+                    "{k} {name}"
+                );
+                assert_eq!(
+                    get_dword(hkcu, k, name),
+                    shared_dword(Hive::CurrentUser, k, name),
+                    "{k} {name}"
+                );
+            }
+            assert_eq!(
+                get_string(HKEY_CURRENT_USER, &key, "long"),
+                Some("д".repeat(300))
+            );
+            assert_eq!(get_dword(HKEY_CURRENT_USER, &key, "d"), Some(0x0102_0304));
+
+            // `HKLM`, in the 64-bit view of 64-bit Windows: there `ProgramFilesDir` is
+            // `Program Files`, in the 32-bit view `Program Files (x86)`.
+            let current = r"Software\Microsoft\Windows\CurrentVersion";
+            let nt = r"Software\Microsoft\Windows NT\CurrentVersion";
+            for (k, name) in [(nt, "SystemRoot"), (current, "ProgramFilesDir")] {
+                let value = get_string(HKEY_LOCAL_MACHINE, k, name);
+                assert!(
+                    value.as_deref().is_some_and(|v| !v.is_empty()),
+                    "{k} {name}"
+                );
+                assert_eq!(
+                    value,
+                    shared_string(Hive::LocalMachine, k, name),
+                    "{k} {name}"
+                );
+            }
+            assert_eq!(
+                get_string(HKEY_CURRENT_USER, &format!("{key}\0x"), "s"),
+                None
+            );
         }
     }
 }

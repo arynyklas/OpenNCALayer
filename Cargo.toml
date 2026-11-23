@@ -45,7 +45,6 @@ oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.3-beta.1" }
 # Explicit defaults also keep inherited no-default SDK dependencies valid outside this workspace.
 oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.3-beta.1" }
 oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.3-beta.1" }
-oncl-registry = { path = "crates/oncl-registry", version = "=0.1.3-beta.1" }
 oncl-testkit = { path = "crates/oncl-testkit" }
 oncl-tls = { path = "crates/oncl-tls" }
 oncl-token = { path = "crates/oncl-token", version = "=0.1.3-beta.1" }
@@ -54,6 +53,8 @@ oncl-ui = { path = "crates/oncl-ui" }
 oncl-update = { path = "crates/oncl-update", version = "=0.1.3-beta.1" }
 # The installer entry WinGet runs: `xtask package` writes the Setup it carries into it.
 oncl-winget-setup = { path = "crates/oncl-winget-setup", default-features = false }
+# The Win32 registry calls of the Windows programs; not in the SDK.
+oncl-winreg = { path = "crates/oncl-winreg" }
 oncl-xml = { path = "crates/oncl-xml", version = "=0.1.3-beta.1" }
 
 aes = "0.9.0"
