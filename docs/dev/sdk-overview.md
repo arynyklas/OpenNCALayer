@@ -99,7 +99,7 @@ Core требует обычного права `Action::Sign`, текущей �
 Закрытый `PdfSignatureOutput` работает только с пустым промежуточным выводом (OUTPUT) той же операции. Добавление учитывает вывод и временные данные один раз, ByteRange фиксируется до хеширования, после этого меняется только зарегистрированный шестнадцатеричный `Contents`. Он не открывает `File`, не даёт произвольного позиционирования и правки и не даёт записи в `FrozenInput`. `shared_view()` у `ResourceScope` даёт ещё один дескриптор той же операции с теми же общими счётчиками, дедлайном, управлением и арендой допуска; новой квоты для другого запроса он не создаёт.
 
 ```
-cargo test -p oncl-pdf --features testing --test all sign::
+cargo test -p oncl-pdf --test all sign::
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out target/p02-smoke
 ```
 
@@ -122,7 +122,7 @@ cargo run -p oncl-core --features pdf --example sdk_probe -- --case P02 --out ta
 Обновление вывода выполняется только добавлением в новой транзакции, без старых мест для правки. Любая ошибка, включая отмену в момент возобновления или запечатанного снимка, навсегда запрещает публикацию, даже если приложение потом снимет флаг отмены. Чужие артефакты и артефакты исходных данных не портятся. Внутренние повторные чтения и проверки не списываются повторно со счётчиков ввода и вывода.
 
 ```
-cargo test -p oncl-pdf --features testing --test ades
+cargo test -p oncl-pdf --test ades
 cargo run -p oncl-core --features pdf --example sdk_probe -- --case P03 --out target/p03-smoke
 ```
 
@@ -178,7 +178,7 @@ Feature `oncl-core/xml` добавляет подпись, добавление 
 ### Проверка XML и XAdES
 
 ```
-cargo test -p oncl-xml --features testing
+cargo test -p oncl-xml
 cargo run -p oncl-core --features xml --example sdk_probe -- --case X03 --out target/x03-smoke
 ```
 

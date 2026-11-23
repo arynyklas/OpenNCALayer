@@ -72,7 +72,7 @@ pub fn sign(entry: &KeyEntry, data: &[u8], opts: &SignOptions) -> Result<Vec<u8>
 /// # Errors
 ///
 /// As [`sign`].
-#[cfg(any(test, feature = "testing"))]
+#[cfg(test)]
 pub(crate) fn sign_content(
     entry: &KeyEntry,
     content_type: &ObjectIdentifier,

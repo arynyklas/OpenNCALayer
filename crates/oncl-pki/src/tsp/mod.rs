@@ -15,16 +15,11 @@
 
 mod asn1;
 mod document;
-#[cfg(feature = "testing")]
-mod mock;
 pub use document::{
     DocumentImprint, DocumentTimestamp, acquire_document_timestamp,
     acquire_document_timestamp_with_clock, validate_document_token,
     validate_document_token_with_clock,
 };
-
-#[cfg(feature = "testing")]
-pub use mock::{MockTamper, MockTsa};
 
 use crate::asn1util::{generalized_time, unsigned};
 use crate::ber::{self, BerError};
@@ -728,29 +723,6 @@ pub fn stamp(
             TokenForm::WholeResponse => reply.response,
         })
     })
-}
-
-/// `cms` (a DER or BER `ContentInfo{SignedData}`) as DER, with the value `stamp` returns
-/// for the `SignerInfo.signature` value of signer `signer_index` as that signer's
-/// id-aa-timeStampToken unsigned attribute, replacing an earlier one. Other signers are
-/// kept byte for byte.
-///
-/// # Errors
-///
-/// [`TspError::Cms`] for an invalid CMS; [`TspError::Malformed`] if there is no such
-/// signer; errors of `stamp`.
-#[cfg(feature = "testing")]
-fn replace_token(
-    cms: &[u8],
-    signer_index: usize,
-    stamp: impl FnMut(&[u8]) -> Result<Vec<u8>, TspError>,
-) -> Result<Vec<u8>, TspError> {
-    attach_tokens(
-        cms,
-        SignerSel::Index(signer_index),
-        StampMode::Replace,
-        stamp,
-    )
 }
 
 /// `cms` as DER, with the value `stamp` returns for each selected signer's signature as

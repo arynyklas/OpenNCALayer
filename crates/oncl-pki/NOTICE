@@ -13,7 +13,3 @@ Republic of Kazakhstan (production PKI), exactly as the original NCALayer ships 
 `cacerts.jks`. They are public documents distributed for free use; the rights to the
 certificates belong to their issuer and are not licensed under Apache-2.0. Their SHA-256 sums
 are in the source repository's `fixtures/nca/SHA256SUMS`, which this package does not contain.
-
-`testing-data/rsa.pk8.der` is a synthetic RSA private key generated for tests. It protects
-nothing and has no value; it is used only by the `testing` feature's mocks (a secret scanner
-that flags this file is a false positive).

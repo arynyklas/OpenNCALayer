@@ -122,21 +122,6 @@ pub(crate) fn generalized_time(value: &[u8]) -> Result<OffsetDateTime, TimeError
     Ok(PrimitiveDateTime::new(date, time).assume_utc())
 }
 
-/// `time` as a `GeneralizedTime` value `YYYYMMDDhhmmssZ`, truncated to whole seconds.
-#[cfg(feature = "testing")]
-pub(crate) fn format_generalized_time(time: OffsetDateTime) -> String {
-    let time = time.to_offset(time::UtcOffset::UTC);
-    format!(
-        "{:04}{:02}{:02}{:02}{:02}{:02}Z",
-        time.year(),
-        u8::from(time.month()),
-        time.day(),
-        time.hour(),
-        time.minute(),
-        time.second()
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,17 +159,6 @@ mod tests {
                 Err(TimeError(String::from_utf8_lossy(bad).into_owned()))
             );
         }
-    }
-
-    #[cfg(feature = "testing")]
-    #[test]
-    fn generalized_time_round_trip() {
-        let t = datetime!(2026-03-01 07:08:09.75 +06:00);
-        assert_eq!(format_generalized_time(t), "20260301010809Z");
-        assert_eq!(
-            generalized_time(format_generalized_time(t).as_bytes()),
-            Ok(datetime!(2026-03-01 01:08:09 UTC))
-        );
     }
 
     #[test]
