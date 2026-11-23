@@ -1,6 +1,7 @@
 //! RFC 3161 time-stamping with the NCA GET binding: the request, the mock TSA, checks of the
 //! reply, a response of the NCA test TSA saved by NCANode and the live NCA test TSA.
 
+use crate::doubles::{MockTamper, MockTsa};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use der::asn1::{AnyRef, ObjectIdentifier};
@@ -13,9 +14,8 @@ use oncl_pki::http::{
 use oncl_pki::key::{HashAlg, SigAlg};
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::tsp::{
-    self, MockTamper, MockTsa, SignerSel, StampMode, TokenForm, TsaMethod, TsaProfile, TsaSpec,
-    TspError, TspHash, parse_response, request_der, stamp, timestamp_signer, verify_token,
-    verify_token_for,
+    self, SignerSel, StampMode, TokenForm, TsaMethod, TsaProfile, TsaSpec, TspError, TspHash,
+    parse_response, request_der, stamp, timestamp_signer, verify_token, verify_token_for,
 };
 use oncl_testkit::{ncanode, read, synthetic};
 use sha1::Digest as _;
@@ -361,9 +361,22 @@ fn token_with_negative_nonce_verifies() {
         &[0x9c, 0x3e, 0x51, 0x07, 0xaa, 0x10, 0x2d, 0x48],
         &[0xff, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
     ] {
-        let cms = tsa()
-            .stamp_with_nonce(&signed("user-gost2015-sign"), 0, nonce)
-            .unwrap();
+        // A request without a nonce, as another client's: the token's nonce is the TSA's.
+        let spec = TsaSpec {
+            policy: None,
+            nonce: NonceSpec::None,
+            ..TsaSpec::from(TsaProfile::basics_default())
+        };
+        let mock = tsa().with_tamper(MockTamper::FixedNonce(nonce.to_vec()));
+        let cms = tsp::stamp(
+            &signed("user-gost2015-sign"),
+            SignerSel::Index(0),
+            &spec,
+            StampMode::Replace,
+            TokenForm::Token,
+            &mock,
+        )
+        .unwrap();
         let s = verify(&cms, None).unwrap();
         assert_eq!(unsigned_attrs(&cms, 0), [(TIME_STAMP_TOKEN.to_owned(), 1)]);
         let token = s[0].timestamp_token.as_ref().unwrap();

@@ -1,6 +1,7 @@
 //! Kalkan-shaped key files: a new key alone in `<PREFIX><keyId>.p12`, its certificate
 //! installed later (found by SubjectKeyIdentifier in the directory), password changes.
 
+use crate::doubles::{TestCertSpec, issue_cert};
 use oncl_pki::cert::Certificate;
 use oncl_pki::csr::KeyStoreInfo;
 use oncl_pki::key::{PrivateKey, PublicKey};
@@ -14,7 +15,6 @@ use oncl_pki::oid;
 use oncl_pki::pkcs12::{
     self, KeyEntry, Pkcs12Error, WriteEntry, WriteOptions, load, load_contents,
 };
-use oncl_pki::testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{read, synthetic};
 use std::fs;
 use std::path::{Path, PathBuf};

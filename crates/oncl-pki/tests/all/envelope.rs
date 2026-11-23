@@ -3,6 +3,7 @@
 //! independent judges (OpenSSL, the local-only Kalkan oracle) are the rows `envelope-*` of
 //! `cargo xtask platform-interop`; what is checked here is what needs no other tool.
 
+use crate::doubles::{TestCertSpec, issue_cert};
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockModeEncrypt, KeyIvInit};
 use der::asn1::{Any, ObjectIdentifier, OctetString};
@@ -14,7 +15,6 @@ use oncl_pki::cms::envelope::{
 };
 use oncl_pki::key::PrivateKey;
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{fixture, read, synthetic};
 use rsa::pkcs1::DecodeRsaPublicKey;
 use spki::AlgorithmIdentifierOwned;

@@ -580,16 +580,16 @@ fn conflicting_signer_pair(same_key: bool) -> (Witness, Witness) {
     } else {
         "user-gost2004-sign"
     });
-    let mut first_spec = oncl_pki::testing::TestCertSpec::from_cert(&first.entry.cert);
+    let mut first_spec = crate::doubles::TestCertSpec::from_cert(&first.entry.cert);
     first_spec.serial = vec![0x63, 0x02];
-    let mut second_spec = oncl_pki::testing::TestCertSpec::from_cert(&second.entry.cert);
+    let mut second_spec = crate::doubles::TestCertSpec::from_cert(&second.entry.cert);
     second_spec.serial = first_spec.serial.clone();
     if same_key {
         second_spec.subject =
-            oncl_pki::testing::TestCertSpec::from_cert(&entry("user-gost2004-sign").cert).subject;
+            crate::doubles::TestCertSpec::from_cert(&entry("user-gost2004-sign").cert).subject;
     }
-    first.entry.cert = oncl_pki::testing::issue_cert(&issuer, first_spec);
-    second.entry.cert = oncl_pki::testing::issue_cert(&issuer, second_spec);
+    first.entry.cert = crate::doubles::issue_cert(&issuer, first_spec);
+    second.entry.cert = crate::doubles::issue_cert(&issuer, second_spec);
     assert_eq!(
         first.entry.cert.tbs_certificate().issuer(),
         second.entry.cert.tbs_certificate().issuer()

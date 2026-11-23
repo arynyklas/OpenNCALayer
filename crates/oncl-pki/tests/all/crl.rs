@@ -2,18 +2,20 @@
 //! against `MockCrl` with the synthetic intermediate PKI, plus a golden vector: a CRL of the
 //! NCA root (GOST 2022) checked offline.
 
+use crate::doubles::MockCrl;
+use crate::doubles::RouteTransport;
+use crate::doubles::{TestCertSpec, issue_cert};
 use der::asn1::{AnyRef, BitStringRef, Ia5String, OctetString};
 use der::oid::AssociatedOid;
 use der::{Decode, Encode, Sequence, Tag};
 use oncl_pki::cert::{self, Certificate};
-use oncl_pki::crl::{self, CrlError, CrlStatus, MAX_BER_CRL_LEN, MAX_CRL_LEN, MockCrl, TIMEOUT};
+use oncl_pki::crl::{self, CrlError, CrlStatus, MAX_BER_CRL_LEN, MAX_CRL_LEN, TIMEOUT};
 use oncl_pki::http::{
     CONNECT_TIMEOUT, GetOptions, HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport,
-    RouteTransport, UreqTransport,
+    UreqTransport,
 };
 use oncl_pki::key::SigAlg;
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{fixture, read, synthetic, synthetic_cert};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
