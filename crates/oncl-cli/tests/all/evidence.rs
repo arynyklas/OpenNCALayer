@@ -5,8 +5,9 @@ use crate::support;
 use der::Encode;
 use oncl_pki::{
     http::{GetOptions, HttpRequest, HttpTransport},
-    ocsp::{MockOcsp, request_der},
+    ocsp::request_der,
 };
+use oncl_pki_testing::MockOcsp;
 use std::{
     path::{Path, PathBuf},
     process::Command,

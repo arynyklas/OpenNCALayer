@@ -60,12 +60,11 @@ fn signed(input: &[u8], reservation: usize) -> Result<Vec<u8>, oncl_pdf::PdfErro
 #[test]
 fn prior_revision_untouched() {
     use oncl_pki::{
-        crl::MockCrl,
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
+        http::HttpTransport,
         pkix::CaSet,
         validation::{CheckStatus, ValidationContext, ValidationPolicy, Verdict},
     };
+    use oncl_pki_testing::{MockCrl, MockOcsp, RouteTransport};
     let now = time::Date::from_calendar_date(2026, time::Month::November, 2)
         .unwrap()
         .with_hms(12, 0, 0)
@@ -282,9 +281,9 @@ fn entry(name: &str) -> oncl_pki::pkcs12::KeyEntry {
 }
 fn issued(name: &str) -> oncl_pki::pkcs12::KeyEntry {
     let mut e = entry(name);
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&e.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&e.cert);
     let template =
-        oncl_pki::testing::TestCertSpec::from_cert(&entry("inter-user-gost2015-sign").cert);
+        oncl_pki_testing::TestCertSpec::from_cert(&entry("inter-user-gost2015-sign").cert);
     spec.extensions.retain(|e| {
         !matches!(
             e.extn_id.to_string().as_str(),
@@ -298,7 +297,7 @@ fn issued(name: &str) -> oncl_pki::pkcs12::KeyEntry {
                 "1.3.6.1.5.5.7.1.1" | "2.5.29.31"
             )
         }));
-    e.cert = oncl_pki::testing::issue_cert(&entry("inter-gost2015.key"), spec);
+    e.cert = oncl_pki_testing::issue_cert(&entry("inter-gost2015.key"), spec);
     e
 }
 

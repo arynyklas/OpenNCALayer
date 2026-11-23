@@ -4,7 +4,7 @@
 
 use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use futures_util::{SinkExt, StreamExt};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::{Engine, HostServices, Package, PluginModules};
 use oncl_testkit::{read, synthetic};
 use openncalayer::{LiveTls, ServerConfig, build_registry, serve};

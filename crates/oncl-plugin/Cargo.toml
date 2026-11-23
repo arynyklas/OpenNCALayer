@@ -64,8 +64,7 @@ windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_
 libc.workspace = true
 
 [dev-dependencies]
-# `testing`: `tsp::MockTsa`, `RouteTransport`.
-oncl-pki = { path = "../oncl-pki", features = ["testing"] }
+oncl-pki-testing.workspace = true
 oncl-testkit.workspace = true
 # `emulator`: software tokens for the `keys` capability's token tests.
 oncl-token = { path = "../oncl-token", features = ["emulator"] }

@@ -2076,8 +2076,9 @@ mod tests {
     #[test]
     fn a_gost_time_stamp_is_signed_when_the_chain_agrees_and_refused_when_it_does_not() {
         use oncl_pki::http::{GetOptions, HttpRequest, HttpTransport};
-        use oncl_pki::testing::{TestCertSpec, issue_cert};
-        use oncl_pki::tsp::{MockTsa, TsaProfile, request_der};
+        use oncl_pki::tsp::{TsaProfile, request_der};
+        use oncl_pki_testing::MockTsa;
+        use oncl_pki_testing::{TestCertSpec, issue_cert};
         let ask = |tsa: oncl_pki::pkcs12::KeyEntry| {
             let request = request_der(
                 &TsaProfile::kalkan_default(),

@@ -71,7 +71,7 @@ oncl-pdk.workspace = true
 wat.workspace = true
 sha2.workspace = true
 oncl-testkit.workspace = true
-oncl-pki = { workspace = true, features = ["testing"] }
+oncl-pki-testing.workspace = true
 # A fake mkcert CA in the TLS wizard's tests.
 rcgen.workspace = true
 # The command line's JSON reports, read by the parity tests.

@@ -13,10 +13,12 @@ use oncl_pdk::abi::{
 };
 use oncl_pki::cert;
 use oncl_pki::cms::{AttrSpec, CertSpec, CoSign, Content, SignSpec, sign_spec};
-use oncl_pki::http::{HttpTransport, RouteTransport};
-use oncl_pki::ocsp::{CertStatus, MockOcsp};
+use oncl_pki::http::HttpTransport;
+use oncl_pki::ocsp::CertStatus;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::RouteTransport;
 use oncl_plugin::{Engine, HostServices, Instance};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use oncl_xml as xmldsig;
@@ -310,8 +312,8 @@ fn xades_args(level: XadesLevel) -> XadesArgs {
 /// The synthetic OCSP responder, the root's CRL (of the intermediate CA, which names no
 /// responder) and the mock TSA at the basics module's URL.
 fn responder_and_tsa() -> Arc<dyn HttpTransport> {
-    let tsa = oncl_pki::tsp::MockTsa::new(entry("tsa-gost2015"));
-    let root_crl = oncl_pki::crl::MockCrl::new(entry("root-gost2015.key"));
+    let tsa = oncl_pki_testing::MockTsa::new(entry("tsa-gost2015"));
+    let root_crl = oncl_pki_testing::MockCrl::new(entry("root-gost2015.key"));
     Arc::new(RouteTransport::new(vec![
         (
             oncl_pki::tsp::TsaProfile::basics_default().url,

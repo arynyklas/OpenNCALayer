@@ -32,9 +32,8 @@ fn raw(name: &str) -> KeyEntry {
 pub fn issued(name: &str) -> KeyEntry {
     // Same real synthetic issuer/status profile used by the accepted Core B01 fixture.
     let mut entry = raw(name);
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&entry.cert);
-    let template =
-        oncl_pki::testing::TestCertSpec::from_cert(&raw("inter-user-gost2015-sign").cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&entry.cert);
+    let template = oncl_pki_testing::TestCertSpec::from_cert(&raw("inter-user-gost2015-sign").cert);
     spec.extensions.retain(|extension| {
         !matches!(
             extension.extn_id.to_string().as_str(),
@@ -48,17 +47,12 @@ pub fn issued(name: &str) -> KeyEntry {
                 "1.3.6.1.5.5.7.1.1" | "2.5.29.31"
             )
         }));
-    entry.cert = oncl_pki::testing::issue_cert(&raw("inter-gost2015.key"), spec);
+    entry.cert = oncl_pki_testing::issue_cert(&raw("inter-gost2015.key"), spec);
     entry
 }
 pub fn validation() -> ValidationServices {
-    use oncl_pki::{
-        crl::MockCrl,
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        pkix::CaSet,
-        validation::NetworkPolicy,
-    };
+    use oncl_pki::{http::HttpTransport, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::{MockCrl, MockOcsp, RouteTransport};
     let ocsp: Arc<dyn HttpTransport> = Arc::new(MockOcsp::new(raw("ocsp-gost2015")).with_now(NOW));
     let root: Arc<dyn HttpTransport> = Arc::new(
         MockCrl::new(raw("root-gost2015.key"))

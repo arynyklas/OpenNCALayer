@@ -120,7 +120,8 @@ pub fn tsa_args(ctx: &Ctx) -> Vec<String> {
 /// after [`super::super::world::NOW`]: evidence of a signature made at `NOW`.
 pub fn ocsp_for(ctx: &Ctx, cert: &x509_cert::Certificate) -> anyhow::Result<Vec<u8>> {
     use oncl_pki::http::{GetOptions, HttpRequest, HttpTransport};
-    use oncl_pki::ocsp::{MockOcsp, request_der};
+    use oncl_pki::ocsp::request_der;
+    use oncl_pki_testing::MockOcsp;
     let now = time::OffsetDateTime::from_unix_timestamp(super::super::world::NOW)?
         + time::Duration::seconds(60);
     let responder = MockOcsp::new(ctx.world.responder.clone()).with_now(now);

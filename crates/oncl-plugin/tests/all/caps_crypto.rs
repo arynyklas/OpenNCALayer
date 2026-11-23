@@ -15,14 +15,14 @@ use oncl_pdk::abi::{
     TsaChoice, TsaSpec, TspOutcome, TspRequestArgs,
 };
 use oncl_pki::cert;
-use oncl_pki::crl::MockCrl;
-use oncl_pki::http::{
-    HttpError, HttpErrorKind, HttpReply, HttpRequest, HttpTransport, RouteTransport,
-};
-use oncl_pki::ocsp::{CertStatus, MockOcsp};
+use oncl_pki::http::{HttpError, HttpErrorKind, HttpReply, HttpRequest, HttpTransport};
+use oncl_pki::ocsp::CertStatus;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockCrl;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::MockTsa;
+use oncl_pki_testing::RouteTransport;
 use oncl_plugin::{Engine, HostServices, Instance, MAX_HTTP_REQUESTS};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use serde::de::DeserializeOwned;

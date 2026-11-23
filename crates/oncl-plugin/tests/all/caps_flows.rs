@@ -21,8 +21,9 @@ use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTranspor
 use oncl_pki::key::KeyError;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
-use oncl_pki::tsp::{MockTsa, TsaProfile, TspError};
+use oncl_pki::tsp::{TsaProfile, TspError};
 use oncl_pki::{cert, oid};
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::{Engine, HostServices, Instance, SessionContext, Trust, cause};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use oncl_token::emulator::{CardSpec, EmuKey, EmulatorBackend, card};

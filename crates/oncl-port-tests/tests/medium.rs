@@ -2452,7 +2452,7 @@ fn cer_b64(name: &str) -> String {
 /// the system's: the responder dates its answers now, and checked answers must be fresh.
 fn with_synthetic_ocsp(steps: Vec<Step>) -> Harness {
     let ocsp: std::sync::Arc<dyn oncl_pki::http::HttpTransport> =
-        std::sync::Arc::new(oncl_pki::ocsp::MockOcsp::new(entry("ocsp-gost2015")));
+        std::sync::Arc::new(oncl_pki_testing::MockOcsp::new(entry("ocsp-gost2015")));
     Harness::new(steps, vec![("http://ocsp.synthetic.test".to_owned(), ocsp)])
         .with_pki_hosts(&["ocsp.synthetic.test"])
         .with_clock(OffsetDateTime::now_utc)
@@ -3421,7 +3421,7 @@ fn with_revoked_ocsp(steps: Vec<Step>, name: &str) -> Harness {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let ocsp = oncl_pki::ocsp::MockOcsp::new(entry("ocsp-gost2015")).status(
+    let ocsp = oncl_pki_testing::MockOcsp::new(entry("ocsp-gost2015")).status(
         &serial,
         oncl_pki::ocsp::CertStatus::Revoked {
             time: OffsetDateTime::now_utc() - time::Duration::days(1),

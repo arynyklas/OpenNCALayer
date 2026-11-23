@@ -29,12 +29,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail, ensure};
 use der::Encode as _;
-use oncl_pki::crl::MockCrl;
 use oncl_pki::http::{GetOptions, HttpRequest, HttpTransport as _};
-use oncl_pki::ocsp::MockOcsp;
 use oncl_pki::pkcs12::KeyEntry;
 use oncl_pki::private_fs::PrivateDirectory;
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::MockCrl;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use oncl_update::Version;
 use sha2::{Digest as _, Sha256};
 

@@ -9,7 +9,7 @@ use der::{DateTime, Encode};
 use oncl_pki::cert::{self, Certificate};
 use oncl_pki::cms::{SignOptions, sign};
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use time::{Date, Month};
 use x509_cert::ext::Extension;

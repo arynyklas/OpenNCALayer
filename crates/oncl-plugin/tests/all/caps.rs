@@ -13,7 +13,7 @@ use oncl_pdk::abi::{self, Bytes, ConfirmArgs, ErrorCode, HttpArgs, HttpResponse,
 use oncl_pki::http::{GetOptions, HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::key::{KeyAlg, SigAlg};
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::{
     Engine, HTTP_TIMEOUT, HostServices, Instance, MAX_HTTP_BODY, MAX_HTTP_REQUESTS,
     MAX_KEY_HANDLES, Manifest, PluginError, SessionContext,

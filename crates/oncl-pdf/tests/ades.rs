@@ -1,9 +1,7 @@
 //! P03: real PDF evidence, immutable extension and protected revision controls.
-#![cfg(feature = "testing")]
 use oncl_pdf::{PdfLimits, PdfSignProfile, ades};
 use oncl_pki::{
     cms::ades::{AdesServices, ValidationMaterial},
-    crl::MockCrl,
     evidence::{AdesLevel, EvidenceLimits},
     io::{Source, TemporaryStore},
     key::{PrivateKey, SigAlg},
@@ -12,10 +10,10 @@ use oncl_pki::{
     resource::{
         OperationControl, ProcessingError, Progress, ResourceLimits, ResourceScope, SharedBudget,
     },
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaMethod, TsaProfile, TsaSpec},
+    tsp::{TsaMethod, TsaProfile, TsaSpec},
     validation::{NetworkPolicy, ValidationContext, ValidationPolicy, Verdict},
 };
+use oncl_pki_testing::{MockCrl, MockTsa, TestCertSpec, issue_cert};
 use std::{io::Cursor, sync::Arc};
 use time::{OffsetDateTime, macros::datetime};
 const NOW: OffsetDateTime = datetime!(2026-11-03 12:00 UTC);

@@ -12,7 +12,8 @@ use oncl_pki::cms::{SignOptions, sign, verify};
 use oncl_pki::key::SigAlg;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::CaSet;
-use oncl_pki::tsp::{MockTsa, TsaProfile, timestamp_signer, verify_token};
+use oncl_pki::tsp::{TsaProfile, timestamp_signer, verify_token};
+use oncl_pki_testing::MockTsa;
 use oncl_protocol::{AddInfo, DynamicModules, Module, Registry, Reply, SessionId};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use oncl_tls::{SelftestReports, TlsFiles};
@@ -1333,7 +1334,7 @@ struct LocalPki {
 const LOCAL_ORIGIN: &str = "http://pki.e2e.test";
 
 fn local_pki() -> LocalPki {
-    use oncl_pki::testing::{TestCertSpec, issue_cert};
+    use oncl_pki_testing::{TestCertSpec, issue_cert};
     use x509_cert::ext::Extension;
     let root_key = entry("root-gost2015.key");
     let ocsp_url = format!("{LOCAL_ORIGIN}/ocsp");
@@ -1366,9 +1367,9 @@ fn local_pki() -> LocalPki {
     };
     let responder = reissue("ocsp-gost2015", 3, false);
     let transport: Arc<dyn oncl_pki::http::HttpTransport> =
-        Arc::new(oncl_pki::http::RouteTransport::new(vec![(
+        Arc::new(oncl_pki_testing::RouteTransport::new(vec![(
             ocsp_url,
-            Arc::new(oncl_pki::ocsp::MockOcsp::new(responder))
+            Arc::new(oncl_pki_testing::MockOcsp::new(responder))
                 as Arc<dyn oncl_pki::http::HttpTransport>,
         )]));
     LocalPki {

@@ -10,9 +10,10 @@ use oncl_pdk::abi::{
     FlowFile, FlowNone, FlowOrder, FlowOutcome, FlowReaders, FlowStart, HostResult, Import,
     KeyOrder, PickArgs, SelectArgs, TerminalsArgs, TokenScan,
 };
-use oncl_pki::http::RouteTransport;
-use oncl_pki::ocsp::{CertStatus, MockOcsp};
+use oncl_pki::ocsp::CertStatus;
 use oncl_pki::pkcs12::load;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::RouteTransport;
 use oncl_plugin::Engine;
 use oncl_plugin::headless::{CallerContext, CapabilityBackend, HeadlessBindings, HeadlessError};
 use oncl_plugin::manual::{BoundInteraction, BoundKey};

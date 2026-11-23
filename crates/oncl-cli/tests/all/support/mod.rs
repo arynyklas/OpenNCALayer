@@ -9,12 +9,10 @@ use oncl_pki::{
     cert,
     http::{GetOptions, HttpRequest, HttpTransport},
     keygen::{self, KeySpec},
-    ocsp::MockOcsp,
     pkcs12::{self, KeyEntry},
     private_fs::PrivateDirectory,
-    testing::{TestCertSpec, issue_cert},
-    tsp::MockTsa,
 };
+use oncl_pki_testing::{MockOcsp, MockTsa, TestCertSpec, issue_cert};
 use std::{
     io::{Read, Write},
     net::{TcpListener, TcpStream},

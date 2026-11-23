@@ -2,7 +2,7 @@
 
 use oncl_pki::cert;
 use oncl_pki::pkcs12::KeyEntry;
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{fixture, read, synthetic_cert};
 use xtask::upstream::manifest::{ManifestError, parse_json, verify_and_parse};
 use xtask::upstream::sha256_hex;
