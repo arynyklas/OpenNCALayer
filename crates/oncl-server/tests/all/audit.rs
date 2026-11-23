@@ -1618,12 +1618,176 @@ fn deadline_expiry_before_use_refuses_that_request_without_poisoning_service_hea
 }
 
 // ---- MP3a-3: plugin records -------------------------------------------------------------
-use oncl_core::plugins::CallerContext;
+use oncl_core::OperationError;
+use oncl_core::keys::{KeyRequest, KeySelector, KeySources};
 use oncl_core::plugins::{
-    ContentBinding, PackageHash, PluginIdentity, PluginRefusalCode, PluginUse, TicketRefusal,
+    CallerContext, ManualLimits, PluginAuditRecord, PluginBindings, PluginCall, PluginKeyBinding,
+    PluginPermission, PluginRefusalCode, PluginRegistry, PluginUse, TicketRefusal,
 };
-use oncl_plugin::operations::KeyKind;
 use oncl_server::audit::{PluginGrantFacts, PluginTicketPolicy};
+use std::collections::HashMap;
+use std::sync::LazyLock;
+
+/// The example plugin of `crates/oncl-pdk/example`, its operation `sign` declared as a server
+/// operation with one raw key use: Core tickets the key use of its `rawSign`.
+const EXAMPLE: &str = "io.github.arynyklas.openncalayer.example";
+const EXAMPLE_MODULE: &str = "io.github.arynyklas.openncalayer.Example";
+const EXAMPLE_TOKEN: &str = "tok-1";
+
+/// The key-use events Core hands to the key guard of the example's engine. The guard refuses
+/// every use: the journal under test gets the event instead of the key.
+#[derive(Default)]
+struct Capture(Mutex<Vec<KeyUseEvent>>);
+impl KeyUseGuard for Capture {
+    fn before_use(&self, event: &KeyUseEvent) -> Result<KeyUseReceipt, OperationError> {
+        self.0.lock().unwrap().push(event.clone());
+        Err(OperationError::PermissionDenied)
+    }
+    fn finish(&self, _: KeyUseReceipt, _: KeyUseOutcome) -> Result<(), OperationError> {
+        Ok(())
+    }
+}
+
+struct Example {
+    engine: Engine,
+    capture: Arc<Capture>,
+    key: KeySelector,
+    password: String,
+    permission: PluginPermission,
+    /// The events of earlier runs, by the bytes signed.
+    events: Mutex<HashMap<Vec<u8>, KeyUseEvent>>,
+}
+
+static EXAMPLE_RIG: LazyLock<Example> = LazyLock::new(|| {
+    let manifest = oncl_testkit::plugin::example_manifest().replacen(
+        "min_core = \"0.1.0-alpha.3\"",
+        &format!(
+            "min_core = \"{}\"",
+            oncl_plugin::operations::operations_min_core()
+        ),
+        1,
+    ) + &format!(
+        r#"
+[[operations]]
+name = "sign"
+module = "{EXAMPLE_MODULE}"
+server = true
+request = '{{"module":"{EXAMPLE_MODULE}","class":"Example","method":"rawSign","args":{{"handle":1,"data_b64":"{{f:base64}}"}}}}'
+label = {{ ru = "Подписать", kk = "Қол қою", en = "Sign" }}
+[[operations.params]]
+name = "f"
+kind = "document"
+[operations.uses]
+network = "pki"
+imports = ["keys_sign_raw"]
+[[operations.uses.key]]
+kind = "raw"
+content = "param:f"
+"#
+    );
+    let wasm = oncl_testkit::read(oncl_testkit::plugin::example_wasm());
+    let fixture = oncl_testkit::synthetic("user-rsa-sign");
+    let key = KeySelector::inline(oncl_testkit::read(&fixture.path), None);
+    let permission = PluginPermission::new(
+        EXAMPLE,
+        "sign",
+        CallerContext::ServiceClient(EXAMPLE_TOKEN.to_owned()),
+        [oncl_pdk::abi::Import::KeysSignRaw],
+    )
+    .with_keys([key.key_id()]);
+    let limits = ManualLimits::desktop();
+    let mut registry = PluginRegistry::new();
+    registry
+        .install(
+            oncl_plugin::Manifest::from_toml(&manifest).unwrap(),
+            oncl_core::plugins::loose_package_hash(manifest.as_bytes(), &wasm),
+            &wasm,
+            limits.instance,
+            vec![permission.clone()],
+        )
+        .unwrap();
+    let capture = Arc::new(Capture::default());
+    let engine = Engine::new(
+        EngineServices::hash_only(limits.resources)
+            .with_keys(Arc::new(KeySources::new()), capture.clone())
+            .with_plugins(registry),
+    )
+    .unwrap();
+    Example {
+        engine,
+        capture,
+        key,
+        password: fixture.password,
+        permission,
+        events: Mutex::new(HashMap::new()),
+    }
+});
+
+/// The event of a key use of the example's `sign` that signs `content`: Core's own, with
+/// Core's ticket. The plugin runs once per `content`.
+fn example_event(content: &[u8]) -> KeyUseEvent {
+    let rig = &*EXAMPLE_RIG;
+    if let Some(event) = rig.events.lock().unwrap().get(content) {
+        return event.clone();
+    }
+    let mut ctx = rig
+        .engine
+        .begin(
+            ExecutionGrant::new([Action::Sign])
+                .with_keys([rig.key.key_id()])
+                .with_plugins([rig.permission.clone()]),
+            OperationPolicy::ncalayer_compatibility(),
+            Arc::new(Control),
+        )
+        .unwrap();
+    let encoded: String = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(content)
+    };
+    let args = format!(
+        r#"{{"module":"{EXAMPLE_MODULE}","class":"Example","method":"rawSign","args":{{"handle":1,"data_b64":"{encoded}"}}}}"#
+    );
+    let caller = CallerContext::ServiceClient(EXAMPLE_TOKEN.to_owned());
+    let keys = [PluginKeyBinding::new(
+        1,
+        KeyRequest::new(&rig.key, Some(&rig.password)),
+    )];
+    // The capturing guard refuses the key, so the plugin's answer is a refusal.
+    let _ = rig.engine.plugin_call(
+        &PluginCall {
+            plugin_id: EXAMPLE,
+            operation: "sign",
+            args: &args,
+        },
+        &PluginBindings::new(&caller, &keys),
+        &mut ctx,
+    );
+    let event = {
+        let mut seen = rig.capture.0.lock().unwrap();
+        let at = seen
+            .iter()
+            .position(|e| e.operation_id == ctx.id())
+            .expect("the example asked for the key");
+        seen.remove(at)
+    };
+    let ticket = event
+        .plugin()
+        .expect("a declared key use carries Core's ticket");
+    assert_eq!(ticket.content().len, content.len() as u64);
+    rig.events
+        .lock()
+        .unwrap()
+        .insert(content.to_vec(), event.clone());
+    event
+}
+
+/// [`example_event`] addressed to `key` of the operation `ctx`, which the journal binds.
+fn plugin_event(ctx: &OperationContext, key: &KeyId, content: &[u8]) -> KeyUseEvent {
+    let mut event = example_event(content);
+    event.operation_id = ctx.id();
+    event.key_id = key.clone();
+    event
+}
 
 /// An old-format (no plugin record) journal written by the code before MP3a-3: Header,
 /// BEGIN, FINAL(Applied) and a second BEGIN left unfinished, identity file = first frame.
@@ -1658,26 +1822,6 @@ fn granted() -> Result<PluginGrantFacts, TicketRefusal> {
         grant_id: "tok-1/org.example.sign/sign".to_owned(),
         declared: true,
     })
-}
-fn ticket(key: &KeyId, content: &[u8]) -> PluginUse {
-    PluginUse::for_tests(
-        PluginIdentity {
-            id: "org.example.sign".to_owned(),
-            package: PackageHash::File([7; 32]),
-            version: "1.2.3".to_owned(),
-        },
-        "sign",
-        CallerContext::ServiceClient("tok-1".to_owned()),
-        KeyKind::Raw,
-        1,
-        key.clone(),
-        ContentBinding::prehashed(content),
-        [9; 32],
-        [8; 32],
-    )
-}
-fn plugin_event(ctx: &OperationContext, key: &KeyId, content: &[u8]) -> KeyUseEvent {
-    event(ctx, key).with_plugin_ticket_for_tests(ticket(key, content))
 }
 fn policy_guard(
     path: &std::path::Path,
@@ -1715,16 +1859,22 @@ fn authorised_plugin_use_records_identity_facts_and_final_without_secrets() {
     assert_eq!(r.refusal, None);
     assert_eq!(r.finished, Some((AppliedState::Unknown, false)));
     let f = &r.facts;
-    assert_eq!(f.plugin_id, "org.example.sign");
-    assert_eq!((f.package_kind, f.package_sha256), (1, [7; 32]));
-    assert_eq!(f.version, "1.2.3");
+    let ticket = ev.plugin().unwrap();
+    // What Core's ticket names, as Core itself records it.
+    let core = PluginAuditRecord::from_ticket(ticket, None, None);
+    assert_eq!(f.plugin_id, EXAMPLE);
+    assert_eq!(
+        (f.package_kind, f.package_sha256),
+        (core.package_kind, core.package_sha256)
+    );
+    assert_eq!(f.version, "0.1.0");
     assert_eq!(f.operation, "sign");
-    assert_eq!(f.ticket_digest, ev.plugin().unwrap().digest());
+    assert_eq!(f.ticket_digest, ticket.digest());
     assert_eq!(f.approval_nonce_sha256, None);
-    assert_eq!(f.content_sha256, ev.plugin().unwrap().content().sha256);
+    assert_eq!(f.content_sha256, ticket.content().sha256);
     assert_eq!(f.content_len, marker.len() as u64);
-    assert!(f.prehashed);
-    assert_eq!(f.options_sha256, [9; 32]);
+    assert!(!f.prehashed, "the example signs the bytes, not a digest");
+    assert_eq!(f.options_sha256, *ticket.options_sha256());
     assert_eq!(f.caller.as_str(), "service-client");
     assert!(f.declared);
     assert_eq!(f.grant_id.as_deref(), Some("tok-1/org.example.sign/sign"));
@@ -2196,24 +2346,6 @@ fn many_plugin_uses_rotate_segments_without_splitting_a_record() {
 
 // ---- MP3a-3 review fixes ----------------------------------------------------------------
 
-fn ticket_with(key: &KeyId, version: &str) -> PluginUse {
-    PluginUse::for_tests(
-        PluginIdentity {
-            id: "org.example.sign".to_owned(),
-            package: PackageHash::File([7; 32]),
-            version: version.to_owned(),
-        },
-        "sign",
-        CallerContext::ServiceClient("tok-1".to_owned()),
-        KeyKind::Raw,
-        1,
-        key.clone(),
-        ContentBinding::prehashed(b"x"),
-        [9; 32],
-        [8; 32],
-    )
-}
-
 /// A refusal of an event whose action the journal cannot encode never writes an
 /// undecodable frame: the journal stays readable and the refusal is traced and remembered.
 #[test]
@@ -2224,8 +2356,8 @@ fn a_refusal_of_an_unjournalable_action_writes_nothing_and_leaves_the_journal_re
     let ctx = context();
     let key = KeyId::new("key").unwrap();
     let bound = binding(&guard, &ctx, &key);
-    let ev = KeyUseEvent::new(&ctx, key.clone(), Action::Hash)
-        .with_plugin_ticket_for_tests(ticket(&key, b"d"));
+    let mut ev = plugin_event(&ctx, &key, b"d");
+    ev.action = Action::Hash;
     assert!(guard.before_use(&ev).is_err());
     assert_eq!(guard.health(), AuditHealth::Healthy);
     assert_eq!(guard.records().unwrap().len(), 1, "only the header");
@@ -2237,52 +2369,50 @@ fn a_refusal_of_an_unjournalable_action_writes_nothing_and_leaves_the_journal_re
     reopened.recover().unwrap();
 }
 
-/// A text that cannot be journaled (a version or grant id over 255 bytes) refuses the use
-/// as `audit-fact-too-long`, key not applied, BEFORE the journal is touched: health stays.
+/// A text that cannot be journaled (a grant id over 255 bytes) refuses the use as
+/// `audit-fact-too-long`, key not applied, BEFORE the journal is touched: health stays. (A
+/// version that long cannot come from a manifest; the encoder's refusal of one is a unit test
+/// of `oncl_server::audit`.)
 #[test]
 fn an_unauditable_fact_refuses_the_use_without_poisoning_audit_health() {
-    for (version, grant) in [
-        (format!("1.2.3-{}", "a".repeat(300)), "g".to_owned()),
-        ("1.0.0".to_owned(), "g".repeat(300)),
-    ] {
-        let temp = tempfile::tempdir().unwrap();
-        let guard = policy_guard(
-            &temp.path().join("audit"),
-            vec![Ok(PluginGrantFacts {
-                grant_id: grant,
-                declared: true,
-            })],
-        );
-        let ctx = context();
-        let key = KeyId::new("key").unwrap();
-        let _bound = binding(&guard, &ctx, &key);
-        let ev = event(&ctx, &key).with_plugin_ticket_for_tests(ticket_with(&key, &version));
-        let error = guard.before_use(&ev).err().expect("refused");
-        assert_eq!(error.code(), ErrorCode::PermissionDenied);
-        assert_eq!(error.applied_state(), AppliedState::NotApplied);
-        assert_eq!(guard.health(), AuditHealth::Healthy);
-        assert_eq!(
-            guard.plugin_refusals(ctx.id()),
-            vec![TicketRefusal::AuditFactTooLong]
-        );
-        assert_eq!(
-            TicketRefusal::AuditFactTooLong.subcode().id(),
-            "audit-fact-too-long"
-        );
-        // No BEGIN; a refusal record may exist only when its own facts fit.
-        assert!(
-            guard
-                .records()
-                .unwrap()
-                .iter()
-                .all(|r| r.kind != RecordKind::Begin)
-        );
-        // The next, ordinary use of the service is unaffected.
-        let ctx2 = context();
-        let _b2 = binding(&guard, &ctx2, &key);
-        let plain = guard.before_use(&event(&ctx2, &key)).unwrap();
-        guard.finish(plain, done()).unwrap();
-    }
+    let grant = "g".repeat(300);
+    let temp = tempfile::tempdir().unwrap();
+    let guard = policy_guard(
+        &temp.path().join("audit"),
+        vec![Ok(PluginGrantFacts {
+            grant_id: grant,
+            declared: true,
+        })],
+    );
+    let ctx = context();
+    let key = KeyId::new("key").unwrap();
+    let _bound = binding(&guard, &ctx, &key);
+    let ev = plugin_event(&ctx, &key, b"x");
+    let error = guard.before_use(&ev).err().expect("refused");
+    assert_eq!(error.code(), ErrorCode::PermissionDenied);
+    assert_eq!(error.applied_state(), AppliedState::NotApplied);
+    assert_eq!(guard.health(), AuditHealth::Healthy);
+    assert_eq!(
+        guard.plugin_refusals(ctx.id()),
+        vec![TicketRefusal::AuditFactTooLong]
+    );
+    assert_eq!(
+        TicketRefusal::AuditFactTooLong.subcode().id(),
+        "audit-fact-too-long"
+    );
+    // No BEGIN; a refusal record may exist only when its own facts fit.
+    assert!(
+        guard
+            .records()
+            .unwrap()
+            .iter()
+            .all(|r| r.kind != RecordKind::Begin)
+    );
+    // The next, ordinary use of the service is unaffected.
+    let ctx2 = context();
+    let _b2 = binding(&guard, &ctx2, &key);
+    let plain = guard.before_use(&event(&ctx2, &key)).unwrap();
+    guard.finish(plain, done()).unwrap();
 }
 
 #[test]

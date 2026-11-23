@@ -328,6 +328,24 @@ mod timestamp;
 #[cfg(feature = "xml")]
 mod xml;
 
+// The unit tests of the plugin ticket and the approved call (`plugins::ticket`) share the
+// sdk_probe's fixtures with the example and the integration tests. Those name the crate
+// `oncl_core` and the batch fixture `crate::plugin_crypto`; these tests use part of them.
+#[cfg(all(test, feature = "plugins", feature = "tokens"))]
+extern crate self as oncl_core;
+#[cfg(all(test, feature = "plugins", feature = "tokens"))]
+#[allow(dead_code)]
+#[path = "../examples/sdk_probe/batch_fixture.rs"]
+pub(crate) mod plugin_crypto;
+#[cfg(all(test, feature = "plugins", feature = "tokens"))]
+#[allow(dead_code)]
+#[path = "../examples/sdk_probe/plugin_fixture.rs"]
+mod plugin_fixture;
+#[cfg(all(test, feature = "plugins", feature = "tokens"))]
+#[allow(dead_code)]
+#[path = "../examples/sdk_probe/plugin_xml_fixture.rs"]
+mod plugin_xml_fixture;
+
 pub use cades::{CadesConfiguration, ExtendRequest};
 pub use context::{OperationContext, OperationId};
 pub use engine::{Engine, EngineServices, HashReport, OperationAdmission};

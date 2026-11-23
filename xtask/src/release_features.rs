@@ -1,6 +1,6 @@
-//! `cargo xtask check-release-features`: the `testing` feature of the workspace crates
-//! (`PluginUse::for_tests`, `PluginApproval::for_tests` and the like forge what Core never
-//! would) must not be enabled in the **normal** dependency tree of any release program.
+//! `cargo xtask check-release-features`: the `testing` feature of the workspace crates (test
+//! doubles such as `oncl-pki`'s mock TSA, OCSP and CRL services) must not be enabled in the
+//! **normal** dependency tree of any release program.
 //!
 //! A release is built with `-p <crate>`, whose normal tree has no dev-dependencies; but
 //! `cargo build --workspace --all-targets` or `cargo test` unify the dev-dependencies' `testing`

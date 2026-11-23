@@ -1990,6 +1990,10 @@ mod tests {
         let mut r = record();
         r.operation = "o".repeat(256);
         assert!(plugin_frames(&r, None).is_err());
+        // A version no manifest can carry (they stop at 64 characters) is refused the same way.
+        let mut r = record();
+        r.version = format!("1.2.3-{}", "a".repeat(300));
+        assert!(plugin_frames(&r, None).is_err());
         let mut r = record();
         r.plugin_id = "i".repeat(255);
         r.version = "v".repeat(255);

@@ -92,35 +92,6 @@ impl PluginUse {
     pub fn certificate_sha256(&self) -> &[u8; 32] {
         &self.certificate_sha256
     }
-    /// A ticket for tests of guards (for example a document guard that must refuse every
-    /// plugin event). Core builds the real ones from the arguments it runs. Not part of a
-    /// release: only with the `testing` feature.
-    #[cfg(feature = "testing")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_tests(
-        identity: PluginIdentity,
-        operation: impl Into<String>,
-        caller: CallerContext,
-        kind: KeyKind,
-        handle: u32,
-        key: KeyId,
-        content: ContentBinding,
-        options_sha256: [u8; 32],
-        certificate_sha256: [u8; 32],
-    ) -> Self {
-        Self {
-            identity,
-            operation: operation.into(),
-            caller,
-            kind,
-            handle,
-            key,
-            content,
-            options_sha256,
-            certificate_sha256,
-            max_uses: MAX_USES,
-        }
-    }
     /// `{id, package hash, version}` of the registered plugin.
     pub fn identity(&self) -> &PluginIdentity {
         &self.identity
@@ -212,17 +183,6 @@ impl ApprovedUse {
             certificate_sha256,
         }
     }
-    /// For tests of the guard, which must forge what Core never would. Not part of a
-    /// release: only with the `testing` feature.
-    #[cfg(feature = "testing")]
-    pub fn for_tests(
-        kind: KeyKind,
-        content: ContentBinding,
-        options_sha256: [u8; 32],
-        certificate_sha256: [u8; 32],
-    ) -> Self {
-        Self::new(kind, content, options_sha256, certificate_sha256)
-    }
     pub fn certificate_sha256(&self) -> &[u8; 32] {
         &self.certificate_sha256
     }
@@ -277,33 +237,6 @@ impl PluginApproval {
             ttl_deadline,
             nonce,
         }
-    }
-    /// For tests of the guard, which must forge what Core never would. Not part of a
-    /// release: only with the `testing` feature.
-    #[cfg(feature = "testing")]
-    #[allow(clippy::too_many_arguments)]
-    pub fn for_tests(
-        identity: PluginIdentity,
-        operation: impl Into<String>,
-        caller: CallerContext,
-        operation_id: OperationId,
-        key: KeyId,
-        handle: u32,
-        uses: Vec<ApprovedUse>,
-        ttl_deadline: Instant,
-        nonce: [u8; 16],
-    ) -> Self {
-        Self::new(
-            identity,
-            operation,
-            caller,
-            operation_id,
-            key,
-            handle,
-            uses,
-            ttl_deadline,
-            nonce,
-        )
     }
     /// The facts of the use `ticket` makes under this approval, for audit.
     pub fn audit_record(&self, ticket: &PluginUse) -> PluginAuditRecord {
@@ -953,6 +886,14 @@ pub(super) fn xades_profile(args: &abi::XadesArgs) -> Option<Profile> {
         digest_method: digest_method.clone(),
     }))
 }
+
+// The ticket, the guard and the manual window's approved call with actual synthetic WASM and
+// real source-bound crypto. Unit tests: they build approvals and tickets that Core never
+// would (another nonce, another certificate), which no code outside the crate can.
+#[cfg(all(test, feature = "tokens"))]
+mod plugin_approval;
+#[cfg(all(test, feature = "tokens"))]
+mod plugin_ticket;
 
 #[cfg(test)]
 mod tests {
@@ -1780,7 +1721,7 @@ mod tests {
     fn replay_nonces_of_expired_approvals_are_evicted() {
         let guard = PluginConsentGuard::new();
         let approval = |nonce: u8, ttl: std::time::Duration| {
-            PluginApproval::for_tests(
+            PluginApproval::new(
                 PluginIdentity {
                     id: "t".into(),
                     package: PackageHash::File([0; 32]),
@@ -1791,12 +1732,12 @@ mod tests {
                 OperationId(1),
                 crate::keys::KeySelector::inline(Vec::new(), None).key_id(),
                 1,
-                vec![ApprovedUse {
-                    kind: KeyKind::Raw,
-                    content: ContentBinding::bytes(b"x"),
-                    options_sha256: [0; 32],
-                    certificate_sha256: [0; 32],
-                }],
+                vec![ApprovedUse::new(
+                    KeyKind::Raw,
+                    ContentBinding::bytes(b"x"),
+                    [0; 32],
+                    [0; 32],
+                )],
                 Instant::now() + ttl,
                 [nonce; 16],
             )

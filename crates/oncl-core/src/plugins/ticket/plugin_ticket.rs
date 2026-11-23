@@ -264,7 +264,7 @@ fn nonce() -> [u8; 16] {
 }
 /// The approval of the (single) use the declared operation describes.
 fn approval(rig: &Rig, id: OperationId, op: &str, uses: Vec<ApprovedUse>) -> PluginApproval {
-    PluginApproval::for_tests(
+    PluginApproval::new(
         rig.engine.plugin_identity(ID).unwrap().clone(),
         op,
         caller(),
@@ -289,7 +289,7 @@ fn fingerprint(cert: &oncl_pki::cert::Certificate) -> [u8; 32] {
     sha2::Sha256::digest(der::Encode::to_der(cert).unwrap()).into()
 }
 fn used(rig: &Rig, op: &str, kind: KeyKind, content: ContentBinding) -> ApprovedUse {
-    ApprovedUse::for_tests(
+    ApprovedUse::new(
         kind,
         content,
         declared_options(rig, op, "/r"),
@@ -862,7 +862,7 @@ fn options_mismatch_refused() {
     let right = used(&r, case.op, case.kind, case.content);
     let mut options = *right.options_sha256();
     options[0] ^= 1;
-    let wrong = ApprovedUse::for_tests(
+    let wrong = ApprovedUse::new(
         case.kind,
         case.content,
         options,
@@ -1107,7 +1107,7 @@ fn approval_binds_operation_plugin_key_and_time() {
         f(&mut p);
         r.guard
             .consent()
-            .grant(PluginApproval::for_tests(
+            .grant(PluginApproval::new(
                 p.identity,
                 p.op,
                 p.caller,
@@ -1208,7 +1208,7 @@ fn approval_binds_operation_plugin_key_and_time() {
     // A nonce is granted once; an approval needs exactly one use.
     let guard = PluginConsentGuard::new();
     let mk = |n: [u8; 16], uses: usize| {
-        PluginApproval::for_tests(
+        PluginApproval::new(
             r.engine.plugin_identity(ID).unwrap().clone(),
             case.op,
             caller(),
