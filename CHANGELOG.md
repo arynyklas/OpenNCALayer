@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 0.1.3-beta.2 — 2026-11-25
+
 ### Изменено
 
 - Библиотека для Rust (`oncl-core`): удалены feature `testing` и её конструкторы `PluginUse::for_tests`, `ApprovedUse::for_tests`, `PluginApproval::for_tests` и `KeyUseEvent::with_plugin_ticket_for_tests`. Они создавали билеты и одобрения ключа для плагина в обход проверок ядра и в выпуск не входили; публичной замены нет. Как проверять свой охранник без них, описано в `docs/dev/sdk.md` («Переход с 0.1.2 на 0.1.3»).
