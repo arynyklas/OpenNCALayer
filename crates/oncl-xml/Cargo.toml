@@ -11,9 +11,6 @@ keywords = ["xmldsig", "xades", "xml", "signature", "gost"]
 categories = ["cryptography", "parser-implementations"]
 include = ["/src/**", "/LICENSE", "/NOTICE"]
 
-[features]
-testing = ["oncl-pki/testing"]
-
 [dependencies]
 oncl-pki.workspace = true
 base64.workspace = true
@@ -24,18 +21,8 @@ thiserror.workspace = true
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 [dev-dependencies]
+oncl-pki-testing.workspace = true
 oncl-testkit.workspace = true
 tempfile.workspace = true
 time = { workspace = true, features = ["macros"] }
 x509-cert.workspace = true
-
-# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files, each
-# a module of it; the XAdES modules are `#[cfg(feature = "testing")]` there), and
-# `signed_intake` and `xades_large_crl`, which install their own `#[global_allocator]`.
-[[test]]
-name = "xades_large_crl"
-required-features = ["testing"]
-
-[[example]]
-name = "indexed_xml_probe"
-required-features = ["testing"]

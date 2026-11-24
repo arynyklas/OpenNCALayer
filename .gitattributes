@@ -22,7 +22,6 @@ xtask/licenses/*.txt text eol=lf
 crates/oncl-core/THIRD-PARTY.txt text eol=lf
 # Embedded byte for byte (`include_bytes!`) and compared with `fixtures/`: no conversion.
 crates/oncl-pki/roots/** -text
-crates/oncl-pki/testing-data/** -text
 # The sha256 of an update index is in the TUF targets (`cargo xtask tuf update`), so the bytes
 # must stay as committed: no end-of-line conversion.
 updates/** -text

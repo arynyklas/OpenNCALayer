@@ -1,0 +1,24 @@
+[package]
+name = "oncl-pki-testing"
+description = "Test doubles of the NCA services for OpenNCALayer tests: a live TSA, OCSP responder and CRL distribution point answering correctly, and certificates issued on the fly"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+# Never part of the SDK: a dev-dependency of the crates' tests (and a normal dependency of the
+# test and tooling crates oncl-port-tests and xtask). `xtask::sdk_delivery::FORBIDDEN` keeps
+# it out of the SDK closure.
+publish = false
+
+[dependencies]
+base64.workspace = true
+der.workspace = true
+oncl-pki.workspace = true
+spki.workspace = true
+time.workspace = true
+x509-cert.workspace = true
+
+[dev-dependencies]
+oncl-testkit.workspace = true
+time = { workspace = true, features = ["macros"] }

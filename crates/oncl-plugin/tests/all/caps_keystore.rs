@@ -24,7 +24,7 @@ use oncl_pki::keystore::{
 };
 use oncl_pki::oid;
 use oncl_pki::pkcs12::{Pkcs12Error, load, load_contents};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use oncl_plugin::{
     Engine, HostServices, Instance, LoadError, Manifest, SessionContext, Trust, cause,
 };

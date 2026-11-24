@@ -182,11 +182,11 @@ impl oncl_pki::http::HttpTransport for Live {
     ) -> Result<oncl_pki::http::HttpReply, oncl_pki::http::HttpError> {
         let now = (self.clock)();
         if self.tsa {
-            oncl_pki::tsp::MockTsa::new(self.key.clone())
+            oncl_pki_testing::MockTsa::new(self.key.clone())
                 .with_gen_time(now)
                 .send(request)
         } else {
-            oncl_pki::ocsp::MockOcsp::new(self.key.clone())
+            oncl_pki_testing::MockOcsp::new(self.key.clone())
                 .with_now(now)
                 .send(request)
         }
@@ -218,7 +218,7 @@ impl OperationControl for Ticking {
 struct Pki {
     signer: oncl_pki::pkcs12::KeyEntry,
     anchors: oncl_pki::pkix::CaSet,
-    http: oncl_pki::http::RouteTransport,
+    http: oncl_pki_testing::RouteTransport,
     tsa: oncl_pki::tsp::TsaSpec,
     /// Kept to re-route the fixed-clock mock responders (`with_ocsp`).
     responder: oncl_pki::pkcs12::KeyEntry,
@@ -227,19 +227,17 @@ struct Pki {
 }
 impl Pki {
     /// The same world with the OCSP route answered by `make(responder, tsa key)`.
-    fn with_ocsp(
+    fn with_ocsp<T: oncl_pki::http::HttpTransport + 'static>(
         mut self,
-        make: impl FnOnce(
-            oncl_pki::pkcs12::KeyEntry,
-            oncl_pki::pkcs12::KeyEntry,
-        ) -> oncl_pki::ocsp::MockOcsp,
+        make: impl FnOnce(oncl_pki::pkcs12::KeyEntry, oncl_pki::pkcs12::KeyEntry) -> T,
     ) -> Self {
         let ocsp = make(self.responder.clone(), self.tsa_key.clone());
-        self.http = oncl_pki::http::RouteTransport::new(vec![
+        self.http = oncl_pki_testing::RouteTransport::new(vec![
             (
                 self.tsa.url.clone(),
                 Arc::new(
-                    oncl_pki::tsp::MockTsa::new(self.tsa_key.clone()).with_gen_time(self.tsa_now),
+                    oncl_pki_testing::MockTsa::new(self.tsa_key.clone())
+                        .with_gen_time(self.tsa_now),
                 ) as Arc<dyn oncl_pki::http::HttpTransport>,
             ),
             (
@@ -268,12 +266,8 @@ impl Pki {
         tsa_now: time::OffsetDateTime,
         live: Option<Clock>,
     ) -> Self {
-        use oncl_pki::{
-            http::RouteTransport,
-            ocsp::MockOcsp,
-            testing::{TestCertSpec, issue_cert},
-            tsp::{MockTsa, TsaProfile, TsaSpec},
-        };
+        use oncl_pki::tsp::{TsaProfile, TsaSpec};
+        use oncl_pki_testing::{MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
         fn key(name: &str) -> oncl_pki::pkcs12::KeyEntry {
             let f = synthetic(name);
             oncl_pki::pkcs12::load(&read(&f.path), &f.password)
@@ -612,12 +606,10 @@ fn proof_only_extension_and_renewal_preserve_all_old_proofs() {
 fn rotated_current_tsa_data_is_noncyclic_and_next_archive_protects_it() {
     use oncl_pki::{
         evidence::AdesLevel,
-        http::{HttpError, HttpReply, HttpRequest, HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        testing::{TestCertSpec, issue_cert},
-        tsp::MockTsa,
+        http::{HttpError, HttpReply, HttpRequest, HttpTransport},
         validation::Verdict,
     };
+    use oncl_pki_testing::{MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
     use oncl_xml::xades::{XadesServices, XadesSourceSpec};
     use std::sync::atomic::{AtomicUsize, Ordering};
     struct Rotate {
@@ -2290,43 +2282,81 @@ fn serial_hex(key: &oncl_pki::pkcs12::KeyEntry) -> String {
         .collect()
 }
 
-/// Every control case must not be Valid at any verification time (signing may itself
-/// already refuse it: then the case is rejected at signing).
-fn lt_control_never_valid(
+/// A control case: signing at `sign_now` must be refused by the final validation for the
+/// signer's revocation status (the status evidence is stale, forged, for another
+/// certificate, from an unauthorized responder, or says revoked), so no document exists.
+/// Each call also signs the same level with the good responders first, so the refusal is
+/// the case's and not the fixture's.
+fn lt_control_refused_at_signing(
     label: &str,
     pki: &mut Pki,
     level: oncl_pki::evidence::AdesLevel,
     sign_now: time::OffsetDateTime,
 ) {
-    use oncl_pki::validation::Verdict;
-    let Ok((bytes, signed)) = lt_sign(pki, level, sign_now) else {
-        return;
-    };
-    if signed == Verdict::Valid {
-        // Sign-time evidence is judged as Valid there: it must be judged so only if the
-        // evidence is in order at every later time too, so verify later.
+    let (_, good) = lt_sign(&mut Pki::at("user-rsa-sign", T0), level, sign_now)
+        .unwrap_or_else(|e| panic!("control {label} {level:?}: good responders refused: {e}"));
+    assert_eq!(
+        good,
+        oncl_pki::validation::Verdict::Valid,
+        "control {label} {level:?}"
+    );
+    match lt_sign(pki, level, sign_now) {
+        Ok((_, verdict)) => panic!("{label} {level:?}: signed ({verdict:?}), expected a refusal"),
+        Err(e) => assert!(
+            e.contains("final XAdES validation failed: signer revocation status"),
+            "{label} {level:?}: refused for another reason: {e}"
+        ),
     }
-    for delta in [
-        time::Duration::ZERO,
-        time::Duration::HOUR,
-        time::Duration::DAY,
-    ] {
-        let (verdict, ..) = lt_verify(pki, &bytes, T0 + delta, ValidationPolicy::StrictOnline);
-        assert_ne!(verdict, Verdict::Valid, "{label} {level:?} +{delta}");
+}
+
+/// A responder that answers `request` whatever it is asked.
+struct AnswerFor {
+    ocsp: oncl_pki_testing::MockOcsp,
+    request: Vec<u8>,
+}
+
+impl oncl_pki::http::HttpTransport for AnswerFor {
+    fn send(
+        &self,
+        request: &oncl_pki::http::HttpRequest<'_>,
+    ) -> Result<oncl_pki::http::HttpReply, oncl_pki::http::HttpError> {
+        self.ocsp.send(&oncl_pki::http::HttpRequest::post(
+            request.url,
+            None,
+            &self.request,
+            request.opts,
+        ))
     }
+}
+
+/// An `OCSPRequest` for `signer`'s certificate with the lowest bit of its serial number
+/// flipped (the synthetic root issues it).
+fn other_serial_request(signer: &oncl_pki::pkcs12::KeyEntry) -> Vec<u8> {
+    let f = synthetic("root-gost2015.key");
+    let root = oncl_pki::pkcs12::load(&read(&f.path), &f.password)
+        .unwrap()
+        .remove(0);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&signer.cert);
+    *spec.serial.last_mut().unwrap() ^= 1;
+    let other = oncl_pki_testing::issue_cert(&root, spec);
+    assert_eq!(
+        signer.cert.tbs_certificate().issuer(),
+        other.tbs_certificate().issuer()
+    );
+    oncl_pki::ocsp::request_der(&other, &root.cert)
 }
 
 #[test]
 fn lt_lta_control_cases_stay_rejected_at_proof_time() {
-    use oncl_pki::{
-        evidence::AdesLevel,
-        ocsp::{CertStatus, MockOcsp, OcspTamper},
-    };
+    use oncl_pki::{evidence::AdesLevel, ocsp::CertStatus};
+    use oncl_pki_testing::MockOcsp;
     for level in [AdesLevel::Lt, AdesLevel::Lta] {
-        // Stale at signing: issued two hours before the proof.
-        let mut pki = Pki::at("user-rsa-sign", T0)
-            .with_ocsp(|r, _| MockOcsp::new(r).with_now(T0).tamper(OcspTamper::Stale));
-        lt_control_never_valid("stale", &mut pki, level, T0);
+        // Stale at signing: thisUpdate two hours before the proof, nextUpdate about an hour
+        // before it.
+        let mut pki = Pki::at("user-rsa-sign", T0).with_ocsp(|r, _| {
+            MockOcsp::new(r).with_now(T0 - time::Duration::hours(2) + time::Duration::MINUTE)
+        });
+        lt_control_refused_at_signing("stale", &mut pki, level, T0);
         // From the future of the verifier: minted two hours after the proof, verified
         // an hour after it.
         let mut pki = Pki::at_split("user-rsa-sign", T0 + time::Duration::hours(2), T0, None);
@@ -2362,20 +2392,27 @@ fn lt_lta_control_cases_stay_rejected_at_proof_time() {
             });
             pki
         };
-        lt_control_never_valid("revoked at P", &mut pki, level, T0);
-        // The response's signature is wrong, the CertID is another certificate's, the
-        // responder is not an OCSP responder.
-        for (label, tamper) in [
-            ("bad signature", Some(OcspTamper::WrongKey)),
-            ("wrong CertID", Some(OcspTamper::OtherCertId)),
-            ("not authorized", None),
-        ] {
-            let mut pki = Pki::at("user-rsa-sign", T0).with_ocsp(move |r, tsa| match tamper {
-                Some(tamper) => MockOcsp::new(r).with_now(T0).tamper(tamper),
-                None => MockOcsp::new(tsa).with_now(T0),
-            });
-            lt_control_never_valid(label, &mut pki, level, T0);
-        }
+        lt_control_refused_at_signing("revoked at P", &mut pki, level, T0);
+        // The response's signature is wrong: the responder's certificate, the TSA's key.
+        let mut pki = Pki::at("user-rsa-sign", T0).with_ocsp(|mut r, tsa| {
+            assert_eq!(r.key.alg(), tsa.key.alg());
+            r.key = tsa.key;
+            MockOcsp::new(r).with_now(T0)
+        });
+        lt_control_refused_at_signing("bad signature", &mut pki, level, T0);
+        // The CertID is another certificate's: the answer is for the signer's serial number
+        // with its lowest bit flipped.
+        let pki = Pki::at("user-rsa-sign", T0);
+        let other = other_serial_request(&pki.signer);
+        let mut pki = pki.with_ocsp(move |r, _| AnswerFor {
+            ocsp: MockOcsp::new(r).with_now(T0),
+            request: other,
+        });
+        lt_control_refused_at_signing("wrong CertID", &mut pki, level, T0);
+        // The responder is not an OCSP responder.
+        let mut pki =
+            Pki::at("user-rsa-sign", T0).with_ocsp(|_, tsa| MockOcsp::new(tsa).with_now(T0));
+        lt_control_refused_at_signing("not authorized", &mut pki, level, T0);
     }
 }
 

@@ -2504,7 +2504,7 @@ fn serial_hex(cert: &x509_cert::Certificate) -> String {
 fn synthetic_ocsp(
     revoked: Option<(&str, time::OffsetDateTime)>,
 ) -> (String, Arc<dyn HttpTransport>) {
-    let mut responder = oncl_pki::ocsp::MockOcsp::new(entry("ocsp-gost2015"));
+    let mut responder = oncl_pki_testing::MockOcsp::new(entry("ocsp-gost2015"));
     if let Some((store, at)) = revoked {
         responder = responder.status(
             &serial_hex(&entry(store).cert),
@@ -2545,7 +2545,7 @@ fn cms_of(
             &cms,
             0,
             &oncl_pki::tsp::TsaProfile::basics_default(),
-            &oncl_pki::tsp::MockTsa::new(entry("tsa-gost2015")).with_gen_time(gen_time),
+            &oncl_pki_testing::MockTsa::new(entry("tsa-gost2015")).with_gen_time(gen_time),
         )
         .unwrap(),
         None => cms,
@@ -2840,7 +2840,7 @@ fn store_with_eku(eku: &str) -> std::path::PathBuf {
     use der::{Decode, Encode};
     use x509_cert::ext::pkix::ExtendedKeyUsage;
     let user = entry("user-gost2015-sign");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&user.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&user.cert);
     for extension in &mut spec.extensions {
         if extension.extn_id.to_string() == "2.5.29.37" {
             let mut usages = ExtendedKeyUsage::from_der(extension.extn_value.as_bytes()).unwrap();
@@ -2848,7 +2848,7 @@ fn store_with_eku(eku: &str) -> std::path::PathBuf {
             extension.extn_value = der::asn1::OctetString::new(usages.to_der().unwrap()).unwrap();
         }
     }
-    let cert = oncl_pki::testing::issue_cert(&entry("root-gost2015.key"), spec);
+    let cert = oncl_pki_testing::issue_cert(&entry("root-gost2015.key"), spec);
     let pfx = oncl_pki::pkcs12::write(
         &[oncl_pki::pkcs12::WriteEntry {
             alias: "blocked".to_owned(),
@@ -2960,8 +2960,8 @@ fn qoltanba_sign_file_bytes_excludes_blocked_eku() {
 fn store_self_issued(name: &str) -> std::path::PathBuf {
     use der::Encode;
     let user = entry(name);
-    let spec = oncl_pki::testing::TestCertSpec::from_cert(&user.cert);
-    let cert = oncl_pki::testing::issue_cert(&user, spec);
+    let spec = oncl_pki_testing::TestCertSpec::from_cert(&user.cert);
+    let cert = oncl_pki_testing::issue_cert(&user, spec);
     let pfx = oncl_pki::pkcs12::write(
         &[oncl_pki::pkcs12::WriteEntry {
             alias: "self-issued".to_owned(),
@@ -3331,7 +3331,7 @@ fn stamped(cms: &[u8], index: usize, at: time::OffsetDateTime) -> Vec<u8> {
         cms,
         index,
         &oncl_pki::tsp::TsaProfile::basics_default(),
-        &oncl_pki::tsp::MockTsa::new(entry("tsa-gost2015")).with_gen_time(at),
+        &oncl_pki_testing::MockTsa::new(entry("tsa-gost2015")).with_gen_time(at),
     )
     .unwrap()
 }
@@ -3451,9 +3451,9 @@ fn qoltanba_visual_cms_many_signers_paginate() {
 fn legal_with_subject(subject: &str) -> oncl_pki::pkcs12::KeyEntry {
     use std::str::FromStr;
     let legal = entry("legal-gost2015-sign");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&legal.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&legal.cert);
     spec.subject = x509_cert::name::Name::from_str(subject).unwrap();
-    let cert = oncl_pki::testing::issue_cert(&entry("root-gost2015.key"), spec);
+    let cert = oncl_pki_testing::issue_cert(&entry("root-gost2015.key"), spec);
     oncl_pki::pkcs12::KeyEntry {
         alias: "edge".to_owned(),
         key: legal.key.clone(),
@@ -3802,9 +3802,9 @@ fn jks(certs: &[Vec<u8>]) -> Vec<u8> {
 fn skf_inter() -> Vec<u8> {
     use der::Encode;
     let inter = oncl_pki::cert::parse(&oncl_testkit::synthetic_cert("inter-gost2015")).unwrap();
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&inter);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&inter);
     spec.serial = unhex("3576f5b31b5a6821a16fefab1212c94d938dc7ee");
-    oncl_pki::testing::issue_cert(&entry("root-gost2015.key"), spec)
+    oncl_pki_testing::issue_cert(&entry("root-gost2015.key"), spec)
         .to_der()
         .unwrap()
 }
@@ -3863,7 +3863,7 @@ const TEMPLATE: &str = "https://portal.efis.kz/pub/template.xml";
 /// responder), the page's key files allowed.
 fn skf_harness(efis: &Arc<Efis>) -> Harness {
     let portal: Arc<dyn HttpTransport> = efis.clone();
-    let root_crl = oncl_pki::crl::MockCrl::new(entry("root-gost2015.key"));
+    let root_crl = oncl_pki_testing::MockCrl::new(entry("root-gost2015.key"));
     Harness::new(
         vec![Step::Confirm { yes: true }, Step::Confirm { yes: true }],
         vec![

@@ -79,7 +79,8 @@ fn xml_dispatch_retains_actual_reference_facts() {
 
 #[test]
 fn xml_timestamp_dispatch_uses_f03_without_final_output_credit_or_trust_promotion() {
-    use oncl_pki::tsp::{MockTsa, TsaProfile, TsaSpec};
+    use oncl_pki::tsp::{TsaProfile, TsaSpec};
+    use oncl_pki_testing::MockTsa;
     use oncl_xml::xades::{XadesLevel, XadesSpec};
     let load = |name: &str| {
         let fixture = oncl_testkit::synthetic(name);

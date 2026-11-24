@@ -30,7 +30,5 @@ pub mod private_fs;
 pub mod resource;
 pub mod roots;
 mod rsa;
-#[cfg(feature = "testing")]
-pub mod testing;
 pub mod tsp;
 pub mod validation;

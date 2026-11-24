@@ -1,4 +1,8 @@
 //! C01 tests-first contract. The controller owns RED/GREEN; no production shim.
+
+#[path = "doubles/mod.rs"]
+mod doubles;
+
 use der::asn1::{AnyRef, ObjectIdentifier};
 use der::{Decode, Encode, Reader, SliceReader};
 use oncl_pki::cms::stream::{self, StreamError};
@@ -1027,7 +1031,7 @@ fn mixed_digest_signers_use_all_declared_algorithms_without_replaying_content() 
 fn genuine_embedded_current_crl_can_complete_offline_validation_as_valid() {
     let der = signed("user-gost2015-sign", DATA, true, false);
     let root = entry("root-gost2015.key");
-    let mut crl = children(&oncl_pki::crl::MockCrl::new(entry("root-gost2015.key")).der());
+    let mut crl = children(&crate::doubles::MockCrl::new(entry("root-gost2015.key")).der());
     let mut tbs = children(&crl[0]);
     tbs[3] = tlv(0x17, b"261102115900Z");
     tbs[4] = tlv(0x17, b"261102130000Z");

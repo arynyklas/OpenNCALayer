@@ -24,7 +24,8 @@ oncl-ipc.workspace = true
 oncl-pdk.workspace = true
 # `plugin pack`: the build and checks of a plugin package (the builder image's code).
 oncl-pack.workspace = true
-oncl-pki = { workspace = true, features = ["testing"] }
+oncl-pki.workspace = true
+oncl-pki-testing.workspace = true
 # `plugin pack` and `index add-plugin`: the package format and the ABI check the daemon uses.
 oncl-plugin = { workspace = true, features = ["distribution"] }
 oncl-protocol.workspace = true

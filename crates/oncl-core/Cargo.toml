@@ -57,7 +57,7 @@ der.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-oncl-pki = { workspace = true, features = ["testing"] }
+oncl-pki-testing.workspace = true
 oncl-testkit.workspace = true
 oncl-token = { workspace = true, features = ["emulator"] }
 der.workspace = true

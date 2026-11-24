@@ -21,12 +21,6 @@
 //! - Every failure is a [`CrlError`], never a [`CrlStatus`]: callers decide what an
 //!   unchecked certificate means.
 
-#[cfg(feature = "testing")]
-mod mock;
-
-#[cfg(feature = "testing")]
-pub use mock::MockCrl;
-
 use crate::asn1util::{Enumerated, unsigned};
 use crate::ber::{self, BerError};
 use crate::cert::Certificate;

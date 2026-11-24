@@ -1355,7 +1355,7 @@ fn incoming_eight_nine_signature_and_x5c_boundaries_precede_add_guard() {
 fn renewed_public_root(serial: u32, extension_bytes: usize) -> oncl_pki::cert::Certificate {
     use der::asn1::{ObjectIdentifier, OctetString};
     let root = raw("root-gost2015.key");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&root.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&root.cert);
     spec.serial = serial.to_be_bytes().to_vec();
     if extension_bytes != 0 {
         let mut extension = spec.extensions[0].clone();
@@ -1370,7 +1370,7 @@ fn renewed_public_root(serial: u32, extension_bytes: usize) -> oncl_pki::cert::C
         extension.extn_value = OctetString::new(public).unwrap();
         spec.extensions.push(extension);
     }
-    oncl_pki::testing::issue_cert(&root, spec)
+    oncl_pki_testing::issue_cert(&root, spec)
 }
 fn configured_root_engine(
     anchors: Vec<oncl_pki::cert::Certificate>,

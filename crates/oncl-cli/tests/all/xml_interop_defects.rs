@@ -267,12 +267,16 @@ fn xades_lt_with_a_multi_megabyte_crl_is_verified_not_refused() {
         .to_vec();
 
     let crl = |entries: u32, list_signer: bool, wrong_key: bool| {
-        let mut crl = oncl_pki::crl::MockCrl::new(w.pki.root.clone())
+        // A CRL "not issued by the root": the root's name, signed with another RSA key
+        // (the RSA signer's).
+        let mut issuer = w.pki.root.clone();
+        if wrong_key {
+            assert_eq!(issuer.key.alg(), w.pki.rsa.key.alg());
+            issuer.key = w.pki.rsa.key.clone();
+        }
+        let mut crl = oncl_pki_testing::MockCrl::new(issuer)
             .with_this_update(now() - time::Duration::MINUTE)
             .next_update(Some(now() + time::Duration::HOUR));
-        if wrong_key {
-            crl = crl.wrong_key();
-        }
         for index in 0..entries {
             if list_signer && index == entries / 2 {
                 crl = crl.revoke_with_reason(&signer_serial, now() - time::Duration::DAY, 1);

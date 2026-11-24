@@ -257,12 +257,12 @@ pub fn run(out: &Path) -> Result<()> {
     let origin = format!("http://{}", listener.local_addr()?);
     let (root, tsa, responder, rsa, gost15) = xml_sign_probe::pki(&origin)?;
     let mut gost04 = fixture_entry("user-gost2004-sign");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&gost04.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&gost04.cert);
     xml_sign_probe::strip(&mut spec);
     spec.serial = vec![0x70, 5, 12];
     spec.extensions
         .push(xml_sign_probe::aia(&format!("{origin}/ocsp")));
-    gost04.cert = oncl_pki::testing::issue_cert(&root, spec);
+    gost04.cert = oncl_pki_testing::issue_cert(&root, spec);
     fs::write(out.join("root.der"), root.cert.to_der()?)?;
     let server =
         xml_sign_probe::PkiServer::start(listener, origin.clone(), tsa, responder, out.to_owned())?;

@@ -27,11 +27,6 @@
 //!   unchecked certificate means.
 
 mod asn1;
-#[cfg(feature = "testing")]
-mod mock;
-
-#[cfg(feature = "testing")]
-pub use mock::{MockOcsp, OcspTamper};
 
 use crate::asn1util::{RawSequence, TimeError, generalized_time};
 use crate::ber::{self, BerError};

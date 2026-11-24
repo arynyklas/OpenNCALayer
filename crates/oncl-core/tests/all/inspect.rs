@@ -279,9 +279,9 @@ fn certificate_info_is_keyless_and_honest_about_unsupported_algorithm_oids() {
             .unwrap()
             .remove(0)
     };
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&issuer.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&issuer.cert);
     spec.public_key.algorithm.oid = der::asn1::ObjectIdentifier::new_unwrap("1.2.3.19.999");
-    let cert = oncl_pki::testing::issue_cert(&issuer, spec);
+    let cert = oncl_pki_testing::issue_cert(&issuer, spec);
     use der::Encode;
     let bytes = cert.to_der().unwrap();
     let engine = engine();

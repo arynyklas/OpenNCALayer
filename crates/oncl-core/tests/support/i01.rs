@@ -3,16 +3,15 @@
 use der::{Decode, Reader, SliceReader};
 use oncl_pki::{
     cert::Certificate,
-    crl::MockCrl,
     http::{GetOptions, HttpError, HttpReply, HttpRequest, HttpTransport, NonceSpec, PkiMethod},
     key::{HashAlg, PrivateKey},
-    ocsp::{CertStatus, MockOcsp, OcspTamper},
+    ocsp::CertStatus,
     pkcs12::KeyEntry,
     pkix::CaSet,
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaSpec},
+    tsp::TsaSpec,
     validation::NetworkPolicy,
 };
+use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa, TestCertSpec, issue_cert};
 use std::{
     io::{Read, Write},
     sync::{
@@ -77,6 +76,7 @@ pub struct SignedFixtures {
     pub root: Certificate,
     pub tsa_cert: Certificate,
     pub tsa: MockTsa,
+    tsa_tamper: TsaTamper,
     ocsp: MockOcsp,
     crl: MockCrl,
     pub requests: AtomicUsize,
@@ -84,14 +84,7 @@ pub struct SignedFixtures {
 }
 impl SignedFixtures {
     pub fn new(origin: &str, gen_time: time::OffsetDateTime, status: Status) -> Arc<Self> {
-        Self::variant(
-            origin,
-            gen_time,
-            status,
-            true,
-            None,
-            oncl_pki::tsp::MockTamper::None,
-        )
+        Self::variant(origin, gen_time, status, true, None, TsaTamper::None)
     }
     pub fn variant(
         origin: &str,
@@ -99,7 +92,7 @@ impl SignedFixtures {
         status: Status,
         eku: bool,
         expires: Option<time::OffsetDateTime>,
-        tamper: oncl_pki::tsp::MockTamper,
+        tamper: TsaTamper,
     ) -> Arc<Self> {
         let mut root = entry("root-gost2015.key");
         root.key = PrivateKey::from_pkcs8_der(
@@ -166,7 +159,12 @@ impl SignedFixtures {
         spec.serial = vec![0x19, 1, 3];
         spec.public_key = responder.key.public_key().to_spki();
         responder.cert = issue_cert(&root, spec);
-        let mut ocsp = MockOcsp::new(responder).with_now(NOW);
+        // A stale answer: thisUpdate two hours ago, nextUpdate about an hour ago.
+        let ocsp_now = match status {
+            Status::Stale => NOW - time::Duration::hours(2) + time::Duration::MINUTE,
+            _ => NOW,
+        };
+        let mut ocsp = MockOcsp::new(responder).with_now(ocsp_now);
         let mut crl = MockCrl::new(root.clone())
             .with_this_update(NOW - time::Duration::MINUTE)
             .next_update(Some(NOW + time::Duration::HOUR));
@@ -183,7 +181,6 @@ impl SignedFixtures {
                 crl = crl.revoke(&[0x19, 1, 2], at);
             }
             Status::Stale => {
-                ocsp = ocsp.tamper(OcspTamper::Stale);
                 crl = crl
                     .with_this_update(NOW - time::Duration::hours(2))
                     .next_update(Some(NOW - time::Duration::HOUR));
@@ -192,9 +189,8 @@ impl SignedFixtures {
         Arc::new(Self {
             root: root.cert,
             tsa_cert: tsa.cert.clone(),
-            tsa: MockTsa::new(tsa)
-                .with_gen_time(gen_time)
-                .with_tamper(tamper),
+            tsa: MockTsa::new(tsa).with_gen_time(gen_time),
+            tsa_tamper: tamper,
             ocsp,
             crl,
             requests: AtomicUsize::new(0),
@@ -243,7 +239,20 @@ impl HttpTransport for SignedFixtures {
     fn send(&self, request: &HttpRequest<'_>) -> Result<HttpReply, HttpError> {
         self.requests.fetch_add(1, Ordering::SeqCst);
         if request.url.ends_with("/tsa") {
-            self.tsa.send(request)
+            match self.tsa_tamper {
+                TsaTamper::None => self.tsa.send(request),
+                TsaTamper::Nonce => {
+                    // The nonce is flipped in a POSTed request; a GET carries it in the URL.
+                    if request.body.is_empty() {
+                        return Err(HttpError::other("the nonce tamper needs a POSTed request"));
+                    }
+                    let body = other_nonce(request.body);
+                    self.tsa.send(&HttpRequest {
+                        body: &body,
+                        ..*request
+                    })
+                }
+            }
         } else if request.url.ends_with("/root.crl") {
             self.crl.send(request)
         } else if request.url.contains("/ocsp") {
@@ -253,6 +262,36 @@ impl HttpTransport for SignedFixtures {
         }
     }
 }
+/// How the TSA of [`SignedFixtures`] answers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TsaTamper {
+    /// Correctly.
+    None,
+    /// With another nonce than the request's: the request reaches it with the lowest bit
+    /// of its nonce flipped.
+    Nonce,
+}
+
+/// `TimeStampReq` of RFC 3161, as `oncl-pki` sends it (no extensions).
+#[derive(der::Sequence)]
+struct TimeStampReq<'a> {
+    version: u8,
+    message_imprint: der::asn1::AnyRef<'a>,
+    req_policy: Option<der::asn1::ObjectIdentifier>,
+    nonce: Option<der::asn1::UintRef<'a>>,
+    cert_req: Option<bool>,
+}
+
+/// The DER `TimeStampReq` `request` with the lowest bit of its nonce flipped.
+fn other_nonce(request: &[u8]) -> Vec<u8> {
+    use der::Encode;
+    let mut req = TimeStampReq::from_der(request).expect("a TimeStampReq");
+    let mut nonce = req.nonce.expect("a nonce").as_bytes().to_vec();
+    *nonce.last_mut().expect("a nonce byte") ^= 1;
+    req.nonce = Some(der::asn1::UintRef::new(&nonce).unwrap());
+    req.to_der().unwrap()
+}
+
 pub struct Server {
     stop: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<Result<(), String>>>,

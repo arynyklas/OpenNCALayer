@@ -8,14 +8,13 @@ pub mod scripted;
 
 use crate::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_flows::Locale;
-use oncl_pki::crl::MockCrl;
-use oncl_pki::http::{
-    HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport, RouteTransport,
-};
-use oncl_pki::ocsp::MockOcsp;
+use oncl_pki::http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::pkcs12::{self, KeyEntry};
 use oncl_pki::pkix::CaSet;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockCrl;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::MockTsa;
+use oncl_pki_testing::RouteTransport;
 use oncl_plugin::{Engine, HostServices, Instance, Manifest, Package, SessionContext};
 use oncl_protocol::{AddInfo, Reply};
 use std::path::PathBuf;

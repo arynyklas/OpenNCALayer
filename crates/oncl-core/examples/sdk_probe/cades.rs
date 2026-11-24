@@ -10,10 +10,10 @@ use oncl_pki::{
     key::{PrivateKey, SigAlg},
     pkix::CaSet,
     resource::SharedBudget,
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaMethod, TsaProfile, TsaSpec},
+    tsp::{TsaMethod, TsaProfile, TsaSpec},
     validation::{NetworkPolicy, ValidationContext, ValidationPolicy, Verdict},
 };
+use oncl_pki_testing::{MockTsa, TestCertSpec, issue_cert};
 use std::{
     io::{Cursor, Read, Write},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -320,8 +320,8 @@ pub(super) fn run(out: &std::path::Path) -> Result<(), Box<dyn std::error::Error
     spec.serial = vec![0x63, 0x33, 4];
     responder.cert = issue_cert(&root, spec);
     let tsa_http = Arc::new(MockTsa::new(tsa.clone()).with_gen_time(FIXED_NOW));
-    let ocsp_http = oncl_pki::ocsp::MockOcsp::new(responder).with_now(FIXED_NOW);
-    let crl_http = oncl_pki::crl::MockCrl::new(root.clone())
+    let ocsp_http = oncl_pki_testing::MockOcsp::new(responder).with_now(FIXED_NOW);
+    let crl_http = oncl_pki_testing::MockCrl::new(root.clone())
         .with_this_update(FIXED_NOW - time::Duration::MINUTE)
         .next_update(Some(FIXED_NOW + time::Duration::HOUR));
     let crl = crl_http.der();

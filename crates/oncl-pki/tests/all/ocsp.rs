@@ -2,6 +2,7 @@
 //! against `MockOcsp` with the synthetic responders of the intermediate PKI, plus golden
 //! vectors: an OpenSSL request and a recorded answer of the NCA test responder.
 
+use crate::doubles::{MockOcsp, OcspTamper};
 use der::asn1::{AnyRef, IntRef, OctetStringRef};
 use der::{Decode, Encode, Sequence};
 use oncl_pki::cert::{self, Certificate};
@@ -10,9 +11,7 @@ use oncl_pki::http::{
     MAX_RESPONSE_LEN, NonceSpec, PkiMethod, UreqTransport, nca_get_url,
 };
 use oncl_pki::key::HashAlg;
-use oncl_pki::ocsp::{
-    self, ALLOWED_PERIOD, CLOCK_SKEW, CertStatus, MockOcsp, OcspError, OcspTamper, TIMEOUT,
-};
+use oncl_pki::ocsp::{self, ALLOWED_PERIOD, CLOCK_SKEW, CertStatus, OcspError, TIMEOUT};
 use oncl_pki::oid;
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::{CaSet, PathError};

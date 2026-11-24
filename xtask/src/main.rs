@@ -54,9 +54,9 @@ enum Command {
     },
     /// Sign with the synthetic RSA key and check the CMS with `openssl cms -verify`.
     InteropOpenssl,
-    /// Fail if the `testing` feature is enabled in the normal dependency tree of a release
-    /// program (`openncalayer`, `oncl-cli`, `oncl-server`, `oncl-ui`): it would ship test
-    /// doubles such as `oncl-pki`'s mock PKI services (docs/dev/sdk.md).
+    /// Fail if test code is in the normal dependency tree of a release program
+    /// (`openncalayer`, `oncl-cli`, `oncl-server`, `oncl-ui`): a test-only crate such as
+    /// `oncl-pki-testing` (the NCA service doubles) or any `testing` feature.
     CheckReleaseFeatures,
     /// SDK delivery evidence: dependency closure, packaged-sources consumer smoke, licence
     /// inventory (docs/dev/sdk.md).

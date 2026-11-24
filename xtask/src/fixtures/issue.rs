@@ -73,7 +73,7 @@ impl Key {
     }
 
     /// Certificate signature algorithm of this key as an issuer; the parameters are NULL.
-    fn signature_algorithm(&self) -> AlgorithmIdentifierOwned {
+    pub(super) fn signature_algorithm(&self) -> AlgorithmIdentifierOwned {
         let oid = match &self.secret {
             Secret::Gost { alg, .. } => ObjectIdentifier::new_unwrap(alg.signature_oid()),
             Secret::Rsa(_) => SHA256_WITH_RSA,
@@ -86,7 +86,7 @@ impl Key {
 
     /// Deterministic signature of `message`: GOST with a nonce `k` from `rng` (redrawn while
     /// outside `[1, q − 1]` or yielding `r = 0` / `s = 0`), RSA PKCS#1 v1.5 with SHA-256.
-    fn sign(&self, message: &[u8], rng: &mut ChaCha20Rng) -> Vec<u8> {
+    pub(super) fn sign(&self, message: &[u8], rng: &mut ChaCha20Rng) -> Vec<u8> {
         match &self.secret {
             Secret::Gost { alg, key } => {
                 let digest = alg.hash(message);

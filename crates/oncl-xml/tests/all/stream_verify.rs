@@ -170,10 +170,10 @@ fn uri_percent_and_supported_xpointer_bind_actual_targets() {
     }
 }
 
-#[cfg(feature = "testing")]
 #[test]
 fn recognized_xades_proof_is_not_ignored_or_promoted_to_trust() {
-    use oncl_pki::tsp::{MockTsa, TsaProfile, TsaSpec};
+    use oncl_pki::tsp::{TsaProfile, TsaSpec};
+    use oncl_pki_testing::MockTsa;
     use oncl_xml::xades::{XadesLevel, XadesSpec, sign};
     let fixture = synthetic("user-rsa-sign");
     let key = oncl_pki::pkcs12::load(&read(&fixture.path), &fixture.password)
@@ -213,16 +213,13 @@ fn recognized_xades_proof_is_not_ignored_or_promoted_to_trust() {
     );
 }
 
-#[cfg(feature = "testing")]
 #[test]
 fn genuine_signature_value_proof_rescues_expiry_only_with_exact_layout_and_host_status() {
     use oncl_pki::{
-        http::RouteTransport,
-        ocsp::MockOcsp,
         pkcs12::KeyEntry,
-        testing::{TestCertSpec, issue_cert},
-        tsp::{MockTsa, TsaProfile, TsaSpec},
+        tsp::{TsaProfile, TsaSpec},
     };
+    use oncl_pki_testing::{MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
     use oncl_xml::xades::{XadesLevel, XadesSpec, sign};
     fn key(name: &str) -> KeyEntry {
         let fixture = synthetic(name);

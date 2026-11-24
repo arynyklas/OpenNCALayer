@@ -11,9 +11,6 @@ keywords = ["pdf", "pades", "signature", "cades", "gost"]
 categories = ["cryptography", "parser-implementations"]
 include = ["/src/**", "/LICENSE", "/NOTICE"]
 
-[features]
-testing = ["oncl-pki/testing"]
-
 [dependencies]
 oncl-pki.workspace = true
 flate2.workspace = true
@@ -21,7 +18,7 @@ thiserror.workspace = true
 der.workspace = true
 
 [dev-dependencies]
-oncl-pki = { workspace = true, features = ["testing"] }
+oncl-pki-testing.workspace = true
 oncl-testkit.workspace = true
 lopdf.workspace = true
 time = { workspace = true, features = ["macros"] }

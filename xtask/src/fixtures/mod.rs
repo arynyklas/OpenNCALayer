@@ -12,6 +12,7 @@
 //! `fixtures.toml` describes the containers for `oncl_testkit::synthetic`.
 
 mod issue;
+mod status;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -554,6 +555,27 @@ pub fn generate() -> BTreeMap<String, Vec<u8>> {
         &mut rng,
     );
 
+    // The static CRLs of the intermediate PKI, drawn last for the same reason: the root's,
+    // and the intermediate's with and without `inter-revoked-…`.
+    let revoked = pkcs12::load(
+        &out.files[&format!("{}.p12", INTER_CONTAINERS[1].name)],
+        PASSWORD,
+    )
+    .expect("the generated container reads back")
+    .remove(0);
+    assert_eq!(INTER_CONTAINERS[1].name, "inter-revoked-gost2015-sign");
+    let revoked_serial = revoked
+        .cert
+        .tbs_certificate()
+        .serial_number()
+        .as_bytes()
+        .to_vec();
+    for (ca, listed) in [(root, None), (&inter, Some(revoked_serial.as_slice()))] {
+        for (name, der) in status::crls(ca.file, &ca.name, &ca.key, listed, &mut rng) {
+            out.files.insert(name, der);
+        }
+    }
+
     out.files
         .insert(MANIFEST.to_owned(), out.manifest.into_bytes());
     out.files
@@ -752,7 +774,8 @@ pub fn check(root: &Path) -> anyhow::Result<bool> {
     Ok(fresh)
 }
 
-/// Names of the files in `dir` that `gen-fixtures` owns: `*.p12`, `*.cer` and the manifest.
+/// Names of the files in `dir` that `gen-fixtures` owns: `*.p12`, `*.cer`, `*.crl` and the
+/// manifest.
 /// Anything else (OS or editor files, notes, directories) is not ours and is ignored. An
 /// absent directory has none.
 fn existing_files(dir: &Path) -> anyhow::Result<Vec<String>> {
@@ -768,7 +791,7 @@ fn existing_files(dir: &Path) -> anyhow::Result<Vec<String>> {
         let generated_kind = name == MANIFEST
             || Path::new(name)
                 .extension()
-                .is_some_and(|e| e == "p12" || e == "cer");
+                .is_some_and(|e| e == "p12" || e == "cer" || e == "crl");
         if generated_kind && path.is_file() {
             names.push(name.to_owned());
         }

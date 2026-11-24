@@ -40,6 +40,9 @@ oncl-ipc = { path = "crates/oncl-ipc" }
 # (`oncl-pack`, run by the builder image); xtask packs the ports with the same code.
 oncl-pack = { path = "crates/oncl-pack" }
 oncl-pki = { path = "crates/oncl-pki", version = "=0.1.3-beta.1" }
+# The test doubles of the NCA services (a live TSA, OCSP responder, CRL distribution point and
+# certificates issued on the fly): dev-dependency of tests only, never in the SDK.
+oncl-pki-testing = { path = "crates/oncl-pki-testing" }
 oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.3-beta.1" }
 oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.3-beta.1" }
 # Explicit defaults also keep inherited no-default SDK dependencies valid outside this workspace.

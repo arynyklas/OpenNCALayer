@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use oncl_ipc::{Endpoint, IpcStream, connect, endpoint, read_frame, write_frame};
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_protocol::{AddInfo, HEARTBEAT, Module, Registry, Reply};
 use oncl_testkit::{read, synthetic};
 use oncl_tls::TlsFiles;

@@ -11,7 +11,7 @@ use oncl_pki::{
     cms::{self, AttrSpec, CertSpec, CoSign, Content, SignSpec},
     http::{GetOptions, HttpRequest, HttpTransport, MAX_RESPONSE_LEN, UreqTransport},
     io::Source,
-    ocsp::{self, MockOcsp},
+    ocsp,
     pkcs12::{KeyEntry, load},
     pkix::CaSet,
     resource::{
@@ -19,6 +19,7 @@ use oncl_pki::{
     },
     validation::{CheckStatus, NetworkPolicy, Verdict},
 };
+use oncl_pki_testing::MockOcsp;
 use oncl_testkit::{read, synthetic};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
@@ -177,13 +178,13 @@ fn replace_uris(input: &[u8], uri: &[u8]) -> Vec<u8> {
 }
 fn local_leaf(root: &KeyEntry, origin: &str) -> KeyEntry {
     let mut key = entry("user-gost2015-sign");
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&key.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&key.cert);
     // The original directly root-issued fixture has NO AIA or CRL pointers.
     // Rewriting its existing extensions alone therefore never reaches HTTP.
     // Copy only the real validation fixture's status extension shapes; keep
     // this leaf's own SPKI/AKI/usage and genuinely reissue it under this root.
     let template = entry("inter-user-gost2015-sign");
-    let pointers: Vec<_> = oncl_pki::testing::TestCertSpec::from_cert(&template.cert)
+    let pointers: Vec<_> = oncl_pki_testing::TestCertSpec::from_cert(&template.cert)
         .extensions
         .into_iter()
         .filter(|extension| {
@@ -219,7 +220,7 @@ fn local_leaf(root: &KeyEntry, origin: &str) -> KeyEntry {
             .unwrap();
         }
     }
-    key.cert = oncl_pki::testing::issue_cert(root, spec);
+    key.cert = oncl_pki_testing::issue_cert(root, spec);
     assert_eq!(ocsp::ocsp_url(&key.cert), Some(format!("{origin}/ocsp")));
     assert_eq!(
         oncl_pki::crl::crl_urls(&key.cert),
@@ -258,14 +259,14 @@ fn small_cms_large_host_trust_is_borrowed_or_refused_before_per_operation_copy()
     let mut anchors = vec![root.cert.clone()];
     let public_extension = tlv(4, &vec![0x5a; 256 * 1024]);
     for serial in 1..=24u32 {
-        let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&root.cert);
+        let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&root.cert);
         spec.serial = (0x4010_0000 + serial).to_be_bytes().to_vec();
         let mut extension = spec.extensions[0].clone();
         extension.extn_id = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.55555.5.2");
         extension.critical = false;
         extension.extn_value = OctetString::new(public_extension.clone()).unwrap();
         spec.extensions.push(extension);
-        anchors.push(oncl_pki::testing::issue_cert(&root, spec));
+        anchors.push(oncl_pki_testing::issue_cert(&root, spec));
     }
     let limits = ResourceLimits {
         memory_bytes: MEMORY,
@@ -634,9 +635,9 @@ fn small_current_issuer_bound_ocsp_remains_valid_without_a_huge_fixed_reserve() 
     let key = local_leaf(&root, &local.origin);
     let document = signed(&key);
     let mut responder = entry("ocsp-gost2015");
-    responder.cert = oncl_pki::testing::issue_cert(
+    responder.cert = oncl_pki_testing::issue_cert(
         &root,
-        oncl_pki::testing::TestCertSpec::from_cert(&responder.cert),
+        oncl_pki_testing::TestCertSpec::from_cert(&responder.cert),
     );
     let request = ocsp::request_der(&key.cert, &root.cert);
     let body = MockOcsp::new(responder)

@@ -15,8 +15,8 @@ fn explicit_leaf_signer_reuses_profiles_without_issuer_algorithm_inheritance() {
     // or extraction loses custom attrs/chain/time/attachment selectors.
     let mut leaf = entry("user-rsa-sign");
     let root = entry("root-gost2015.key");
-    let spec_cert = oncl_pki::testing::TestCertSpec::from_cert(&leaf.cert);
-    leaf.cert = oncl_pki::testing::issue_cert(&root, spec_cert);
+    let spec_cert = crate::doubles::TestCertSpec::from_cert(&leaf.cert);
+    leaf.cert = crate::doubles::issue_cert(&root, spec_cert);
     let mut attrs = AttrSpec::cades(datetime!(2026-11-02 12:00 UTC));
     attrs.signing_time = Some((datetime!(2026-11-02 12:00 UTC), TimeForm::Generalized));
     attrs.extra.push((

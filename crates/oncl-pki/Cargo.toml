@@ -9,13 +9,9 @@ repository.workspace = true
 publish = true
 keywords = ["pki", "cms", "x509", "gost", "kazakhstan"]
 categories = ["cryptography", "authentication"]
-include = ["/src/**", "/roots/**", "/testing-data/**", "/LICENSE", "/NOTICE"]
+include = ["/src/**", "/roots/**", "/LICENSE", "/NOTICE"]
 
 [features]
-# Test helpers: `tsp::MockTsa` (an in-process time-stamping authority),
-# `ocsp::MockOcsp` (an in-process OCSP responder), `crl::MockCrl` (an in-process CRL
-# distribution point), `http::RouteTransport` and `testing::issue_cert`.
-testing = []
 # `UreqTransport::with_extra_roots`: an extra CA on top of the webpki roots (conformance
 # builds of the daemon, never releases).
 extra-roots = ["dep:webpki-root-certs"]
@@ -81,11 +77,3 @@ oncl-winreg = { path = "../oncl-winreg" }
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `listen` with a backlog of 0: a local address whose connections never complete.
 libc.workspace = true
-
-# The integration tests are three binaries: `tests/all/` (`main.rs` and the other files,
-# each a module of it; the modules that need `testing` are `#[cfg(feature = "testing")]`
-# there) and `cms_stream` and `metadata_intake`, which install their own
-# `#[global_allocator]`.
-[[test]]
-name = "cms_stream"
-required-features = ["testing"]

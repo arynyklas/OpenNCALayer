@@ -19,11 +19,11 @@ use der::asn1::{ObjectIdentifier, OctetString};
 use oncl_pki::cert;
 use oncl_pki::http::{GetOptions, HttpRequest, HttpTransport};
 use oncl_pki::keygen::{self, KeySpec};
-use oncl_pki::ocsp::MockOcsp;
 use oncl_pki::pkcs12::{self, KeyEntry};
 use oncl_pki::private_fs::PrivateDirectory;
-use oncl_pki::testing::{TestCertSpec, issue_cert};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockOcsp;
+use oncl_pki_testing::MockTsa;
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use x509_cert::ext::Extension;
 
 /// The fixed instant of the whole matrix: 2026-11-02T12:00:00Z.

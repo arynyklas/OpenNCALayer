@@ -30,8 +30,6 @@ use der::{Decode, Tag, Tagged};
 use x509_cert::Certificate;
 
 pub use report::{Check, Problem, Report, ReportSpec, SignerReport, TspReport, report};
-#[cfg(feature = "testing")]
-pub(crate) use sign::sign_content;
 pub use sign::{
     AttrSpec, CertSpec, CmsAdmission, CoSign, Content, SignOptions, SignSpec, TimeForm, sign,
     sign_spec, sign_spec_with_signer,

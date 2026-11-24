@@ -14,7 +14,7 @@ use oncl_builtin_tests::scripted::{MemoryRecentPath, ScriptedPrompter, Step};
 use oncl_pki::info::cert_info;
 use oncl_pki::key::SigAlg;
 use oncl_pki::pkcs12::load;
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_plugin::{BUILTIN_FUEL, BuiltinLimits, Builtins, Engine as WasmEngine, HostServices};
 use oncl_protocol::orgjson::MAX_DEPTH;
 use oncl_protocol::{AddInfo, Reply};
@@ -522,7 +522,7 @@ fn calls_without_windows_do_not_wait_for_another_pages_window() {
     let services = HostServices::interactive(
         prompter,
         Arc::new(MemoryRecentPath::new(None)),
-        Arc::new(oncl_pki::tsp::MockTsa::new(
+        Arc::new(oncl_pki_testing::MockTsa::new(
             load(
                 &read(synthetic("tsa-gost2015").path),
                 &synthetic("tsa-gost2015").password,

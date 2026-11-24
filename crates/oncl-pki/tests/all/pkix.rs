@@ -1,13 +1,13 @@
 //! Certification path building: the embedded NCA CAs, the synthetic intermediate PKI and
 //! certificates issued on the fly that break one rule each.
 
+use crate::doubles::{TestCertSpec, issue_cert};
 use der::Encode;
 use der::asn1::{Null, ObjectIdentifier, OctetString};
 use der::oid::AssociatedOid;
 use oncl_pki::cert::{self, Certificate};
 use oncl_pki::pkcs12::{KeyEntry, load};
 use oncl_pki::pkix::{CaSet, PathError, build_path, validation_time};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
 use oncl_testkit::{fixture, read, synthetic, synthetic_cert};
 use time::OffsetDateTime;
 use time::macros::datetime;

@@ -1386,7 +1386,7 @@ fn devart_ocsp_revoked_invocation_error() {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    let ocsp = oncl_pki::ocsp::MockOcsp::new(oncl_port_tests::entry("ocsp-gost2015")).status(
+    let ocsp = oncl_pki_testing::MockOcsp::new(oncl_port_tests::entry("ocsp-gost2015")).status(
         &serial,
         oncl_pki::ocsp::CertStatus::Revoked {
             time: oncl_port_tests::default_clock() - time::Duration::days(1),
@@ -1527,13 +1527,13 @@ fn serial_hex(name: &str) -> String {
 fn tc_harness(steps: Vec<Step>, mut extra: Vec<(String, Arc<dyn HttpTransport>)>) -> Harness {
     extra.push((
         "http://ocsp.synthetic.test".to_owned(),
-        Arc::new(oncl_pki::ocsp::MockOcsp::new(oncl_port_tests::entry(
+        Arc::new(oncl_pki_testing::MockOcsp::new(oncl_port_tests::entry(
             "ocsp-gost2015",
         ))),
     ));
     extra.push((
         "http://crl.synthetic.test".to_owned(),
-        Arc::new(oncl_pki::crl::MockCrl::new(oncl_port_tests::entry(
+        Arc::new(oncl_pki_testing::MockCrl::new(oncl_port_tests::entry(
             "inter-gost2015.key",
         ))),
     ));
@@ -1809,7 +1809,7 @@ fn thundercrypt_ocsp_down_is_remote_failure() {
 
 #[test]
 fn thundercrypt_clock_skew() {
-    let tsa = oncl_pki::tsp::MockTsa::new(oncl_port_tests::entry("tsa-gost2015"))
+    let tsa = oncl_pki_testing::MockTsa::new(oncl_port_tests::entry("tsa-gost2015"))
         .with_gen_time(time::OffsetDateTime::now_utc() - time::Duration::minutes(10));
     let harness = tc_harness(
         tc_steps(),
@@ -1827,7 +1827,7 @@ fn thundercrypt_clock_skew() {
 
 #[test]
 fn thundercrypt_revoked() {
-    let ocsp = oncl_pki::ocsp::MockOcsp::new(oncl_port_tests::entry("ocsp-gost2015")).status(
+    let ocsp = oncl_pki_testing::MockOcsp::new(oncl_port_tests::entry("ocsp-gost2015")).status(
         &serial_hex(TC_KEY),
         oncl_pki::ocsp::CertStatus::Revoked {
             time: time::OffsetDateTime::now_utc() - time::Duration::days(1),

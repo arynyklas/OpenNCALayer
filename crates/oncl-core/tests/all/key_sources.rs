@@ -1801,9 +1801,9 @@ fn raw_entry(name: &str) -> KeyEntry {
     load(&read(f.path), &f.password).unwrap().remove(0)
 }
 fn reissue(mut key: KeyEntry) -> KeyEntry {
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&key.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&key.cert);
     let template =
-        oncl_pki::testing::TestCertSpec::from_cert(&raw_entry("inter-user-gost2015-sign").cert);
+        oncl_pki_testing::TestCertSpec::from_cert(&raw_entry("inter-user-gost2015-sign").cert);
     spec.extensions.retain(|e| {
         !matches!(
             e.extn_id.to_string().as_str(),
@@ -1817,7 +1817,7 @@ fn reissue(mut key: KeyEntry) -> KeyEntry {
                 "1.3.6.1.5.5.7.1.1" | "2.5.29.31"
             )
         }));
-    key.cert = oncl_pki::testing::issue_cert(&raw_entry("inter-gost2015.key"), spec);
+    key.cert = oncl_pki_testing::issue_cert(&raw_entry("inter-gost2015.key"), spec);
     key
 }
 fn synthetic(name: &str) -> oncl_testkit::SyntheticKey {
@@ -1856,23 +1856,17 @@ fn synthetic(name: &str) -> oncl_testkit::SyntheticKey {
 }
 fn cross_issuer() -> KeyEntry {
     let mut issuer = raw_entry("user-gost2004-sign");
-    let mut spec =
-        oncl_pki::testing::TestCertSpec::from_cert(&raw_entry("inter-gost2015.key").cert);
-    let original = oncl_pki::testing::TestCertSpec::from_cert(&issuer.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&raw_entry("inter-gost2015.key").cert);
+    let original = oncl_pki_testing::TestCertSpec::from_cert(&issuer.cert);
     spec.subject = original.subject;
     spec.public_key = original.public_key;
     spec.serial = vec![0x71, 0x03];
-    issuer.cert = oncl_pki::testing::issue_cert(&raw_entry("root-gost2015.key"), spec);
+    issuer.cert = oncl_pki_testing::issue_cert(&raw_entry("root-gost2015.key"), spec);
     issuer
 }
 fn validation_services() -> oncl_core::ValidationServices {
-    use oncl_pki::{
-        cert,
-        crl::MockCrl,
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        pkix::CaSet,
-    };
+    use oncl_pki::{cert, http::HttpTransport, pkix::CaSet};
+    use oncl_pki_testing::{MockCrl, MockOcsp, RouteTransport};
     let now = VALIDATION_NOW;
     // This genuine responder is issued by the same known CA as every reissued leaf.
     let ocsp: Arc<dyn HttpTransport> =
@@ -1918,7 +1912,7 @@ fn validation_services() -> oncl_core::ValidationServices {
 }
 
 fn cross_leaf(key: &KeyEntry, issuer: &KeyEntry) -> oncl_pki::cert::Certificate {
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&key.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&key.cert);
     let uri = b"http://cross.synthetic.test";
     let mut inner = vec![
         0x06,
@@ -1942,14 +1936,14 @@ fn cross_leaf(key: &KeyEntry, issuer: &KeyEntry) -> oncl_pki::cert::Certificate 
             extension.extn_value = der::asn1::OctetString::new(aia.clone()).unwrap();
         }
     }
-    oncl_pki::testing::issue_cert(issuer, spec)
+    oncl_pki_testing::issue_cert(issuer, spec)
 }
 
 fn cross_responder() -> KeyEntry {
     let mut responder = raw_entry("ocsp-gost2015");
-    responder.cert = oncl_pki::testing::issue_cert(
+    responder.cert = oncl_pki_testing::issue_cert(
         &cross_issuer(),
-        oncl_pki::testing::TestCertSpec::from_cert(&responder.cert),
+        oncl_pki_testing::TestCertSpec::from_cert(&responder.cert),
     );
     responder
 }

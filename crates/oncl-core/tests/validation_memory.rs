@@ -9,14 +9,14 @@ use oncl_core::{
 use oncl_pki::{
     cert,
     cms::{self, AttrSpec, CertSpec, CoSign, Content, SignSpec},
-    crl::MockCrl,
     http::{GetOptions, HttpError, HttpReply, HttpRequest, HttpTransport},
-    ocsp::{self, MockOcsp},
+    ocsp,
     pkcs12::{KeyEntry, load},
     pkix::CaSet,
     resource::{OperationControl, ProcessingError, Progress, ResourceLimits},
     validation::{CheckStatus, NetworkPolicy, Verdict},
 };
+use oncl_pki_testing::{MockCrl, MockOcsp};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::{
@@ -139,9 +139,9 @@ fn fixture() -> (Vec<u8>, usize) {
         // Distinct genuinely issued renewal certificates reuse a test public key;
         // each signed status binds its own issuer/serial, with no dummy padding.
         let mut key = original.clone();
-        let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&key.cert);
+        let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&key.cert);
         spec.serial = (0x4000_u32 + index as u32).to_be_bytes().to_vec();
-        key.cert = oncl_pki::testing::issue_cert(&issuer, spec);
+        key.cert = oncl_pki_testing::issue_cert(&issuer, spec);
         let request = ocsp::request_der(&key.cert, &issuer.cert);
         let reply = responder
             .send(&HttpRequest::post(

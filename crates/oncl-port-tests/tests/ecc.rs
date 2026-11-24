@@ -4,7 +4,7 @@
 use oncl_flows::{Locale, MessageKind};
 use oncl_pki::cms::SignOptions;
 use oncl_pki::http::{HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport};
-use oncl_pki::tsp::MockTsa;
+use oncl_pki_testing::MockTsa;
 use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, default_clock, entry, p12};
 use oncl_protocol::Reply;

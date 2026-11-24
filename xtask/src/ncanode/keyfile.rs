@@ -19,7 +19,7 @@ use oncl_pki::key::PublicKey;
 use oncl_pki::keygen::{KeySpec, generate, key_id};
 use oncl_pki::keystore::{change_password, create_key_file, install_certificate};
 use oncl_pki::oid;
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use serde_json::{Value, json};
 use std::fs;
 use x509_cert::Certificate;

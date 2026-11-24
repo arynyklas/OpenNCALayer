@@ -681,7 +681,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use oncl_pki::pkcs12;
-    use oncl_pki::testing::{TestCertSpec, issue_cert};
+    use oncl_pki_testing::{TestCertSpec, issue_cert};
 
     use super::*;
     use crate::reports::controller::{Headline, Outcome as ItemOutcome};

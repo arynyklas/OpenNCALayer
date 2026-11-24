@@ -24,11 +24,7 @@ fn main() -> Result<ExitCode, Box<dyn std::error::Error>> {
     };
     let dir = std::path::PathBuf::from(dir);
     let pki = support::DemoPki::open(&dir);
-    let transport: Arc<dyn oncl_pki::http::HttpTransport> =
-        Arc::new(oncl_pki::http::RouteTransport::new(vec![(
-            support::CRL_ORIGIN.to_owned(),
-            Arc::new(pki.crl_responder()),
-        )]));
+    let transport: Arc<dyn oncl_pki::http::HttpTransport> = Arc::new(pki.crl_responder());
     let engine = support::engine(&pki, Arc::new(AuditGuard::default()), transport);
     let mut ctx = engine.begin(
         ExecutionGrant::new([Action::Verify]),

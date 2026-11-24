@@ -8,7 +8,7 @@ use oncl_flows::Availability;
 use oncl_pki::http::{HttpError, HttpReply, HttpRequest, HttpTransport};
 use oncl_pki::info::{cert_info, common_name, kalkan_dn};
 use oncl_pki::key::{HashAlg, PublicKey, SigAlg};
-use oncl_pki::ocsp::MockOcsp;
+use oncl_pki_testing::MockOcsp;
 use oncl_port_tests::scripted::Step;
 use oncl_port_tests::{Harness, entry, p12};
 use oncl_protocol::Reply;
@@ -766,7 +766,7 @@ fn xdox_unknown_method() {
 /// of the synthetic PKI's CAs: no certification path builds for it.
 fn unchained_key(dir: &std::path::Path, name: &str) -> Vec<Step> {
     use oncl_pki::pkcs12::{WriteEntry, WriteOptions, write};
-    use oncl_pki::testing::{TestCertSpec, issue_cert};
+    use oncl_pki_testing::{TestCertSpec, issue_cert};
     let user = entry(name);
     let cert = issue_cert(
         &entry("legal-gost2015-sign"),
@@ -2138,7 +2138,7 @@ fn arta_sign_document_info_is_empty_bean() {
 #[test]
 fn arta_sign_document_esedo_attrs() {
     let tsa = Arc::new(Recorder {
-        inner: Arc::new(oncl_pki::tsp::MockTsa::new(entry("tsa-gost2015"))),
+        inner: Arc::new(oncl_pki_testing::MockTsa::new(entry("tsa-gost2015"))),
         bodies: Mutex::new(Vec::new()),
     });
     let route: Arc<dyn HttpTransport> = tsa.clone();

@@ -1,4 +1,5 @@
 //! C03 real signature contract; no token-presence level assertions.
+use crate::doubles::{MockCrl, MockTsa, TestCertSpec, issue_cert};
 use der::asn1::{AnyRef, UtcTime};
 use der::{Decode, Encode, Reader as _, SliceReader};
 use oncl_pki::{
@@ -7,7 +8,6 @@ use oncl_pki::{
         ades,
         stream::{CmsSignRequest, CmsSignServices},
     },
-    crl::MockCrl,
     evidence::{AdesLevel, EvidenceLimits},
     http::HttpTransport,
     io::{Source, TemporaryStore},
@@ -15,8 +15,7 @@ use oncl_pki::{
     pkcs12::{KeyEntry, load},
     pkix::CaSet,
     resource::{OperationControl, ProcessingError, Progress, ResourceLimits, SharedBudget},
-    testing::{TestCertSpec, issue_cert},
-    tsp::{MockTsa, TsaMethod, TsaProfile, TsaSpec},
+    tsp::{TsaMethod, TsaProfile, TsaSpec},
     validation::{NetworkPolicy, TimeBasis, ValidationContext, ValidationPolicy, Verdict},
 };
 use std::{io::Cursor, sync::Arc, time::Duration};
@@ -673,9 +672,10 @@ fn renewal_preserves_prior_proofs_and_rejects_backdating() {
 }
 #[test]
 fn rfc5940_ocsp_choice_sets_signed_data_version_five() {
+    use crate::doubles::MockOcsp;
     use oncl_pki::{
         http::{GetOptions, HttpRequest},
-        ocsp::{self, MockOcsp},
+        ocsp::{self},
     };
     let f = Fixture::new();
     let dir = tempfile::tempdir().unwrap();

@@ -18,7 +18,7 @@
     - ГОСТ 34.310-2004: `prod/ncagost`, `prod/ncagost18`, `prod/rcagost`, `test/ncagosttest2018`, `test/rcagosttest2018`;
     - ГОСТ 34.10-2015-512: `prod/ncagost22`, `prod/rcagost22`, `test/ncagosttest2022`, `test/rcagosttest2022`.
   - `crates/oncl-pki/tests/all/cert_verify.rs` проверяет через `cert::verify_signature` все 16 сертификатов, ГОСТ и RSA. Издатель ищется по DN.
-- **Встроенные корни.** Все 10 сертификатов `nca/prod/` вшиваются в бинарь (`crates/oncl-pki/src/roots.rs`, `include_bytes!`) — это набор CA по умолчанию для `signerParams.chain` в демоне (`oncl verify` использует только корни, переданные оператором через `--root`). Вшиваются копии из `crates/oncl-pki/roots/` (исходный пакет `oncl-pki` самодостаточен и не читает `fixtures/` вне крейта); тест сверяет их с `SHA256SUMS`, поэтому файл в `nca/prod/` и его копия меняются только вместе с суммой. Так же `crates/oncl-pki/testing-data/rsa.pk8.der` — копия `openssl/rsa.pk8.der` (синтетический ключ для `testing`), равенство проверяет тест. `nca/test/` не встраивается.
+- **Встроенные корни.** Все 10 сертификатов `nca/prod/` вшиваются в бинарь (`crates/oncl-pki/src/roots.rs`, `include_bytes!`) — это набор CA по умолчанию для `signerParams.chain` в демоне (`oncl verify` использует только корни, переданные оператором через `--root`). Вшиваются копии из `crates/oncl-pki/roots/` (исходный пакет `oncl-pki` самодостаточен и не читает `fixtures/` вне крейта); тест сверяет их с `SHA256SUMS`, поэтому файл в `nca/prod/` и его копия меняются только вместе с суммой. `nca/test/` не встраивается.
 
 ## `nca-ocsp/` — ответ тестового OCSP НУЦ (коммитится)
 
@@ -58,6 +58,7 @@
 - `openssl/` — RSA-ключ и три контейнера PKCS#12 от OpenSSL: кириллический пароль, пустой пароль, PBES2 с явным PRF. Состав и пересоздание описаны в [`openssl/README.md`](openssl/README.md).
 - `synthetic/` — синтетический PKI по образцу НУЦ, генерирует `cargo xtask gen-fixtures` (код — `xtask/src/fixtures/`). Вся случайность берётся из одного `ChaCha20Rng` с фиксированным зерном, поэтому файлы воспроизводятся байт в байт. `cargo xtask gen-fixtures --check` (и тест `xtask/tests/fixtures_fresh.rs`) пересобирает их в памяти и сравнивает с закоммиченными. Файлы не редактируются вручную: правится генератор, затем `cargo xtask gen-fixtures`.
   - Корни (самоподписанные `.cer`): `root-gost2015` (ГОСТ 34.10-2015-512), `root-gost2004` (ГОСТ 34.310-2004), `root-rsa` (RSA-2048, sha256WithRSA).
+  - Статические CRL (`.crl`) корня `root-gost2015` и промежуточного `inter-gost2015` на момент 2026-11-02 12:00 UTC: thisUpdate 11:59, nextUpdate 13:00 (`-stale`: 11:59:30, уже истёк), у промежуточного ещё `-revoked` с `inter-revoked-gost2015-sign`, отозванным 2026-01-15 08:00. Для тестов, которые только проверяют уже подписанные данные на фиксированный момент (`crates/oncl-core/tests/all/validation_policy.rs`): живая служба CRL им не нужна. Код — `xtask/src/fixtures/status.rs`.
   - Контейнеры PKCS#12 (пароль `Qwerty12`, alias = hex(SKI) сертификата, как у Kalkan), у каждого свои ключи:
 
     | Файл | Корень | Содержимое |

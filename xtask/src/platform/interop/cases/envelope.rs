@@ -21,7 +21,7 @@ use oncl_pki::cms::envelope::{
 };
 use oncl_pki::key::PrivateKey;
 use oncl_pki::keygen::{self, KeySpec};
-use oncl_pki::testing::{TestCertSpec, issue_cert};
+use oncl_pki_testing::{TestCertSpec, issue_cert};
 use x509_cert::ext::Extension;
 use x509_cert::ext::pkix::{ExtendedKeyUsage, KeyUsage, KeyUsages};
 use x509_cert::name::Name;

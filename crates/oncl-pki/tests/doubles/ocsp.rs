@@ -1,26 +1,26 @@
-//! An in-process OCSP responder for tests.
+//! An in-process OCSP responder that can spoil its answers.
 
 use super::asn1::{
-    BasicOcspResponse, CertId, OcspRequest, OcspResponse, ResponseBytes, ResponseData, RevokedInfo,
-    SingleResponse,
+    BasicOcspResponse, CertId, Enumerated, OcspRequest, OcspResponse, RawGeneralizedTime,
+    ResponseBytes, ResponseData, RevokedInfo, SingleResponse, another_key, context,
+    generalized_time as format_generalized_time, request_in_url, signature_alg, text_reply,
+    unsigned,
 };
-use super::{CertStatus, OCSP_RESPONSE, key_hash};
-use crate::asn1util::{Enumerated, RawGeneralizedTime, format_generalized_time, unsigned};
-use crate::http::{
-    HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport, request_in_url,
-    text_reply,
-};
-use crate::oid;
-use crate::pkcs12::KeyEntry;
-use crate::testing::{another_key, signature_alg};
 use der::asn1::{AnyRef, BitStringRef, IntRef, OctetStringRef};
-use der::{Decode, Encode, Tag, TagNumber};
+use der::{Decode, Encode};
+use oncl_pki::http::{HttpError, HttpErrorKind, HttpMethod, HttpReply, HttpRequest, HttpTransport};
+use oncl_pki::ocsp::{CertStatus, key_hash};
+use oncl_pki::oid;
+use oncl_pki::pkcs12::KeyEntry;
 use spki::AlgorithmIdentifierRef;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 use time::OffsetDateTime;
+
+/// Media type of an `OCSPResponse` (RFC 6960 appendix A).
+const OCSP_RESPONSE: &str = "application/ocsp-response";
 
 /// How [`MockOcsp`] spoils its answer.
 ///
@@ -310,14 +310,6 @@ impl HttpTransport for MockOcsp {
             },
             Err(e) => text_reply(400, &e),
         })
-    }
-}
-
-/// A context-specific tag.
-fn context(constructed: bool, number: u32) -> Tag {
-    Tag::ContextSpecific {
-        constructed,
-        number: TagNumber(number),
     }
 }
 

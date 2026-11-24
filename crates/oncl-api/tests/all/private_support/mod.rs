@@ -3,12 +3,10 @@
 //! Engine, and independent OpenSSL oracles. No request-controlled authority.
 use der::Encode;
 use oncl_pki::{
-    crl::MockCrl,
     http::{GetOptions, HttpRequest, HttpTransport},
-    ocsp::MockOcsp,
     pkcs12::KeyEntry,
-    testing::{TestCertSpec, issue_cert},
 };
+use oncl_pki_testing::{MockCrl, MockOcsp, TestCertSpec, issue_cert};
 use oncl_server::{
     auth::TokenSecret,
     config::{
@@ -189,7 +187,7 @@ impl Pki {
         // |genTime - real clock| <= skew_ms (300 s). A TSA stopped at Pki creation
         // fails every later timestamp (ClockSkew, after key use) once the Pki is
         // older than that, which long sweeps exceed.
-        let tsa = Arc::new(oncl_pki::tsp::MockTsa::new(with_status_locations(
+        let tsa = Arc::new(oncl_pki_testing::MockTsa::new(with_status_locations(
             &raw("tsa-gost2015"),
             &raw("root-gost2015.key"),
             &origin,

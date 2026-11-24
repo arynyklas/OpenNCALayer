@@ -33,9 +33,8 @@ fn raw(name: &str) -> KeyEntry {
 }
 fn issued(name: &str) -> KeyEntry {
     let mut entry = raw(name);
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&entry.cert);
-    let template =
-        oncl_pki::testing::TestCertSpec::from_cert(&raw("inter-user-gost2015-sign").cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&entry.cert);
+    let template = oncl_pki_testing::TestCertSpec::from_cert(&raw("inter-user-gost2015-sign").cert);
     spec.extensions.retain(|e| {
         !matches!(
             e.extn_id.to_string().as_str(),
@@ -49,7 +48,7 @@ fn issued(name: &str) -> KeyEntry {
                 "1.3.6.1.5.5.7.1.1" | "2.5.29.31"
             )
         }));
-    entry.cert = oncl_pki::testing::issue_cert(&raw("inter-gost2015.key"), spec);
+    entry.cert = oncl_pki_testing::issue_cert(&raw("inter-gost2015.key"), spec);
     entry
 }
 fn selector(name: &str) -> KeySelector {
@@ -75,13 +74,8 @@ fn validation() -> ValidationServices {
     validation_status(false)
 }
 fn validation_status(revoked: bool) -> ValidationServices {
-    use oncl_pki::{
-        crl::MockCrl,
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        pkix::CaSet,
-        validation::NetworkPolicy,
-    };
+    use oncl_pki::{http::HttpTransport, pkix::CaSet, validation::NetworkPolicy};
+    use oncl_pki_testing::{MockCrl, MockOcsp, RouteTransport};
     let mut responder = MockOcsp::new(raw("ocsp-gost2015")).with_now(NOW);
     if revoked {
         let serial: String = issued("user-rsa-sign")
@@ -718,9 +712,9 @@ fn revoked_and_expired_leaves_fail_strict_private_validation_even_offline() {
     for expired in [false, true] {
         let mut entry = issued("user-rsa-sign");
         if expired {
-            let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&entry.cert);
+            let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&entry.cert);
             spec.validity.not_after = spec.validity.not_before;
-            entry.cert = oncl_pki::testing::issue_cert(&raw("inter-gost2015.key"), spec);
+            entry.cert = oncl_pki_testing::issue_cert(&raw("inter-gost2015.key"), spec);
         }
         let key = key_selector(entry);
         for policy in [
@@ -935,17 +929,17 @@ fn collision_entries(same_key: bool) -> (KeyEntry, KeyEntry) {
     } else {
         "user-gost2004-sign"
     });
-    let mut first_spec = oncl_pki::testing::TestCertSpec::from_cert(&first.cert);
+    let mut first_spec = oncl_pki_testing::TestCertSpec::from_cert(&first.cert);
     first_spec.serial = vec![0x63, 0x02];
-    let mut second_spec = oncl_pki::testing::TestCertSpec::from_cert(&second.cert);
+    let mut second_spec = oncl_pki_testing::TestCertSpec::from_cert(&second.cert);
     second_spec.serial = first_spec.serial.clone();
     if same_key {
         second_spec.subject =
-            oncl_pki::testing::TestCertSpec::from_cert(&raw("user-gost2004-sign").cert).subject;
+            oncl_pki_testing::TestCertSpec::from_cert(&raw("user-gost2004-sign").cert).subject;
     }
     let issuer = raw("inter-gost2015.key");
-    first.cert = oncl_pki::testing::issue_cert(&issuer, first_spec);
-    second.cert = oncl_pki::testing::issue_cert(&issuer, second_spec);
+    first.cert = oncl_pki_testing::issue_cert(&issuer, first_spec);
+    second.cert = oncl_pki_testing::issue_cert(&issuer, second_spec);
     assert_eq!(
         first.cert.tbs_certificate().issuer(),
         second.cert.tbs_certificate().issuer()
@@ -1172,7 +1166,7 @@ fn add_rejects_union_that_changes_an_existing_ski_signer_association() {
     use der::{Decode, asn1::OctetStringRef};
     let mut first_entry = issued("user-rsa-sign");
     let mut incoming_entry = issued("user-gost2004-sign");
-    let mut first_spec = oncl_pki::testing::TestCertSpec::from_cert(&first_entry.cert);
+    let mut first_spec = oncl_pki_testing::TestCertSpec::from_cert(&first_entry.cert);
     first_spec.serial = vec![0x63, 0x02];
     let old_ski = first_spec
         .extensions
@@ -1185,7 +1179,7 @@ fn add_rejects_union_that_changes_an_existing_ski_signer_association() {
         .unwrap()
         .as_bytes()
         .to_vec();
-    let mut incoming_spec = oncl_pki::testing::TestCertSpec::from_cert(&incoming_entry.cert);
+    let mut incoming_spec = oncl_pki_testing::TestCertSpec::from_cert(&incoming_entry.cert);
     incoming_spec.serial = vec![0x63, 0x03];
     let incoming_ski = incoming_spec
         .extensions
@@ -1194,8 +1188,8 @@ fn add_rejects_union_that_changes_an_existing_ski_signer_association() {
         .expect("real fixture has SKI");
     incoming_ski.extn_value = old_ski;
     let issuer = raw("inter-gost2015.key");
-    first_entry.cert = oncl_pki::testing::issue_cert(&issuer, first_spec);
-    incoming_entry.cert = oncl_pki::testing::issue_cert(&issuer, incoming_spec);
+    first_entry.cert = oncl_pki_testing::issue_cert(&issuer, first_spec);
+    incoming_entry.cert = oncl_pki_testing::issue_cert(&issuer, incoming_spec);
     assert_ne!(
         first_entry.cert.tbs_certificate().serial_number(),
         incoming_entry.cert.tbs_certificate().serial_number()
@@ -1276,12 +1270,12 @@ fn add_rejects_union_that_changes_an_existing_ski_signer_association() {
 fn issuer_serial_signers_allow_same_ski_renewal_with_a_distinct_serial() {
     let (first_entry, mut renewed_entry) = collision_entries(true);
     let original_certificate = first_entry.cert.to_der().unwrap();
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&renewed_entry.cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&renewed_entry.cert);
     spec.serial = vec![0x63, 0x03];
-    renewed_entry.cert = oncl_pki::testing::issue_cert(&raw("inter-gost2015.key"), spec);
+    renewed_entry.cert = oncl_pki_testing::issue_cert(&raw("inter-gost2015.key"), spec);
     let renewed_certificate = renewed_entry.cert.to_der().unwrap();
-    let old_spec = oncl_pki::testing::TestCertSpec::from_cert(&first_entry.cert);
-    let new_spec = oncl_pki::testing::TestCertSpec::from_cert(&renewed_entry.cert);
+    let old_spec = oncl_pki_testing::TestCertSpec::from_cert(&first_entry.cert);
+    let new_spec = oncl_pki_testing::TestCertSpec::from_cert(&renewed_entry.cert);
     let old_ski = old_spec
         .extensions
         .iter()
@@ -1764,13 +1758,12 @@ fn pdf_token_backends_verify_real_rsa_and_gost_signatures() {
 fn xml_core_source_guard_reports_and_keyless_lta_renewal() {
     use oncl_core::{CadesConfiguration, ExtendRequest, VerifyRequest};
     use oncl_pki::{
-        crl::MockCrl,
         evidence::{AdesLevel, EvidenceLimits},
-        http::{HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        tsp::{MockTsa, TsaProfile, TsaSpec},
+        http::HttpTransport,
+        tsp::{TsaProfile, TsaSpec},
         validation::{NetworkPolicy, Verdict},
     };
+    use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa, RouteTransport};
     let guard = Arc::new(Guard::default());
     let key = selector("user-rsa-sign");
     let mut tsa = TsaSpec::from(TsaProfile::kalkan_default());
@@ -2363,13 +2356,12 @@ fn xml_new_operation_exact_document_limit_accepts_signed_wire_and_approved_repla
 fn core_xml_uses_post_reply_host_time_and_one_late_instant_for_all_signers() {
     use oncl_core::CadesConfiguration;
     use oncl_pki::{
-        crl::MockCrl,
         evidence::{AdesLevel, EvidenceLimits},
-        http::{HttpError, HttpReply, HttpRequest, HttpTransport, RouteTransport},
-        ocsp::MockOcsp,
-        tsp::{MockTsa, TsaProfile, TsaSpec},
+        http::{HttpError, HttpReply, HttpRequest, HttpTransport},
+        tsp::{TsaProfile, TsaSpec},
         validation::NetworkPolicy,
     };
+    use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa, RouteTransport};
     use std::sync::atomic::AtomicI64;
     struct Advance {
         inner: RouteTransport,
@@ -2656,13 +2648,12 @@ fn core_xml_uses_post_reply_host_time_and_one_late_instant_for_all_signers() {
 fn keyless_xml_renewal_refreshes_stale_status_without_rescuing_a_bad_old_proof() {
     use oncl_core::{CadesConfiguration, ExtendRequest, VerifyRequest};
     use oncl_pki::{
-        crl::MockCrl,
         evidence::{AdesLevel, EvidenceLimits},
         http::{HttpError, HttpReply, HttpRequest, HttpTransport},
-        ocsp::MockOcsp,
-        tsp::{MockTsa, TsaProfile, TsaSpec},
+        tsp::{TsaProfile, TsaSpec},
         validation::{NetworkPolicy, Verdict},
     };
+    use oncl_pki_testing::{MockCrl, MockOcsp, MockTsa};
     use std::sync::atomic::AtomicI64;
     struct Live {
         now: Arc<AtomicI64>,
@@ -3091,13 +3082,13 @@ fn guarded_xades_spec_checks_actual_request_chain_before_capture_and_key_open() 
             KeySources::new().open(request, ctx)
         }
     }
-    let mut spec = oncl_pki::testing::TestCertSpec::from_cert(&raw("inter-gost2015.key").cert);
+    let mut spec = oncl_pki_testing::TestCertSpec::from_cert(&raw("inter-gost2015.key").cert);
     let mut extension = spec.extensions[0].clone();
     extension.extn_id = "1.3.6.1.4.1.55555.13.2".parse().unwrap();
     extension.critical = false;
     extension.extn_value = der::asn1::OctetString::new(vec![0x52; 16 * 1024]).unwrap();
     spec.extensions.push(extension);
-    let oversized = oncl_pki::testing::issue_cert(&raw("root-gost2015.key"), spec);
+    let oversized = oncl_pki_testing::issue_cert(&raw("root-gost2015.key"), spec);
     let maximum = u64::from(u32::from(oversized.encoded_len().unwrap())) - 1;
     let limits = EvidenceLimits {
         max_items: 24,

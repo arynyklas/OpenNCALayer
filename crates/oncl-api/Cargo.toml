@@ -32,7 +32,8 @@ oncl-server = { path = "../oncl-server", features = ["test-support"] }
 tempfile.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true
-oncl-pki = { workspace = true, features = ["testing"] }
+oncl-pki.workspace = true
+oncl-pki-testing.workspace = true
 der.workspace = true
 time.workspace = true
 oncl-testkit.workspace = true

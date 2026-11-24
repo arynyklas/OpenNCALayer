@@ -4112,6 +4112,7 @@ dependencies = [
  "oncl-pdf",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-server",
  "oncl-testkit",
  "oncl-token",
@@ -4173,6 +4174,7 @@ dependencies = [
  "oncl-builtins-build",
  "oncl-flows",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-protocol",
  "oncl-testkit",
@@ -4216,6 +4218,7 @@ dependencies = [
  "oncl-pdf",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-server",
  "oncl-testkit",
@@ -4244,6 +4247,7 @@ dependencies = [
  "oncl-pdf",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-testkit",
  "oncl-token",
@@ -4358,6 +4362,7 @@ dependencies = [
  "flate2",
  "lopdf",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-testkit",
  "tempfile",
  "thiserror 2.0.21",
@@ -4419,6 +4424,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "oncl-pki-testing"
+version = "0.1.3-beta.1"
+dependencies = [
+ "base64",
+ "der 0.8.2",
+ "oncl-pki",
+ "oncl-testkit",
+ "spki 0.8.1",
+ "time",
+ "x509-cert",
+]
+
+[[package]]
 name = "oncl-plugin"
 version = "0.1.3-beta.1"
 dependencies = [
@@ -4429,6 +4447,7 @@ dependencies = [
  "oncl-flows",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-protocol",
  "oncl-testkit",
  "oncl-token",
@@ -4467,6 +4486,7 @@ dependencies = [
  "oncl-gost",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-protocol",
  "oncl-testkit",
@@ -4516,6 +4536,7 @@ dependencies = [
  "oncl-pdf",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-testkit",
  "oncl-token",
@@ -4630,6 +4651,7 @@ dependencies = [
  "oncl-pdf",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-testkit",
  "oncl-tls",
@@ -4716,6 +4738,7 @@ dependencies = [
  "base64",
  "der 0.8.2",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-testkit",
  "roxmltree",
  "sha2 0.11.1",
@@ -4743,6 +4766,7 @@ dependencies = [
  "oncl-flows",
  "oncl-ipc",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-protocol",
  "oncl-testkit",
@@ -8434,6 +8458,7 @@ dependencies = [
  "oncl-pack",
  "oncl-pdk",
  "oncl-pki",
+ "oncl-pki-testing",
  "oncl-plugin",
  "oncl-protocol",
  "oncl-server",

@@ -36,15 +36,13 @@ use oncl_core::{
 use oncl_pdk::abi::Import;
 use oncl_pki::{
     cert::Certificate,
-    http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport, RouteTransport},
-    ocsp::MockOcsp,
+    http::{HttpError, HttpMethod, HttpReply, HttpRequest, HttpTransport},
     pkcs12,
     pkix::CaSet,
     resource::{OperationControl, ProcessingError, Progress},
-    testing::{TestCertSpec, issue_cert},
-    tsp::MockTsa,
     validation::NetworkPolicy,
 };
+use oncl_pki_testing::{MockOcsp, MockTsa, RouteTransport, TestCertSpec, issue_cert};
 use oncl_plugin::{DEFAULT_OCSP, DEFAULT_TSA, Manifest, NCA_PKI_HOSTS};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

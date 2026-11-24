@@ -69,8 +69,7 @@ oncl-core.workspace = true
 der.workspace = true
 x509-cert.workspace = true
 oncl-xml.workspace = true
-# `testing`: `tsp::MockTsa`, `ocsp::MockOcsp`, `crl::MockCrl` and `http::RouteTransport`.
-oncl-pki = { path = "../oncl-pki", features = ["testing"] }
+oncl-pki-testing.workspace = true
 # A `log` record must reach the log file through the `tracing-log` bridge.
 log.workspace = true
 oncl-testkit.workspace = true

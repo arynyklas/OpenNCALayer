@@ -3,6 +3,7 @@
 //! certification paths and revocation are decided by the one shared validator
 //! (`oncl_pki::validation`, tested by `oncl-core/tests/all/validation_policy.rs`), not here.
 
+use crate::doubles::MockTsa;
 use der::asn1::{AnyRef, ObjectIdentifier};
 use der::{Decode, Encode, Reader, SliceReader};
 use oncl_pki::cms::{
@@ -11,7 +12,7 @@ use oncl_pki::cms::{
 };
 use oncl_pki::info::{KeyUsageBits, cert_info};
 use oncl_pki::pkcs12::{KeyEntry, load};
-use oncl_pki::tsp::{self, MockTsa, SignerSel, StampMode, TokenForm, TsaProfile, TsaSpec};
+use oncl_pki::tsp::{self, SignerSel, StampMode, TokenForm, TsaProfile, TsaSpec};
 use oncl_testkit::{read, synthetic, synthetic_cert};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;

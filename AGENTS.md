@@ -25,7 +25,7 @@ Docs are in Russian and written for simple readers. Code, comments, commit messa
 | `oncl-builtin-*`, `oncl-builtins-build` | Built-in modules (wasm guests) and their build |
 | `oncl-winget-setup`, `oncl-win7shim-*` | WinGet installer entry, Windows 7 shims |
 | `oncl-winreg` | Win32 registry calls of the Windows programs (autostart, native-messaging keys, installer entry); not in the SDK |
-| `oncl-testkit`, `oncl-builtin-tests`, `oncl-port-tests` | Test support and test suites |
+| `oncl-testkit`, `oncl-pki-testing`, `oncl-builtin-tests`, `oncl-port-tests` | Test support (`oncl-pki-testing`: live TSA/OCSP/CRL doubles, dev-only, never in the SDK) and test suites |
 | `xtask` | Every automation: `cargo xtask <command>` |
 
 Rough dependency direction: `openncalayer`/`oncl-server`/`oncl-cli` -> `oncl-api`/`oncl-flows`/`oncl-ui` -> `oncl-core` -> `oncl-pki`/`oncl-gost`/`oncl-xml`/`oncl-pdf`/`oncl-plugin`.
