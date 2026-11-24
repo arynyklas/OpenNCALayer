@@ -1,0 +1,3 @@
+# Who signs the snapshot of tuf/v1: `offline` (the owner, `cargo xtask tuf update`) or
+# `online` (CI, `cargo xtask tuf snapshot`). docs/design/publishers.md, Р8.
+snapshot = "online"
