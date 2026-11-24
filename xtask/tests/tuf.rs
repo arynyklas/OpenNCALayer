@@ -869,6 +869,8 @@ fn xtask(args: &[&str]) -> std::process::Output {
 fn the_check_command_has_stable_exit_codes_and_messages() {
     let w = world();
     let s = |p: PathBuf| p.to_string_lossy().into_owned();
+    // The world's own snapshot mode (no file: offline), not the workspace's `tuf/v1.toml`.
+    let config = s(w.p("v1.toml"));
     // No repository and no anchor: the state before the ceremony.
     let out = xtask(&[
         "check",
@@ -891,6 +893,8 @@ fn the_check_command_has_stable_exit_codes_and_messages() {
             &s(w.anchor()),
             "--index",
             &s(w.indexes()),
+            "--config",
+            &config,
             "--no-timestamp",
         ]
         .into_iter()
@@ -928,6 +932,8 @@ fn the_check_command_has_stable_exit_codes_and_messages() {
         &s(w.anchor()),
         "--index",
         &s(w.indexes()),
+        "--config",
+        &config,
     ]
     .map(String::from)
     .to_vec());
@@ -942,6 +948,8 @@ fn the_check_command_has_stable_exit_codes_and_messages() {
         &s(w.p("none.json")),
         "--index",
         &s(w.indexes()),
+        "--config",
+        &config,
     ]);
     assert_eq!(no_anchor.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&no_anchor.stderr).contains("error[anchor-missing]"));
