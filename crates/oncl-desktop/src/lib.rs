@@ -9,6 +9,8 @@ mod lnk;
 pub mod original;
 pub mod port_owner;
 pub mod settings;
+#[cfg(all(test, windows))]
+mod test_key;
 
 pub use autostart::{Autostart, AutostartPaths, FileAutostart};
 #[cfg(windows)]

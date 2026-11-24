@@ -370,7 +370,7 @@ impl RegistryAutostart {
     /// Whether Windows' switch disables our value.
     fn disabled_by_windows(&self) -> io::Result<bool> {
         disabled_by_windows(
-            oncl_registry::Hive::CurrentUser,
+            oncl_winreg::Hive::CurrentUser,
             &self.approved_key,
             Self::VALUE,
         )
@@ -382,11 +382,11 @@ impl RegistryAutostart {
 /// 64-bit view, where Windows keeps the switches, by an x86 build as by an x64 one.
 #[cfg(windows)]
 pub(crate) fn disabled_by_windows(
-    hive: oncl_registry::Hive,
+    hive: oncl_winreg::Hive,
     approved_key: &str,
     value: &str,
 ) -> io::Result<bool> {
-    let state = oncl_registry::get_binary(hive, approved_key, Some(value))?;
+    let state = oncl_winreg::get_binary(hive, approved_key, Some(value))?;
     Ok(state.is_some_and(|s| s.first().is_some_and(|b| b & 1 == 1)))
 }
 
@@ -394,8 +394,8 @@ pub(crate) fn disabled_by_windows(
 impl Autostart for RegistryAutostart {
     /// The value exists and Windows' switch does not disable it.
     fn enabled(&self) -> io::Result<bool> {
-        let run = oncl_registry::get_string(
-            oncl_registry::Hive::CurrentUser,
+        let run = oncl_winreg::get_string(
+            oncl_winreg::Hive::CurrentUser,
             &self.run_key,
             Some(Self::VALUE),
         )?;
@@ -408,14 +408,14 @@ impl Autostart for RegistryAutostart {
         if on {
             // A Windows path cannot hold `"`: quoting is enough.
             let command = format!("\"{}\" run", entry_exe(exe)?);
-            oncl_registry::set_string(&self.run_key, Some(Self::VALUE), &command)?;
+            oncl_winreg::set_string(&self.run_key, Some(Self::VALUE), &command)?;
             if self.disabled_by_windows()? {
-                oncl_registry::set_binary(&self.approved_key, Some(Self::VALUE), &Self::APPROVED)?;
+                oncl_winreg::set_binary(&self.approved_key, Some(Self::VALUE), &Self::APPROVED)?;
             }
             Ok(())
         } else {
-            oncl_registry::delete_value(&self.run_key, Self::VALUE)?;
-            oncl_registry::delete_value(&self.approved_key, Self::VALUE).map(drop)
+            oncl_winreg::delete_value(&self.run_key, Self::VALUE)?;
+            oncl_winreg::delete_value(&self.approved_key, Self::VALUE).map(drop)
         }
     }
 }
@@ -535,7 +535,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn run_value_under_a_test_key() {
-        use oncl_registry::{Hive, TestKey, get_string};
+        use crate::test_key::TestKey;
+        use oncl_winreg::{Hive, get_string};
 
         let root = TestKey::new();
         let base = RegistryBase::sandbox(root.path());
@@ -575,7 +576,8 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_startup_switch_is_honoured() {
-        use oncl_registry::{Hive, TestKey, get_binary, set_binary};
+        use crate::test_key::TestKey;
+        use oncl_winreg::{Hive, get_binary, set_binary};
 
         let root = TestKey::new();
         let base = RegistryBase::sandbox(root.path());

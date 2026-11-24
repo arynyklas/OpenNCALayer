@@ -32,15 +32,15 @@ oncl-core = { path = "OpenNCALayer/crates/oncl-core", features = ["full"] }
 
 | набор features | крейтов | крейты `oncl-*` в нём |
 |---|---|---|
-| minimal | 92 | oncl-core, oncl-gost, oncl-pki, oncl-registry |
-| `tokens` | 99 | + oncl-token |
-| `xml` | 95 | + oncl-xml |
-| `pdf` | 95 | + oncl-pdf |
-| `jose` | 97 | (новых `oncl-*` нет; добавляет base64, serde, serde_json) |
-| `plugins` (включает `xml`) | 149 | + oncl-flows, oncl-pdk, oncl-plugin, oncl-protocol, oncl-token, oncl-xml |
-| `full` | 150 | всё перечисленное, + oncl-pdf |
+| minimal | 95 | oncl-core, oncl-gost, oncl-pki |
+| `tokens` | 102 | + oncl-token |
+| `xml` | 98 | + oncl-xml |
+| `pdf` | 98 | + oncl-pdf |
+| `jose` | 100 | (новых `oncl-*` нет; добавляет base64, serde, serde_json) |
+| `plugins` (включает `xml`) | 152 | + oncl-flows, oncl-pdk, oncl-plugin, oncl-protocol, oncl-token, oncl-xml |
+| `full` | 153 | всё перечисленное, + oncl-pdf |
 
-Ни один набор не содержит Slint, winit, tokio, axum, hyper, velopack, tray-icon, rfd, webbrowser, а также `oncl-ui`, `oncl-desktop`, `oncl-api`, `oncl-server`, `oncl-cli`, `openncalayer` и `oncl-nmhost`; если какой-то из них появится, `cargo xtask sdk closure` завершится ошибкой. `oncl-update` в `full` не входит. Он подключается только через собственную feature `distribution` крейта `oncl-plugin` (хранилище пакетов плагинов), которую потребитель включает отдельно; её тесты и место в цепочке публикации описаны ниже.
+Ни один набор не содержит Slint, winit, tokio, axum, hyper, velopack, tray-icon, rfd, webbrowser, а также `oncl-ui`, `oncl-desktop`, `oncl-api`, `oncl-server`, `oncl-cli`, `openncalayer`, `oncl-nmhost` и `oncl-winreg`; если какой-то из них появится, `cargo xtask sdk closure` завершится ошибкой. `oncl-update` в `full` не входит. Он подключается только через собственную feature `distribution` крейта `oncl-plugin` (хранилище пакетов плагинов), которую потребитель включает отдельно; её тесты и место в цепочке публикации описаны ниже.
 
 | feature | что добавляет |
 |---|---|
@@ -235,7 +235,7 @@ Core выполняет три шага в указанном порядке (`d
 
 `PluginAuditRecord::from_ticket(&PluginUse, nonce, grant_id)` описывает использование для аудита: плагин `{id, вид пакета + sha256, version}`, операцию, `PluginUse::digest()` (дайджест билета), SHA-256 nonce одобрения с разделением доменов (сам nonce не записывается), SHA-256 и длину содержимого, признак того, что содержимое является prehashed-дайджестом, SHA-256 опций, вид вызывающего (не его имя), `declared` и `grant_id` оператора. Байтов документа, параметров и секретов в записи нет. Когда использование авторизовано, `PluginConsentGuard` выдаёт эту запись событием `tracing` с `target = "oncl::plugin_audit"`; отказ с подкодом и дайджестом билета выдаётся событием `warn`. Отказы, которые до охранника не доходят (ошибка запроса или prepare, одобрение, отклонённое при вызове), выдаются событиями `warn` того же target с подкодом. Долговременная форма аудита описана в `docs/user/server.md` (раздел об аудите).
 
-`PluginApproval::new`, `ApprovedUse::new` и другие конструкторы не публичны. С feature `testing` крейта `oncl-core`, которая никогда не входит в выпуск, `PluginApproval::for_tests`, `ApprovedUse::for_tests`, `PluginUse::for_tests` и `KeyUseEvent::with_plugin_ticket_for_tests` создают то, что Core сам никогда бы не создал; они нужны для тестов охранников. Программы выпуска собираются с `-p`, но `cargo build --workspace --all-targets` и `cargo test` объединяют `testing` из dev-зависимостей в те же бинарники. Поэтому CI запускает `cargo xtask check-release-features`: он читает `cargo tree -p <openncalayer|oncl-cli|oncl-server|oncl-ui> -e normal -f "{p} [{f}]"` (features обычного дерева, без dev-зависимостей) и завершается ошибкой, если у какого-либо крейта включена `testing`.
+`PluginApproval`, `ApprovedUse` и `PluginUse` строит только Core: публичных конструкторов у них нет ни при какой feature, а событие `KeyUseEvent` с билетом создаёт только Core у точки подписи. Тесты охранника Core, которым нужны одобрения и билеты, каких Core сам не выдал бы (чужой nonce, чужой сертификат), — модульные тесты внутри `oncl-core`. Хост проверяет своё решение о билете как чистую функцию над его фактами (геттеры `PluginUse`: `identity`, `operation`, `caller`, `kind`, `key`, `content`, `options_sha256`, `certificate_sha256`, `max_uses`), а путь целиком — настоящим вызовом плагина через `Engine::plugin_call` или `plugin_prepare` и `PluginPrepared::approve`. Тестовые feature других крейтов (например `testing` у `oncl-pki`) в выпуск не входят. Программы выпуска собираются с `-p`, но `cargo build --workspace --all-targets` и `cargo test` объединяют `testing` из dev-зависимостей в те же бинарники. Поэтому CI запускает `cargo xtask check-release-features`: он читает `cargo tree -p <openncalayer|oncl-cli|oncl-server|oncl-ui> -e normal -f "{p} [{f}]"` (features обычного дерева, без dev-зависимостей) и завершается ошибкой, если у какого-либо крейта включена `testing`.
 
 ## 6. Semver, версии и миграция
 
@@ -260,6 +260,7 @@ Core выполняет три шага в указанном порядке (`d
 | 0.1.1 → 0.1.2-beta.1 | Несовместимо меняется публичный API `oncl-update` (каталог плагинов и делегированные роли TUF), см. «Переход с 0.1.1 на 0.1.2». У остальных крейтов SDK меняется только номер версии. Номер патча не означает совместимость: до 1.0 SDK и программа выходят под одной версией. |
 | 0.1.2-beta.1 → 0.1.2 | Публичный API крейтов SDK не меняется: `0.1.2` собирается из коммита `0.1.2-beta.1`. |
 | 0.1.2 → 0.1.3-beta.1 | Несовместимо меняется публичный API `oncl-plugin` (feature `distribution`): `Store::install` принимает издателя, у `Installed` и `StoreState` новые поля. `oncl-flows` удаляет feature `testing` и её модуль `testing` (`Step`, `ScriptedPrompter`, `MemoryRecentPath`). В `oncl-update` добавлены `choose_installed` и методы каталога для записанного издателя, удалены тестовые feature `testing` и модуль `tuf::testing`. В `oncl-registry` вариант `View::Native` заменён на `View::Wow64`, чтение идёт в 64-битном представлении, пути с NUL и пустые пути записи и удаления отклоняются. См. «Переход с 0.1.2 на 0.1.3». |
+| 0.1.3-beta.1 → 0.1.3 | Крейт `oncl-registry` уходит из SDK: `oncl-pki` сам читает прокси «Свойств браузера» для `ProxySetting::System` (поведение прежнее), а обёртка над реестром переименована во внутренний крейт `oncl-winreg` программ для Windows, не входящий в SDK. Цепочка SDK — 11 крейтов. `oncl-core` удаляет feature `testing` и её конструкторы `PluginUse::for_tests`, `ApprovedUse::for_tests`, `PluginApproval::for_tests` и `KeyUseEvent::with_plugin_ticket_for_tests`. См. «Переход с 0.1.2 на 0.1.3». |
 
 ### Переход с 0.1.1 на 0.1.2
 
@@ -294,15 +295,13 @@ Core выполняет три шага в указанном порядке (`d
 
 ### Переход с 0.1.2 на 0.1.3
 
-Сравнение с `v0.1.2`. Несовместимо меняется публичный API `oncl-plugin` с feature `distribution`, `oncl-flows` с feature `testing` и `oncl-registry`; в `oncl-update` добавления и удалён тестовый модуль `tuf::testing` с feature `testing`. У остальных крейтов SDK он прежний.
+Сравнение с `v0.1.2`. Несовместимо меняется публичный API `oncl-plugin` с feature `distribution`, `oncl-flows` с feature `testing` и `oncl-core` с feature `testing`; в `oncl-update` добавления и удалён тестовый модуль `tuf::testing` с feature `testing`. Крейт `oncl-registry` из SDK убран. У остальных крейтов SDK API прежний.
 
-Что перестанет собираться в `oncl-registry` и как это исправить: варианта `View::Native` («представление этого процесса») больше нет. Представления названы явно: `View::Wow64` (`KEY_WOW64_64KEY`) и `View::Wow32` (`KEY_WOW64_32KEY`). Для 32-битной и 64-битной программы они означают одни и те же ключи. Вместо `View::Native` 64-битной программы подставьте `View::Wow64`.
+`oncl-registry` больше не входит в SDK. Это обёртка над вызовами реестра Windows (Win32), и в SDK она была только потому, что `oncl-pki` читает из реестра прокси «Свойств браузера» для `ProxySetting::System`. Теперь `oncl-pki` читает эти значения сам. Обёртка переименована в `oncl-winreg`, ей пользуются только программы OpenNCALayer для Windows: автозапуск, ключи native messaging и установщик WinGet, который читает свою запись в «Приложениях и возможностях» (пишет её настоящий Setup, а в тестах — тестовый стенд установщика). Обёртка не публикуется (`publish = false`). Цепочка SDK стала на один крейт короче (раздел 7).
 
-Что меняется в поведении `oncl-registry`:
+Для потребителя SDK в Windows системный прокси работает как раньше. `ProxySetting::System` сначала берёт прокси из переменных окружения, затем ручной прокси «Свойств браузера»: пользователя или, если политика `ProxySettingsPerUser` в `HKLM` равна 0, компьютера. Значения читаются в 64-битном представлении реестра. В Linux и macOS прокси, как и раньше, берётся только из окружения.
 
-- `get_string`, `get_dword` и `get_binary` читают в 64-битном представлении. Для 64-битной программы ничего не меняется. 32-битная программа в 64-битной Windows раньше читала `HKLM\Software` в 32-битном представлении (`WOW6432Node`).
-- В 32-битной Windows нет 32-битного представления: `value_exists(…, View::Wow32)` там возвращает `false`, а `View::Wow64` открывает единственное представление.
-- Путь ключа или имя значения с символом NUL отклоняется с `io::ErrorKind::InvalidInput` до обращения к Windows. Раньше Windows прочла бы их только до NUL, и `delete_tree("Software\0x")` удалял бы `HKCU\Software`. Пустой путь ключа у `set_*`, `delete_value` и `delete_tree` отклоняется так же: он означает сам `HKCU`.
+Кто подключал `oncl-registry` из SDK напрямую (функции чтения и записи, feature `testing` и `TestKey`), должен убрать эту зависимость и перейти на свою обёртку или на `windows-sys`. `oncl-winreg` в SDK не входит: его API меняется без заметок о переходе, а проверка 17 не примет его в плагине издателя.
 
 Что перестанет собираться в `oncl-plugin` (feature `distribution`) и как это исправить:
 
@@ -318,13 +317,19 @@ Core выполняет три шага в указанном порядке (`d
 
 Что удалено из `oncl-update`: feature `testing` и модуль `tuf::testing` (`Repo`, `Lifetimes`, `delegations`), TUF-репозиторий из синтетических ключей для тестов, который никогда не входил в выпуск. С `features = ["testing"]` зависимость перестанет разрешаться: уберите feature. Кто строил на `Repo` свои тесты, переносит нужное в них: репозиторий собирается из публичных `tuf::build` (`root`, `targets`, `snapshot`, `timestamp`, `sign`, `target_files`), `tuf::layout`, `SigningKey::from_seed` и `MemoryFetcher`, клиент — `TufClient::new` с якорем, корнем версии 1.
 
+Что удалено из `oncl-core` и чем заменить:
+
+- Feature `testing` и её конструкторы `PluginUse::for_tests`, `ApprovedUse::for_tests`, `PluginApproval::for_tests` и `KeyUseEvent::with_plugin_ticket_for_tests`. Они создавали билеты, одобрения и события с билетом в обход проверок Core и в выпуск не входили. Сборка с `features = ["testing"]` у `oncl-core` перестанет разрешаться: уберите feature. Публичной замены нет и не будет: подделать одобрение или билет нельзя.
+- Решение своего охранника о билете вынесите в функцию над фактами билета (геттеры `PluginUse` или свои простые данные) и проверяйте её напрямую. Так сделано в этом репозитории: `BytesGrant` в `oncl-cli`, `ServerPluginPolicy` в `oncl-server`, `ConsentGuard` в `oncl-ui`.
+- Событие с настоящим билетом даёт только настоящий вызов объявленной операции плагина: `Engine::plugin_call` (билет проверяет ваш `KeyUseGuard`) или ручное окно (`Engine::plugin_prepare`, `PluginPrepared::approve`, одобренный вызов). Тесты журнала `oncl-server` (`crates/oncl-server/tests/all/audit.rs`) так получают события от плагина-примера `crates/oncl-pdk/example`.
+
 Что добавлено в `oncl-plugin` (feature `distribution`): `TryFrom<&DeclaredCapabilities> for Capabilities` (правила таблицы `[capabilities]` манифеста, без `builtin`); `PluginModules::builtin_modules`; у `Store` методы `set_publisher`, `set_declined_replacement`, `replace` (порт заменяется плагином издателя одной записью состояния, файлы порта удаляются после неё; уже установленный плагин не заменяет порт, `AlreadyExists`), `prune_files` (удаляет пакеты и настройки, которых нет у установленных плагинов и которые не менялись дольше `Store::PRUNE_AFTER`, 10 минут; настройки встроенных модулей остаются), `save_publishers`, `load_publishers`, `save_role`, `load_role` и `prune_roles` (файлы `<data>/plugins/catalog/publishers.json` и `<data>/plugins/catalog/roles/pub-<имя>.json`). `Store::remove` порта забывает и отказ от его замены.
 
 ## 7. Цепочка SDK и проверка пакетов
 
 Цепочка SDK в порядке зависимостей (каждый крейт после тех, от которых он зависит):
 
-`oncl-gost` → `oncl-registry` → `oncl-pki` → `oncl-pdf` → `oncl-protocol` → `oncl-pdk` →
+`oncl-gost` → `oncl-pki` → `oncl-pdf` → `oncl-protocol` → `oncl-pdk` →
 `oncl-xml` → `oncl-token` → `oncl-flows` → `oncl-update` → `oncl-plugin` → `oncl-core`
 
 Это все крейты, достижимые из `oncl-core` со всеми features и с feature `distribution` крейта `oncl-plugin` (она добавляет `oncl-update`). У них заполнены `description`, `license` (Apache-2.0), `repository`, `rust-version`, `keywords`, `categories`, список `include` и указано `publish = true`. В `include` входят исходники, данные, которые встраивает сборка, `LICENSE` и `NOTICE`; тестов, fixtures, корпусов, скриптов и скриптов независимой проверки там нет. `oncl-core` дополнительно поставляет `README.md`, три примера и `THIRD-PARTY.txt`. Все остальные крейты (`oncl-ui`, `oncl-desktop`, `oncl-api`, `oncl-server`, `oncl-cli`, `openncalayer`, `oncl-nmhost`, `oncl-tls`, `oncl-trust`, `oncl-ipc`, встроенные модули, их сборочные и тестовые крейты, прослойки для Windows 7, `oncl-testkit`, `oncl-port-tests`, плагины) остаются с `publish = false`, как задано по умолчанию в workspace.

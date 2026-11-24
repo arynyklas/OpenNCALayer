@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use oncl_ipc::ids::{CHROMIUM_EXTENSION_ID, FIREFOX_EXTENSION_ID, HOST_NAME};
-use oncl_registry::{self as registry, Hive};
+#[cfg(windows)]
+use oncl_winreg::{self as registry, Hive};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -30,12 +31,14 @@ pub fn relay_file_name() -> String {
 }
 
 /// Registry keys of the Chromium family on Windows, under the registry base.
+#[cfg(any(windows, test))]
 const CHROMIUM_KEYS: &[&str] = &[
     r"Google\Chrome\NativeMessagingHosts",
     r"Chromium\NativeMessagingHosts",
     r"Microsoft\Edge\NativeMessagingHosts",
 ];
 /// Registry keys of Firefox on Windows, under the registry base.
+#[cfg(any(windows, test))]
 const FIREFOX_KEYS: &[&str] = &[r"Mozilla\NativeMessagingHosts"];
 
 /// The manifest format a browser reads.
@@ -57,6 +60,7 @@ impl Family {
 
     /// The family's keys, each holding a key `<HOST_NAME>` whose default value is the
     /// manifest path.
+    #[cfg(windows)]
     fn registry_keys(self) -> &'static [&'static str] {
         match self {
             Family::Chromium => CHROMIUM_KEYS,
@@ -106,7 +110,8 @@ pub struct NmLayout {
     pub manifests: Vec<ManifestTarget>,
     /// The HKCU key (normally `Software`) under which the browsers' `NativeMessagingHosts`
     /// keys point at the manifests; `None`: no registry, the browsers find the manifests
-    /// by their directory.
+    /// by their directory. Only Windows has the registry: elsewhere the keys are neither
+    /// written nor read.
     pub registry_base: Option<String>,
 }
 
@@ -206,6 +211,7 @@ impl NmLayout {
     }
 
     /// The families of the manifests, each once, in order.
+    #[cfg(windows)]
     fn families(&self) -> Vec<Family> {
         let mut families = Vec::new();
         for target in &self.manifests {
@@ -503,6 +509,7 @@ pub fn install(
         }
     }
 
+    #[cfg(windows)]
     if let Some(base) = &layout.registry_base {
         for (family, manifest) in &written {
             for sub in family.registry_keys() {
@@ -535,6 +542,7 @@ pub fn install(
 /// The relay directory cannot be listed.
 pub fn uninstall(layout: &NmLayout) -> io::Result<Report> {
     let mut report = Report::default();
+    #[cfg(windows)]
     if let Some(base) = &layout.registry_base {
         for family in layout.families() {
             for sub in family.registry_keys() {
@@ -617,6 +625,7 @@ pub fn status(layout: &NmLayout) -> Report {
         report.push(Item::TempFile, shown(temp), State::Present);
     }
 
+    #[cfg(windows)]
     if let Some(base) = &layout.registry_base {
         for family in layout.families() {
             let Some(target) = layout.manifests.iter().find(|t| t.family == family) else {
@@ -646,6 +655,7 @@ pub fn status(layout: &NmLayout) -> Report {
 }
 
 /// `<base>\<sub>\<HOST_NAME>`.
+#[cfg(any(windows, test))]
 fn registry_key(base: &str, sub: &str) -> String {
     format!("{base}\\{sub}\\{HOST_NAME}")
 }
@@ -881,6 +891,7 @@ fn make_executable(_: &File) -> io::Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn removed_or_missing(existed: bool) -> State {
     if existed {
         State::Removed

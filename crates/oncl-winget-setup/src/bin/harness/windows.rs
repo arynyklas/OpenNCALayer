@@ -386,7 +386,7 @@ fn install(setup: &Path, root: &Path) -> std::io::Result<()> {
                     .unwrap_or_else(|| format!("\"{}\" --uninstall", update.display())),
             ),
         ] {
-            oncl_registry::set_string(&key, Some(name), &value)?;
+            oncl_winreg::set_string(&key, Some(name), &value)?;
         }
     }
     Ok(())

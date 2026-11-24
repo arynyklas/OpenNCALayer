@@ -488,13 +488,6 @@ impl KeyUseEvent {
             false
         }
     }
-    /// An event carrying `ticket`, for tests of guards. Not part of any release: only with
-    /// the `testing` feature.
-    #[cfg(all(feature = "plugins", feature = "testing"))]
-    pub fn with_plugin_ticket_for_tests(mut self, ticket: crate::plugins::PluginUse) -> Self {
-        self.plugin = Some(ticket);
-        self
-    }
 }
 /// Non-cloneable successful host receipt, returned to the same guard after use.
 pub struct KeyUseReceipt {

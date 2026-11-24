@@ -16,7 +16,6 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
-use oncl_registry::TestKey;
 use oncl_winget_setup::Exit;
 use oncl_winget_setup::payload::{self, Arch};
 use sha2::{Digest, Sha256};
@@ -94,6 +93,35 @@ fn sha(path: &Path) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+/// A key `HKCU\Software\OpenNCALayer-test-<pid>-<n>-<time>` (nothing is created until a value
+/// is written), deleted with its subkeys when dropped, also when the test fails.
+struct TestKey(String);
+
+impl TestKey {
+    fn new() -> TestKey {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        TestKey(format!(
+            r"Software\OpenNCALayer-test-{:x}-{}-{nanos:x}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn path(&self) -> &str {
+        &self.0
+    }
+}
+
+impl Drop for TestKey {
+    fn drop(&mut self) {
+        let _ = oncl_winreg::delete_tree(&self.0);
+    }
 }
 
 /// A throw-away installation, data directory, registry key and work area.
@@ -190,7 +218,7 @@ impl Fixture {
                 format!("\"{}\" --uninstall", update.display()),
             ),
         ] {
-            oncl_registry::set_string(self.arp(), Some(name), &value).unwrap();
+            oncl_winreg::set_string(self.arp(), Some(name), &value).unwrap();
         }
     }
 
@@ -199,8 +227,8 @@ impl Fixture {
     }
 
     fn arp_version(&self) -> Option<String> {
-        oncl_registry::get_string(
-            oncl_registry::Hive::CurrentUser,
+        oncl_winreg::get_string(
+            oncl_winreg::Hive::CurrentUser,
             self.arp(),
             Some("DisplayVersion"),
         )

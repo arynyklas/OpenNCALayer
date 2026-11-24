@@ -90,7 +90,7 @@ version = "0.1.3"
 source = "git+https://github.com/arynyklas/OpenNCALayer?tag=v0.1.3#<40 hex коммита>"
 ```
 
-Проверка 17 судит только этот коммит, тег в `Cargo.toml` нужен для удобства. Коммит должен быть в [`publishers/sdk-revisions.toml`](../../publishers/sdk-revisions.toml) на `main`: туда владелец при каждом выпуске дописывает коммит нового тега. Ещё два условия: адрес ровно `https://github.com/arynyklas/OpenNCALayer` (без `.git`, в том же регистре) и ссылка `tag` или `rev`. Ветка не подходит. Из нашего репозитория так можно взять только крейты SDK (`oncl-gost`, `oncl-registry`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows`, `oncl-update`, `oncl-plugin`, `oncl-core`), остальные крейты OpenNCALayer проверка 17 отвергает.
+Проверка 17 судит только этот коммит, тег в `Cargo.toml` нужен для удобства. Коммит должен быть в [`publishers/sdk-revisions.toml`](../../publishers/sdk-revisions.toml) на `main`: туда владелец при каждом выпуске дописывает коммит нового тега. Ещё два условия: адрес ровно `https://github.com/arynyklas/OpenNCALayer` (без `.git`, в том же регистре) и ссылка `tag` или `rev`. Ветка не подходит. Из нашего репозитория так можно взять только крейты SDK (`oncl-gost`, `oncl-pki`, `oncl-pdf`, `oncl-protocol`, `oncl-pdk`, `oncl-xml`, `oncl-token`, `oncl-flows`, `oncl-update`, `oncl-plugin`, `oncl-core`), остальные крейты OpenNCALayer проверка 17 отвергает.
 
 Копии SDK в архиве исходников не нужны, а без них архив меньше: у тестового плагина `echo` он уменьшился с 83 до 8 КБ. Крейты SDK наследуют поля из `[workspace]` нашего корневого `Cargo.toml`, Cargo читает его из того же коммита. `[patch]` нашего workspace на ваш плагин не действует; сторонние зависимости SDK берутся из crates.io.
 

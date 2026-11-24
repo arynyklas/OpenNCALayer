@@ -66,8 +66,6 @@ zbus.workspace = true
 slint-build.workspace = true
 
 [dev-dependencies]
-# A plugin ticket on a key-use event, to test that the document guard refuses it.
-oncl-core = { workspace = true, features = ["testing"] }
 # A synthetic plugin module for the Plugins page tests, written as WebAssembly text.
 oncl-pdk.workspace = true
 wat.workspace = true

@@ -54,8 +54,9 @@ bytes = "=1.12.1"
 
 [dev-dependencies]
 oncl-pki = { workspace = true, features = ["testing"] }
-oncl-core = { workspace = true, features = ["testing"] }
 oncl-testkit.workspace = true
+# `tests/all/audit.rs`: the arguments of the example plugin's `rawSign`.
+base64.workspace = true
 tempfile.workspace = true
 rsa.workspace = true
 time = { workspace = true, features = ["macros"] }

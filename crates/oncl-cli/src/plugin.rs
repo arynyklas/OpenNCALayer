@@ -345,33 +345,67 @@ impl BytesGrant {
         ticket: &oncl_core::plugins::PluginUse,
         key: &oncl_core::keys::KeyId,
     ) -> Result<(), oncl_core::plugins::TicketRefusal> {
+        self.check_use(&UseFacts::of(ticket), key)
+    }
+    /// [`BytesGrant::check`] on the facts of the ticket.
+    fn check_use(
+        &self,
+        ticket: &UseFacts<'_>,
+        key: &oncl_core::keys::KeyId,
+    ) -> Result<(), oncl_core::plugins::TicketRefusal> {
         use oncl_core::plugins::TicketRefusal as R;
-        if !matches!(ticket.caller(), CallerContext::LocalOperator(label) if *label == self.caller)
-        {
+        if !matches!(ticket.caller, CallerContext::LocalOperator(label) if *label == self.caller) {
             return Err(R::Caller);
         }
-        if ticket.identity().id != self.plugin || ticket.operation() != self.operation {
+        if ticket.plugin != self.plugin || ticket.operation != self.operation {
             return Err(R::NotGranted);
         }
-        if ticket.max_uses() != oncl_plugin::operations::MAX_USES {
+        if ticket.max_uses != oncl_plugin::operations::MAX_USES {
             return Err(R::Uses);
         }
-        if ticket.key() != key {
+        if ticket.key != key {
             return Err(R::Key);
         }
-        let Some((_, options)) = self.uses.iter().find(|(kind, _)| *kind == ticket.kind()) else {
+        let Some((_, options)) = self.uses.iter().find(|(kind, _)| *kind == ticket.kind) else {
             return Err(R::Kind);
         };
         // A profile that names a parameter cannot be matched without a value: refused.
-        if *options != Some(*ticket.options_sha256()) {
+        if *options != Some(*ticket.options_sha256) {
             return Err(R::Options);
         }
         if let Some(slot) = &self.bound
-            && slot.get() != Some(ticket.content())
+            && slot.get() != Some(ticket.content)
         {
             return Err(R::Content);
         }
         Ok(())
+    }
+}
+
+/// What [`BytesGrant`] decides on of a plugin key-use ticket. Only Core builds a ticket; the
+/// decision is over these plain facts of it.
+struct UseFacts<'a> {
+    caller: &'a CallerContext,
+    plugin: &'a str,
+    operation: &'a str,
+    max_uses: u8,
+    key: &'a oncl_core::keys::KeyId,
+    kind: oncl_plugin::operations::KeyKind,
+    options_sha256: &'a [u8; 32],
+    content: &'a oncl_core::plugins::ContentBinding,
+}
+impl<'a> UseFacts<'a> {
+    fn of(ticket: &'a oncl_core::plugins::PluginUse) -> Self {
+        Self {
+            caller: ticket.caller(),
+            plugin: &ticket.identity().id,
+            operation: ticket.operation(),
+            max_uses: ticket.max_uses(),
+            key: ticket.key(),
+            kind: ticket.kind(),
+            options_sha256: ticket.options_sha256(),
+            content: ticket.content(),
+        }
     }
 }
 
@@ -751,15 +785,53 @@ pub fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oncl_core::plugins::{ContentBinding, PluginIdentity, PluginUse, TicketRefusal as R};
+    use oncl_core::keys::KeyId;
+    use oncl_core::plugins::{ContentBinding, TicketRefusal as R};
     use oncl_plugin::operations::KeyKind;
 
     const DECLARED_HASH: [u8; 32] = [3; 32];
 
+    /// The facts of a ticket of the key `k`, the one the command opened.
+    struct Ticket {
+        caller: CallerContext,
+        operation: &'static str,
+        max_uses: u8,
+        kind: KeyKind,
+        options: [u8; 32],
+        content: ContentBinding,
+    }
+    impl Ticket {
+        fn of(operation: &'static str, caller: &str, kind: KeyKind, options: [u8; 32]) -> Self {
+            Self {
+                caller: CallerContext::LocalOperator(caller.into()),
+                operation,
+                max_uses: oncl_plugin::operations::MAX_USES,
+                kind,
+                options,
+                content: ContentBinding::bytes(b"x"),
+            }
+        }
+    }
+
     impl BytesGrant {
+        /// `check` of `ticket` for the opened key `key`.
+        fn check_with(&self, ticket: &Ticket, key: &str) -> Result<(), R> {
+            let named = KeyId::new("k").unwrap();
+            let facts = UseFacts {
+                caller: &ticket.caller,
+                plugin: "test.cli",
+                operation: ticket.operation,
+                max_uses: ticket.max_uses,
+                key: &named,
+                kind: ticket.kind,
+                options_sha256: &ticket.options,
+                content: &ticket.content,
+            };
+            self.check_use(&facts, &KeyId::new(key).unwrap())
+        }
         /// `check` for the key `k` that `ticket` names.
-        fn check_k(&self, ticket: &PluginUse) -> Result<(), R> {
-            self.check(ticket, &oncl_core::keys::KeyId::new("k").unwrap())
+        fn check_k(&self, ticket: &Ticket) -> Result<(), R> {
+            self.check_with(ticket, "k")
         }
     }
 
@@ -772,22 +844,8 @@ mod tests {
             bound: None,
         }
     }
-    fn ticket(operation: &str, caller: &str, kind: KeyKind, options: [u8; 32]) -> PluginUse {
-        PluginUse::for_tests(
-            PluginIdentity {
-                id: "test.cli".into(),
-                package: oncl_core::plugins::loose_package_hash(b"m", b"w"),
-                version: "1".into(),
-            },
-            operation,
-            CallerContext::LocalOperator(caller.into()),
-            kind,
-            1,
-            oncl_core::keys::KeyId::new("k").unwrap(),
-            ContentBinding::bytes(b"x"),
-            options,
-            [0; 32],
-        )
+    fn ticket(operation: &'static str, caller: &str, kind: KeyKind, options: [u8; 32]) -> Ticket {
+        Ticket::of(operation, caller, kind, options)
     }
 
     #[test]
@@ -800,8 +858,22 @@ mod tests {
             Err(R::Caller)
         );
         assert_eq!(
+            g.check_k(&Ticket {
+                caller: CallerContext::ServiceClient("op".into()),
+                ..ticket("sign", "op", KeyKind::Raw, DECLARED_HASH)
+            }),
+            Err(R::Caller)
+        );
+        assert_eq!(
             g.check_k(&ticket("legacy", "op", KeyKind::Raw, DECLARED_HASH)),
             Err(R::NotGranted)
+        );
+        assert_eq!(
+            g.check_k(&Ticket {
+                max_uses: 2,
+                ..ticket("sign", "op", KeyKind::Raw, DECLARED_HASH)
+            }),
+            Err(R::Uses)
         );
         assert_eq!(
             g.check_k(&ticket("sign", "op", KeyKind::Cms, DECLARED_HASH)),
@@ -813,10 +885,7 @@ mod tests {
         );
         // Another key than the one the command opened: key-mismatch, as on the server.
         assert_eq!(
-            g.check(
-                &ticket("sign", "op", KeyKind::Raw, DECLARED_HASH),
-                &oncl_core::keys::KeyId::new("other").unwrap()
-            ),
+            g.check_with(&ticket("sign", "op", KeyKind::Raw, DECLARED_HASH), "other"),
             Err(R::Key)
         );
         let mut param = grant();
@@ -824,6 +893,36 @@ mod tests {
         assert_eq!(
             param.check_k(&ticket("sign", "op", KeyKind::Raw, DECLARED_HASH)),
             Err(R::Options)
+        );
+    }
+
+    /// With typed parameters the ticket's content must be the bytes of the bound parameter,
+    /// once the request has set them; before that nothing is signed.
+    #[test]
+    fn a_bound_parameter_admits_only_its_own_bytes() {
+        let slot = Arc::new(OnceLock::new());
+        let g = BytesGrant {
+            bound: Some(slot.clone()),
+            ..grant()
+        };
+        let signed = ticket("sign", "op", KeyKind::Raw, DECLARED_HASH);
+        assert_eq!(g.check_k(&signed), Err(R::Content), "not built yet");
+        slot.set(ContentBinding::bytes(b"x")).unwrap();
+        g.check_k(&signed).unwrap();
+        assert_eq!(
+            g.check_k(&Ticket {
+                content: ContentBinding::bytes(b"y"),
+                ..ticket("sign", "op", KeyKind::Raw, DECLARED_HASH)
+            }),
+            Err(R::Content)
+        );
+        assert_eq!(
+            g.check_k(&Ticket {
+                content: ContentBinding::prehashed(b"x"),
+                ..ticket("sign", "op", KeyKind::Raw, DECLARED_HASH)
+            }),
+            Err(R::Content),
+            "the same bytes as a digest are other content"
         );
     }
 

@@ -1140,14 +1140,14 @@ fn replayed_nonce_is_refused_by_the_call() {
     let forge = |c: &mut OperationContext| {
         let p = prepare(&rig, "sign-raw", &params, c);
         let s = p.summary();
-        PluginApproval::for_tests(
+        PluginApproval::new(
             s.plugin.clone(),
             "sign-raw",
             manual(),
             c.id(),
             rig.key.key_id(),
             1,
-            vec![ApprovedUse::for_tests(
+            vec![ApprovedUse::new(
                 s.kind,
                 ContentBinding::bytes(DOC),
                 s.options_sha256,
@@ -1466,14 +1466,14 @@ fn the_certificate_that_signs_is_the_one_the_user_approved() {
         use sha2::Digest;
         Sha256::digest(der::Encode::to_der(&other).unwrap()).into()
     };
-    let forged = PluginApproval::for_tests(
+    let forged = PluginApproval::new(
         s.plugin.clone(),
         "sign-raw",
         manual(),
         c.id(),
         rig.key.key_id(),
         1,
-        vec![ApprovedUse::for_tests(
+        vec![ApprovedUse::new(
             s.kind,
             ContentBinding::bytes(DOC),
             s.options_sha256,
@@ -1499,14 +1499,14 @@ fn guard_refuses_a_key_whose_certificate_changed_after_the_fast_check() {
     let mut c = ctx(&rig, "sign-raw");
     let p = prepare(&rig, "sign-raw", &params, &mut c);
     let s = p.summary();
-    let forged = PluginApproval::for_tests(
+    let forged = PluginApproval::new(
         s.plugin.clone(),
         "sign-raw",
         manual(),
         c.id(),
         rig.key.key_id(),
         1,
-        vec![ApprovedUse::for_tests(
+        vec![ApprovedUse::new(
             s.kind,
             ContentBinding::bytes(DOC),
             s.options_sha256,
@@ -1581,14 +1581,14 @@ fn guard_decides_on_lease_certificate_not_on_metadata() {
         Sha256::digest(der::Encode::to_der(&other).unwrap()).into()
     };
     // Lease A, metadata B, approval B: the fast check passes; only the guard can stop it.
-    let forged = PluginApproval::for_tests(
+    let forged = PluginApproval::new(
         s.plugin.clone(),
         "sign-raw",
         manual(),
         c.id(),
         rig.key.key_id(),
         1,
-        vec![ApprovedUse::for_tests(
+        vec![ApprovedUse::new(
             s.kind,
             ContentBinding::bytes(DOC),
             s.options_sha256,
@@ -1710,14 +1710,14 @@ fn every_reachable_refusal_path_yields_its_stable_subcode() {
         let forge = |c: &mut OperationContext| {
             let p = prepare(&rig, "sign-raw", &params, c);
             let s = p.summary();
-            PluginApproval::for_tests(
+            PluginApproval::new(
                 s.plugin.clone(),
                 "sign-raw",
                 manual(),
                 c.id(),
                 rig.key.key_id(),
                 1,
-                vec![ApprovedUse::for_tests(
+                vec![ApprovedUse::new(
                     s.kind,
                     ContentBinding::bytes(DOC),
                     s.options_sha256,
@@ -1886,14 +1886,14 @@ fn audit_facts_carry_the_nonce_hash_not_the_nonce_or_the_document() {
     let p = prepare(&rig, "sign-raw", &params, &mut c);
     let s = p.summary();
     let nonce = [0xA5u8; 16];
-    let approval = PluginApproval::for_tests(
+    let approval = PluginApproval::new(
         s.plugin.clone(),
         "sign-raw",
         manual(),
         c.id(),
         rig.key.key_id(),
         1,
-        vec![ApprovedUse::for_tests(
+        vec![ApprovedUse::new(
             s.kind,
             ContentBinding::bytes(DOC),
             s.options_sha256,
@@ -1902,17 +1902,18 @@ fn audit_facts_carry_the_nonce_hash_not_the_nonce_or_the_document() {
         Instant::now() + APPROVAL_TTL,
         nonce,
     );
-    let ticket = PluginUse::for_tests(
-        s.plugin.clone(),
-        "sign-raw",
-        manual(),
-        s.kind,
-        1,
-        rig.key.key_id(),
-        ContentBinding::bytes(DOC),
-        s.options_sha256,
-        s.key.fingerprint_sha256,
-    );
+    let ticket = PluginUse {
+        identity: s.plugin.clone(),
+        operation: "sign-raw".to_owned(),
+        caller: manual(),
+        kind: s.kind,
+        handle: 1,
+        key: rig.key.key_id(),
+        content: ContentBinding::bytes(DOC),
+        options_sha256: s.options_sha256,
+        certificate_sha256: s.key.fingerprint_sha256,
+        max_uses: oncl_plugin::operations::MAX_USES,
+    };
     let facts = approval.audit_record(&ticket);
     let hash = facts.approval_nonce_sha256.expect("a user approved it");
     assert_ne!(hash.as_slice(), &nonce[..]);

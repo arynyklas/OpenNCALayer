@@ -585,8 +585,8 @@ jobs:
       # release programs (openncalayer, oncl-cli, oncl-server, oncl-ui) must show the `testing`
       # feature on no crate. Releases build with `-p`, but `cargo build --workspace
       # --all-targets` and `cargo test` unify the dev-dependencies' `testing` into the same
-      # binaries; this fails if it ever reaches the normal tree (`for_tests` constructors forge
-      # key-use approvals).
+      # binaries; this fails if it ever reaches the normal tree (test doubles such as
+      # `oncl-pki`'s mocks must never ship).
       - name: No testing feature in release programs
         run: cargo xtask check-release-features
       # Offline and read-only (about 3 s): the SDK's dependency closure against the forbidden

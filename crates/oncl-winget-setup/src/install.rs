@@ -79,7 +79,7 @@ pub fn installed_version(root: &Path) -> Result<Version, String> {
 /// The first thing that is not as it should be, as a sentence.
 #[cfg(windows)]
 pub fn verify(root: &Path, arp_key: &str, expected: &Expected) -> Result<(), String> {
-    use oncl_registry::Hive;
+    use oncl_winreg::Hive;
 
     let config = velopack::locator::create_config_from_root_dir(root);
     if !config.UpdateExePath.is_file() {
@@ -128,7 +128,7 @@ pub fn verify(root: &Path, arp_key: &str, expected: &Expected) -> Result<(), Str
     }
 
     let text = |name: &str| {
-        oncl_registry::get_string(Hive::CurrentUser, arp_key, Some(name))
+        oncl_winreg::get_string(Hive::CurrentUser, arp_key, Some(name))
             .map_err(|e| format!("the Apps & Features entry cannot be read: {e}"))
     };
     if text("DisplayName")?.is_none_or(|name| name.trim().is_empty()) {

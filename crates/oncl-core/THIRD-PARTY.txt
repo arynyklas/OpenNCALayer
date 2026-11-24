@@ -1,7 +1,7 @@
 OpenNCALayer SDK: third-party software
 ======================================
 
-The SDK crates of the chain oncl-gost, oncl-registry, oncl-pki, oncl-pdf, oncl-protocol, oncl-pdk, oncl-xml, oncl-token, oncl-flows, oncl-update, oncl-plugin, oncl-core and an application that embeds `oncl-core` with all
+The SDK crates of the chain oncl-gost, oncl-pki, oncl-pdf, oncl-protocol, oncl-pdk, oncl-xml, oncl-token, oncl-flows, oncl-update, oncl-plugin, oncl-core and an application that embeds `oncl-core` with all
 features include the crates listed below, which are not part of OpenNCALayer: the
 normal (non-build, non-proc-macro) dependencies on every platform the project ships
 for. Each line names a crate, its version, its licence as an SPDX expression ("A OR B"

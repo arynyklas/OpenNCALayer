@@ -103,27 +103,19 @@ impl ConsentGuard {
 
 impl KeyUseGuard for ConsentGuard {
     fn before_use(&self, event: &KeyUseEvent) -> Result<KeyUseReceipt, OperationError> {
-        // The user's consent to a document is not consent to a plugin's key use (which has
-        // its own engine and guard): a ticketed event is refused whatever is granted, and
-        // spends none of it.
-        if event.is_plugin() {
+        let mut grant = self.grant.lock().unwrap_or_else(PoisonError::into_inner);
+        if !spend(
+            &mut grant,
+            event.is_plugin(),
+            event.operation_id.get(),
+            &event.key_id,
+            event.action,
+        ) {
             return Err(OperationError::PermissionDenied);
         }
-        let mut grant = self.grant.lock().unwrap_or_else(PoisonError::into_inner);
-        match grant.as_mut() {
-            Some(g)
-                if g.operation == event.operation_id.get()
-                    && g.key == event.key_id
-                    && g.action == event.action
-                    && g.uses_left > 0 =>
-            {
-                g.uses_left -= 1;
-                self.applications
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Ok(KeyUseReceipt::new(event.clone()))
-            }
-            _ => Err(OperationError::PermissionDenied),
-        }
+        self.applications
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(KeyUseReceipt::new(event.clone()))
     }
 
     fn finish(&self, receipt: KeyUseReceipt, outcome: KeyUseOutcome) -> Result<(), OperationError> {
@@ -134,6 +126,34 @@ impl KeyUseGuard for ConsentGuard {
             "a private key was applied"
         );
         Ok(())
+    }
+}
+
+/// Whether `grant` allows a key use of `key` for `action` in `operation`, spending one of its
+/// uses if so. The user's consent to a document is not consent to a plugin's key use (which
+/// has its own engine and guard): a use with a plugin ticket (`plugin`) is refused whatever
+/// is granted, and spends none of it.
+fn spend(
+    grant: &mut Option<Grant>,
+    plugin: bool,
+    operation: u64,
+    key: &KeyId,
+    action: Action,
+) -> bool {
+    if plugin {
+        return false;
+    }
+    match grant.as_mut() {
+        Some(g)
+            if g.operation == operation
+                && g.key == *key
+                && g.action == action
+                && g.uses_left > 0 =>
+        {
+            g.uses_left -= 1;
+            true
+        }
+        _ => false,
     }
 }
 
@@ -1341,59 +1361,24 @@ mod tests {
         assert_eq!(candidates[0].unsuitable, Some(Unsuitable::NotYetValid));
     }
 
-    /// Consent to a document is not consent to a plugin: an event with a plugin ticket is
+    /// Consent to a document is not consent to a plugin: a key use with a plugin ticket is
     /// refused even when everything else matches the grant, and the grant stays whole.
     #[test]
     fn a_plugin_ticket_is_refused_and_spends_no_consent() {
-        use oncl_core::keys::KeyId;
-        use oncl_core::plugins::{
-            CallerContext, ContentBinding, PackageHash, PluginIdentity, PluginUse,
-        };
-        use oncl_core::{ExecutionGrant, OperationPolicy};
-        use oncl_plugin::operations::KeyKind;
-
-        let w = world();
-        let (engine, guard) = engine(&w);
         let key = KeyId::new("k").unwrap();
-        let ctx = engine
-            .begin(
-                ExecutionGrant::new([Action::Sign]).with_keys([key.clone()]),
-                OperationPolicy::strict_online(),
-                Arc::new(crate::workspace::JobControl::default()),
-            )
-            .unwrap();
-        guard.allow_for_tests(ctx.id().get(), key.clone(), Action::Sign, 1);
-        let plain = KeyUseEvent::new(&ctx, key.clone(), Action::Sign);
-        let ticket = PluginUse::for_tests(
-            PluginIdentity {
-                id: "t.p".to_owned(),
-                package: PackageHash::Loose([7; 32]),
-                version: "1.0.0".to_owned(),
-            },
-            "sign",
-            CallerContext::LocalOperator("manual".to_owned()),
-            KeyKind::Raw,
-            1,
-            key,
-            ContentBinding::bytes(b"document"),
-            [0; 32],
-            [0; 32],
+        let mut grant = Some(Grant {
+            operation: 7,
+            key: key.clone(),
+            action: Action::Sign,
+            uses_left: 1,
+        });
+        assert!(!spend(&mut grant, true, 7, &key, Action::Sign));
+        assert_eq!(grant.as_ref().map(|g| g.uses_left), Some(1));
+        assert!(
+            spend(&mut grant, false, 7, &key, Action::Sign),
+            "the consent of the document is untouched"
         );
-        let ticketed = plain.clone().with_plugin_ticket_for_tests(ticket);
-        assert!(!plain.is_plugin());
-        assert!(ticketed.is_plugin());
-        assert!(matches!(
-            guard.before_use(&ticketed),
-            Err(OperationError::PermissionDenied)
-        ));
-        assert_eq!(guard.applications(), 0);
-        guard
-            .before_use(&plain)
-            .expect("the consent of the document is untouched");
-        assert_eq!(guard.applications(), 1);
-        assert!(matches!(
-            guard.before_use(&plain),
-            Err(OperationError::PermissionDenied)
-        ));
+        assert!(!spend(&mut grant, false, 7, &key, Action::Sign));
+        assert!(!spend(&mut grant, true, 7, &key, Action::Sign));
     }
 }
