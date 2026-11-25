@@ -3,9 +3,9 @@
 use oncl_pdk::abi::{
     CertInfo, CmsOutcome, CsrChoice, CsrDialogArgs, ErrorCode, FlowArgs, HostResult, ImportChoice,
     ImportDialogArgs, InstallCertArgs, InstalledCert, NewKey, NewKeyArgs, SignCmsExArgs,
-    SignRawArgs, SignXmlArgs,
+    SignRawArgs,
 };
-use oncl_pdk::data::{self, DataDecoded, DataDecoding};
+use oncl_pdk::data::{self, DataDecoded, DataDecoding, DataSignXmlArgs};
 use oncl_pdk::keys::{self, Key};
 use oncl_pdk::serde_json::{self, Value};
 use oncl_pdk::{Locale, Request, builtin, host};
@@ -88,11 +88,12 @@ impl crate::Core for Host {
     }
 
     fn sign_xml(&self, key: &Key, xml: &[u8]) -> HostResult<Vec<u8>> {
-        data::sign_xml(&SignXmlArgs {
+        data::sign_xml(&DataSignXmlArgs {
             handle: key.handle(),
             xml: xml.to_vec().into(),
             element: None,
             parent: None,
+            output: None,
         })
         .map(String::into_bytes)
     }

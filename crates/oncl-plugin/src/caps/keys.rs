@@ -984,15 +984,20 @@ pub(crate) fn sign_raw(state: &HostState, handle: u32, data: &[u8]) -> HostResul
 
 /// `keys_sign_xml`: the whole document, or an element, with an enveloped signature.
 pub(crate) fn keys_sign_xml(state: &mut HostState, args: SignXmlArgs) -> HostResult<Bytes> {
-    sign_xml(state, &args, &args.xml).map(Bytes::from)
+    let spec = xml_spec(&args)?;
+    sign_xml(state, args.handle, &spec, &args.xml).map(Bytes::from)
 }
 
-/// [`keys_sign_xml`] of the document `xml`.
-pub(crate) fn sign_xml(state: &HostState, args: &SignXmlArgs, xml: &[u8]) -> HostResult<Vec<u8>> {
+/// The document `xml` signed by the key `handle` as `spec` says.
+pub(crate) fn sign_xml(
+    state: &HostState,
+    handle: u32,
+    spec: &xmldsig::XmlSignSpec<'_>,
+    xml: &[u8],
+) -> HostResult<Vec<u8>> {
     let builtin = is_builtin(state);
-    let entry = state.keys.get(args.handle)?;
-    let spec = xml_spec(args)?;
-    xmldsig::sign_spec(xml, &spec, &entry.key, &entry.cert).map_err(|e| xml_failed(builtin, e))
+    let entry = state.keys.get(handle)?;
+    xmldsig::sign_spec(xml, spec, &entry.key, &entry.cert).map_err(|e| xml_failed(builtin, e))
 }
 
 /// The core's canonicalization of `method`.
@@ -1165,13 +1170,18 @@ pub(crate) fn cms_spec<'a>(
 
 /// The original ABI selector translation, borrowed by both host modes.
 pub(crate) fn xml_spec(args: &SignXmlArgs) -> HostResult<xmldsig::XmlSignSpec<'_>> {
-    if args.element.is_none() && args.parent.is_some() {
+    kalkan_xml_spec(args.element.as_deref(), args.parent.as_deref())
+}
+
+/// [`xmldsig::XmlSignSpec::kalkan`] of the element and parent XPaths a call names.
+pub(crate) fn kalkan_xml_spec<'a>(
+    element: Option<&'a str>,
+    parent: Option<&'a str>,
+) -> HostResult<xmldsig::XmlSignSpec<'a>> {
+    if element.is_none() && parent.is_some() {
         return Err(invalid("parent is only for a signed element"));
     }
-    Ok(xmldsig::XmlSignSpec::kalkan(
-        args.element.as_deref(),
-        args.parent.as_deref(),
-    ))
+    Ok(xmldsig::XmlSignSpec::kalkan(element, parent))
 }
 pub(crate) fn xml_spec_ex(args: &SignXmlExArgs) -> xmldsig::XmlSignSpec<'_> {
     xmldsig::XmlSignSpec {
@@ -1210,17 +1220,22 @@ pub(crate) fn xml_spec_ex(args: &SignXmlExArgs) -> xmldsig::XmlSignSpec<'_> {
         }),
         strip_whitespace: args.strip_whitespace,
         base64_line_breaks: args.base64_line_breaks,
-        output: match args.output {
-            XmlOutput::AsIs => xmldsig::XmlOutput::AsIs,
-            XmlOutput::Serialize {
-                declaration,
-                standalone_no,
-                trim,
-            } => xmldsig::XmlOutput::Serialize {
-                declaration,
-                standalone_no,
-                trim,
-            },
+        output: xml_output(args.output),
+    }
+}
+
+/// The core's form of the signed document `output` names.
+pub(crate) fn xml_output(output: XmlOutput) -> xmldsig::XmlOutput {
+    match output {
+        XmlOutput::AsIs => xmldsig::XmlOutput::AsIs,
+        XmlOutput::Serialize {
+            declaration,
+            standalone_no,
+            trim,
+        } => xmldsig::XmlOutput::Serialize {
+            declaration,
+            standalone_no,
+            trim,
         },
     }
 }

@@ -625,8 +625,8 @@ pub enum Import {
     /// `data_sign_cms`: [`SignCmsExArgs`] → [`CmsOutcome`]: `keys_sign_cms_ex` over data
     /// the core keeps, the CMS kept (its marker in `signed`).
     DataSignCms,
-    /// `data_sign_xml`: [`SignXmlArgs`] → `String`: `keys_sign_xml` over data the core
-    /// keeps, the marker of the signed document.
+    /// `data_sign_xml`: [`DataSignXmlArgs`] → `String`: `keys_sign_xml` over data the core
+    /// keeps, in the output form the module asks for, the marker of the signed document.
     DataSignXml,
     /// `data_sign_raw`: [`SignRawArgs`] → [`Bytes`]: `keys_sign_raw` over data the core
     /// keeps (`data` may be a marker), the signature itself.
@@ -2500,6 +2500,27 @@ pub struct DataEncodeArgs {
     pub data: String,
     /// How.
     pub form: DataEncoding,
+}
+
+/// `data_sign_xml`: [`SignXmlArgs`] over a document or the marker of one, with the form
+/// of the signed document the module asks for. Without `output` the call is the one older
+/// built-in modules make, encoded as a [`SignXmlArgs`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DataSignXmlArgs {
+    /// The key.
+    pub handle: u32,
+    /// The document, UTF-8, or its marker.
+    pub xml: Bytes,
+    /// As [`SignXmlArgs::element`].
+    #[serde(default)]
+    pub element: Option<String>,
+    /// As [`SignXmlArgs::parent`].
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// The form of the signed document; `None`: [`SignXmlArgs`]'s (no XML declaration, no
+    /// whitespace around the document).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<XmlOutput>,
 }
 
 /// The outcome of `page_file_read`.

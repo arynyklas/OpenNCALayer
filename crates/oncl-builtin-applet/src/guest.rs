@@ -2,8 +2,9 @@
 
 use oncl_pdk::abi::{
     ChangePasswordArgs, ErrorCode, FlowArgs, FlowReaders, FlowWrongPin, HostResult, IdCardHolder,
-    InstallCertArgs, InstalledCert, NewKey, NewKeyArgs, PasswordArgs, SignXmlArgs, TokenScan,
+    InstallCertArgs, InstalledCert, NewKey, NewKeyArgs, PasswordArgs, TokenScan,
 };
+use oncl_pdk::data::{DataSignXmlArgs, XmlOutput};
 use oncl_pdk::keys::{self, Flow, Key};
 use oncl_pdk::serde_json::{self, Value};
 use oncl_pdk::{Locale, Request, builtin, data, dialogs, files, host, shared, tokens};
@@ -130,11 +131,19 @@ impl crate::Core for Host {
     }
 
     fn sign_xml(&self, key: &Key, xml: &str) -> HostResult<String> {
-        data::sign_xml(&SignXmlArgs {
+        // The original writes the signed document with a JDK `Transformer`: always its own
+        // declaration with `standalone="no"`, right before the document, whatever the input
+        // declared, and no whitespace around (commonUtils and basics write no declaration).
+        data::sign_xml(&DataSignXmlArgs {
             handle: key.handle(),
             xml: xml.as_bytes().to_vec().into(),
             element: None,
             parent: None,
+            output: Some(XmlOutput::Serialize {
+                declaration: true,
+                standalone_no: true,
+                trim: true,
+            }),
         })
     }
 }

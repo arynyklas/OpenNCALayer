@@ -1142,8 +1142,8 @@ pub mod data {
     use super::{HostResult, call, imports};
     use crate::abi::{Bytes, DataDecodeArgs, DataEncodeArgs, DataRef, PagePathArgs};
     pub use crate::abi::{
-        CmsOutcome, DataDecoded, DataDecoding, DataEncoding, PageRead, SignCmsExArgs, SignRawArgs,
-        SignXmlArgs, StampArgs, StampOutcome,
+        CmsOutcome, DataDecoded, DataDecoding, DataEncoding, DataSignXmlArgs, PageRead,
+        SignCmsExArgs, SignRawArgs, StampArgs, StampOutcome, XmlOutput,
     };
     use std::borrow::Cow;
 
@@ -1242,8 +1242,9 @@ pub mod data {
         call(imports::data_sign_cms, args)
     }
 
-    /// `keys_sign_xml` (`args.handle` is the key's): the marker of the signed document.
-    pub fn sign_xml(args: &SignXmlArgs) -> HostResult<String> {
+    /// `keys_sign_xml` (`args.handle` is the key's) in the form `args.output` asks for: the
+    /// marker of the signed document.
+    pub fn sign_xml(args: &DataSignXmlArgs) -> HostResult<String> {
         call(imports::data_sign_xml, args)
     }
 

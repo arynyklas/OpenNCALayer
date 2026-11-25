@@ -28,7 +28,7 @@ use crate::host::HostState;
 use oncl_pdk::abi::{
     Bytes, CmsContent, CmsOutcome, DATA_KEPT_LARGE, DATA_KEPT_MIN, DATA_KEPT_SHORT_MIN,
     DATA_KEPT_STRING_MIN, DataDecodeArgs, DataDecoded, DataDecoding, DataEncodeArgs, DataEncoding,
-    DataRef, HostResult, PagePathArgs, PageRead, SignCmsExArgs, SignRawArgs, SignXmlArgs,
+    DataRef, DataSignXmlArgs, HostResult, PagePathArgs, PageRead, SignCmsExArgs, SignRawArgs,
     StampArgs, StampOutcome,
 };
 use oncl_pki::cms::Content;
@@ -449,9 +449,13 @@ pub(crate) fn data_sign_cms(state: &mut HostState, args: SignCmsExArgs) -> HostR
     outcome
 }
 
-/// `data_sign_xml`: `keys_sign_xml` of the document a marker names, the signed document
-/// kept.
-pub(crate) fn data_sign_xml(state: &mut HostState, args: SignXmlArgs) -> HostResult<String> {
+/// `data_sign_xml`: `keys_sign_xml` of the document a marker names, in the form `output`
+/// asks for, the signed document kept.
+pub(crate) fn data_sign_xml(state: &mut HostState, args: DataSignXmlArgs) -> HostResult<String> {
+    let mut spec = super::keys::kalkan_xml_spec(args.element.as_deref(), args.parent.as_deref())?;
+    if let Some(output) = args.output {
+        spec.output = super::keys::xml_output(output);
+    }
     let mut data = state
         .call
         .data
@@ -459,7 +463,7 @@ pub(crate) fn data_sign_xml(state: &mut HostState, args: SignXmlArgs) -> HostRes
         .ok_or_else(|| invalid("the call keeps no data"))?;
     let signed = data
         .resolve(&args.xml)
-        .and_then(|xml| super::keys::sign_xml(state, &args, xml));
+        .and_then(|xml| super::keys::sign_xml(state, args.handle, &spec, xml));
     let outcome = match signed {
         Ok(signed) => {
             let kept = data.keep(signed);
