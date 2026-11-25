@@ -29,17 +29,17 @@
 //! The container must be an existing local folder given by an absolute path, or a network
 //! folder the user chose in the file chooser (else `COMMON`, as a file the original cannot
 //! write; the core refuses another network path before it is looked up); `JKS` is not
-//! written (`UNKNOWN_STORAGE_FOR_THE_CURRENT_OPERATION`). A hardware token family with no
-//! token connected shows the PIN window first, as the original does: `GENKEY_CANCEL` if it
-//! is cancelled, `GENKEY_WRONG_PASSWORD` for any PIN typed. The cloud storage answers
-//! `EMPTY_SLOT`, and a connected token `GENKEY_COMMON`: OpenNCALayer does not generate keys
-//! on tokens.
+//! written (`UNKNOWN_STORAGE_FOR_THE_CURRENT_OPERATION`). `AKKaztokenStore` with no token
+//! connected shows the PIN window first, as the original does: `GENKEY_CANCEL` if it is
+//! cancelled, `GENKEY_WRONG_PASSWORD` for any PIN typed. Other token storages, not compared
+//! with the original, answer `EMPTY_SLOT`, and a connected token `GENKEY_COMMON`:
+//! OpenNCALayer does not generate keys on tokens.
 
 use crate::Core;
 use crate::dispatch::{Args, NPE, Outcome, Thrown, Wrapper};
 use crate::methods::{
-    COMMON, EMPTY_SLOT, JKS, UNKNOWN_STORAGE, UNKNOWN_STORAGE_FOR_THE_CURRENT_OPERATION,
-    has_token_kind, is_token, java_split, keystore_cause, storage, token_connected,
+    COMMON, EMPTY_SLOT, JKS, UNKNOWN_STORAGE, UNKNOWN_STORAGE_FOR_THE_CURRENT_OPERATION, is_token,
+    java_split, keystore_cause, storage, token_connected,
 };
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -119,9 +119,9 @@ fn generate_all(core: &impl Core, args: &Args<'_>) -> Result<Wrapper, Stop> {
             ));
             return Err(Stop::Code(GENKEY_COMMON));
         }
-        if has_token_kind(storage) {
+        if storage == "AKKaztokenStore" {
             // The original asks the token's PIN before it looks for the token, then fails
-            // to log in to the missing one.
+            // to log in to the missing one (seen for Kaztoken only).
             return Err(Stop::Code(if core.password(None) {
                 GENKEY_WRONG_PASSWORD
             } else {

@@ -90,7 +90,7 @@ pub(crate) fn is_token(storage: &str) -> bool {
 }
 
 /// A storage of a hardware token family (not a file, not the cloud storage).
-pub(crate) fn has_token_kind(storage: &str) -> bool {
+fn has_token_kind(storage: &str) -> bool {
     is_token(storage) && storage != CLOUD
 }
 
