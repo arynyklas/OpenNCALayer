@@ -3,7 +3,7 @@ members = ["crates/*", "xtask"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.3-beta.3"
+version = "0.1.3"
 edition = "2024"
 rust-version = "1.99.1"
 license = "Apache-2.0"
@@ -33,32 +33,32 @@ oncl-desktop = { path = "crates/oncl-desktop" }
 # from this repository by a release tag (docs/dev/sdk.md section 1, docs/design/publishers.md Р44).
 # A test (`xtask/tests/sdk_delivery.rs`) keeps the set and its order.
 # The windows, key choice, page paths and page PINs the core gives modules and plugins.
-oncl-flows = { path = "crates/oncl-flows", version = "=0.1.3-beta.3" }
-oncl-gost = { path = "crates/oncl-gost", version = "=0.1.3-beta.3" }
+oncl-flows = { path = "crates/oncl-flows", version = "=0.1.3" }
+oncl-gost = { path = "crates/oncl-gost", version = "=0.1.3" }
 oncl-ipc = { path = "crates/oncl-ipc" }
 # The plugin builder: the canonical source archive and the reference build of a plugin
 # (`oncl-pack`, run by the builder image); xtask packs the ports with the same code.
 oncl-pack = { path = "crates/oncl-pack" }
-oncl-pki = { path = "crates/oncl-pki", version = "=0.1.3-beta.3" }
+oncl-pki = { path = "crates/oncl-pki", version = "=0.1.3" }
 # The test doubles of the NCA services (a live TSA, OCSP responder, CRL distribution point and
 # certificates issued on the fly): dev-dependency of tests only, never in the SDK.
 oncl-pki-testing = { path = "crates/oncl-pki-testing" }
-oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.3-beta.3" }
-oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.3-beta.3" }
+oncl-pdf = { path = "crates/oncl-pdf", version = "=0.1.3" }
+oncl-pdk = { path = "crates/oncl-pdk", version = "=0.1.3" }
 # Explicit defaults also keep inherited no-default SDK dependencies valid outside this workspace.
-oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.3-beta.3" }
-oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.3-beta.3" }
+oncl-plugin = { path = "crates/oncl-plugin", default-features = false, version = "=0.1.3" }
+oncl-protocol = { path = "crates/oncl-protocol", version = "=0.1.3" }
 oncl-testkit = { path = "crates/oncl-testkit" }
 oncl-tls = { path = "crates/oncl-tls" }
-oncl-token = { path = "crates/oncl-token", version = "=0.1.3-beta.3" }
+oncl-token = { path = "crates/oncl-token", version = "=0.1.3" }
 oncl-trust = { path = "crates/oncl-trust" }
 oncl-ui = { path = "crates/oncl-ui" }
-oncl-update = { path = "crates/oncl-update", version = "=0.1.3-beta.3" }
+oncl-update = { path = "crates/oncl-update", version = "=0.1.3" }
 # The installer entry WinGet runs: `xtask package` writes the Setup it carries into it.
 oncl-winget-setup = { path = "crates/oncl-winget-setup", default-features = false }
 # The Win32 registry calls of the Windows programs; not in the SDK.
 oncl-winreg = { path = "crates/oncl-winreg" }
-oncl-xml = { path = "crates/oncl-xml", version = "=0.1.3-beta.3" }
+oncl-xml = { path = "crates/oncl-xml", version = "=0.1.3" }
 
 aes = "0.9.0"
 anyhow = "1.0.104"
