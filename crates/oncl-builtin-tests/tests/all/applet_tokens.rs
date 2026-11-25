@@ -516,7 +516,8 @@ fn all_old_token_answers_unchanged_when_disabled() {
                 "CN",
                 ""
             ]),
-            "EMPTY_SLOT",
+            // The PIN window first, as the original; the script cancels it.
+            "GENKEY_CANCEL",
         ),
         (
             "setX509CertToKeyStore",
