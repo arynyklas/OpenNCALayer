@@ -46,3 +46,7 @@ commit = "238adec09a6295006b6a53b01eeec2d33e777c88"
 [[revision]]
 tag = "v0.1.3-beta.3"
 commit = "f165799b695c497cf394dd1dd6a776ca1eafd242"
+
+[[revision]]
+tag = "v0.1.3"
+commit = "d63d5425e4d3a052dcb62bc57731a8d7ce723abf"
