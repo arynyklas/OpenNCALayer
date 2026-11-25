@@ -36,8 +36,7 @@ fn package(dir: &Path, name: &str, manifest: &str) -> PathBuf {
     zip.start_file("plugin.toml", options).unwrap();
     zip.write_all(manifest.as_bytes()).unwrap();
     zip.start_file("plugin.wasm", options).unwrap();
-    zip.write_all(&fs::read(oncl_testkit::plugin::example_wasm()).unwrap())
-        .unwrap();
+    zip.write_all(oncl_testkit::plugin::example_wasm()).unwrap();
     let path = dir.join(name);
     fs::write(&path, zip.finish().unwrap().into_inner()).unwrap();
     path

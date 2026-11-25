@@ -79,23 +79,19 @@ pub fn root() -> PathBuf {
     oncl_testkit::workspace_root()
 }
 
-/// The directory of the built port modules: `ONCL_PLUGIN_WASM_DIR` (what `cargo xtask
-/// plugin-ports-manual` sets), else the workspace of `plugins/` built here once per process
-/// like `oncl-port-tests` do (`oncl_testkit::plugin::ports_built`: offline, `--locked`).
-pub fn wasm_dir() -> PathBuf {
-    match std::env::var_os("ONCL_PLUGIN_WASM_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => oncl_testkit::plugin::ports_built().to_path_buf(),
-    }
-}
-
-/// The built module of the port `short` (`plugins/<short>`).
+/// The built module of the port `short` (`plugins/<short>`): from `ONCL_PLUGIN_WASM_DIR`
+/// (what `cargo xtask plugin-ports-manual` sets), else from the workspace of `plugins/` built
+/// here once per process like `oncl-port-tests` do (`oncl_testkit::plugin::port_wasm`:
+/// offline, `--locked`).
 ///
 /// # Panics
 ///
 /// If it is not built: the message says how.
 pub fn wasm_of(short: &str) -> Vec<u8> {
-    let path = wasm_dir().join(format!("oncl_port_{}.wasm", short.replace('-', "_")));
+    let Some(dir) = std::env::var_os("ONCL_PLUGIN_WASM_DIR") else {
+        return oncl_testkit::plugin::port_wasm(short);
+    };
+    let path = PathBuf::from(dir).join(format!("oncl_port_{}.wasm", short.replace('-', "_")));
     std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
             "{} is missing ({e}): see docs/dev/plugins-manual-tests.md (ONCL_PLUGIN_WASM_DIR must name the directory of the built oncl_port_*.wasm)",

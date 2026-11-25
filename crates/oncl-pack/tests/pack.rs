@@ -20,9 +20,11 @@ fn min_core_must_cover_the_imports() {
         ))
         .unwrap()
     };
-    let wasm = fs::read(oncl_testkit::plugin::example_wasm()).unwrap();
     let compiled = oncl_plugin::Engine::new()
-        .compile(&manifest("0.1.0-alpha.3"), &wasm)
+        .compile(
+            &manifest("0.1.0-alpha.3"),
+            oncl_testkit::plugin::example_wasm(),
+        )
         .unwrap();
     assert!(!compiled.imports().is_empty());
     let check = oncl_pack::pack::check_min_core;

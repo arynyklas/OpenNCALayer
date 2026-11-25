@@ -69,7 +69,7 @@ fn install_port(data: &Path, short: &str) {
             .join(short)
             .join("plugin.toml"),
     );
-    let wasm = oncl_testkit::read(oncl_testkit::plugin::port_wasm(short));
+    let wasm = oncl_testkit::plugin::port_wasm(short);
     let bytes = oncl_plugin::archive(&manifest, &wasm).unwrap();
     Store::open(data)
         .unwrap()

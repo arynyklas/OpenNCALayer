@@ -44,7 +44,7 @@ fn example_on(services: &HostServices, session_id: u64) -> Instance {
         trust: oncl_plugin::Trust::Installed,
     };
     Engine::new()
-        .compile(&manifest, &read(example_wasm()))
+        .compile(&manifest, example_wasm())
         .unwrap()
         .instantiate(services, ctx)
         .unwrap()
