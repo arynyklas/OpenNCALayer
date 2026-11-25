@@ -645,6 +645,37 @@ fn abi_types_roundtrip() {
         element: Some("//a".to_owned()),
         parent: None,
     });
+    roundtrip(abi::DataSignXmlArgs {
+        handle: 1,
+        xml: bytes(),
+        element: None,
+        parent: None,
+        output: Some(abi::XmlOutput::Serialize {
+            declaration: true,
+            standalone_no: true,
+            trim: true,
+        }),
+    });
+    // Older built-in modules call `data_sign_xml` with a `SignXmlArgs`: the same call
+    // without `output`, encoded alike.
+    let old = SignXmlArgs {
+        handle: 1,
+        xml: bytes(),
+        element: Some("//a".to_owned()),
+        parent: Some("/r".to_owned()),
+    };
+    let new = abi::DataSignXmlArgs {
+        handle: 1,
+        xml: bytes(),
+        element: Some("//a".to_owned()),
+        parent: Some("/r".to_owned()),
+        output: None,
+    };
+    assert_eq!(
+        abi::decode::<abi::DataSignXmlArgs>(&abi::encode(&old)),
+        Ok(new.clone())
+    );
+    assert_eq!(abi::encode(&new), abi::encode(&old));
     roundtrip(Handle { handle: 9 });
     roundtrip(MessageArgs {
         kind: MessageKind::Warning,

@@ -1169,9 +1169,11 @@ fn full_cycle() {
     assert_eq!(code(&reply), "NONE", "{reply}");
     assert_eq!(reply["secondResult"], ids[0]);
     let signed = reply["result"].as_str().unwrap();
-    // Written without the declaration and the whitespace after it.
+    // The input's declaration and the whitespace after it replaced by the original's.
     assert!(
-        signed.starts_with("<doc a=\"1\"><x>т</x><ds:Signature"),
+        signed.starts_with(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?><doc a=\"1\"><x>т</x><ds:Signature"
+        ),
         "{signed}"
     );
     let signatures = xmldsig::verify(signed.as_bytes()).unwrap();
@@ -1493,6 +1495,39 @@ fn sign_xml_with_a_synthetic_key() {
     let candidates = &prompter.key_prompts()[0].candidates;
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].alias, key.aliases[0]);
+}
+
+#[test]
+fn sign_xml_writes_the_originals_declaration() {
+    // The original's applet always starts with this declaration, right before the
+    // document: the request's own declaration replaced, whitespace around trimmed.
+    const DECLARATION: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"#;
+    let key = synthetic("user-rsa-sign");
+    for xml in [
+        r#"<doc><a Id="x">1</a></doc>"#,
+        r#"<?xml version="1.0" encoding="windows-1251"?><doc><a Id="x">1</a></doc>"#,
+        "<?xml version=\"1.0\"?>\n<doc><a Id=\"x\">1</a></doc>",
+        " \r\n\t<doc><a Id=\"x\">1</a></doc>\r\n ",
+    ] {
+        let (a, _) = setup(vec![storage("user-rsa-sign"), Step::Key(0)]);
+        let reply = call(
+            &a,
+            "signXml",
+            json!(["PKCS12", key.path.to_str().unwrap(), "SIGN", xml]),
+        );
+        assert_eq!(code(&reply), "NONE", "{reply}");
+        let signed = reply["result"].as_str().unwrap();
+        let body = signed
+            .strip_prefix(DECLARATION)
+            .unwrap_or_else(|| panic!("{signed}"));
+        assert!(
+            body.starts_with(r#"<doc><a Id="x">1</a><ds:Signature"#) && body.ends_with("</doc>"),
+            "{xml:?}: {signed}"
+        );
+        let signatures = xmldsig::verify(signed.as_bytes()).unwrap();
+        assert_eq!(signatures.len(), 1, "{xml:?}");
+        assert_eq!(signatures[0].sig_alg, SigAlg::RsaSha256, "{xml:?}");
+    }
 }
 
 #[test]
