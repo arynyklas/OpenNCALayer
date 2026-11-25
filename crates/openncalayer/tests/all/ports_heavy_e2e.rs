@@ -39,7 +39,7 @@ fn port_package(short: &str) -> Vec<u8> {
             .join(short)
             .join("plugin.toml"),
     );
-    let wasm = read(oncl_testkit::plugin::port_wasm(short));
+    let wasm = oncl_testkit::plugin::port_wasm(short);
     oncl_plugin::archive(&manifest, &wasm).unwrap()
 }
 
