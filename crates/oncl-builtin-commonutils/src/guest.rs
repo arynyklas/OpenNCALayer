@@ -3,10 +3,9 @@
 use crate::Chosen;
 use oncl_pdk::abi::{
     CertDetails, CertInfo, CmsOutcome, ErrorCode, FlowArgs, FlowReaders, HostResult,
-    KeyDescription, PageRead, PathOutcome, PathTime, SignCmsExArgs, SignXmlArgs, StampArgs,
-    StampOutcome,
+    KeyDescription, PageRead, PathOutcome, PathTime, SignCmsExArgs, StampArgs, StampOutcome,
 };
-use oncl_pdk::data::{self, DataDecoded, DataDecoding, DataEncoding};
+use oncl_pdk::data::{self, DataDecoded, DataDecoding, DataEncoding, DataSignXmlArgs};
 use oncl_pdk::keys::{self, Key};
 use oncl_pdk::serde_json::{self, Value};
 use oncl_pdk::{Locale, Request, files, host, pki, shared, tokens};
@@ -158,11 +157,12 @@ impl crate::Core for Host {
         element: Option<&str>,
         parent: Option<&str>,
     ) -> HostResult<Vec<u8>> {
-        data::sign_xml(&SignXmlArgs {
+        data::sign_xml(&DataSignXmlArgs {
             handle: key.handle(),
             xml: xml.to_vec().into(),
             element: element.map(str::to_owned),
             parent: parent.map(str::to_owned),
+            output: None,
         })
         .map(String::into_bytes)
     }

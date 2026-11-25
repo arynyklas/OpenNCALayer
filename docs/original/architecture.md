@@ -320,7 +320,7 @@ sequenceDiagram
 | CMS | Атрибуты contentType, signingTime, messageDigest, signingCertificateV2. В CMS кладётся только сертификат подписанта. Со-подпись — слиянием SignerInfo. Вывод — PEM `BEGIN CMS` (basics) или base64 DER (commonUtils) |
 | TSP | `http://tsp.pki.gov.kz`, нестандартный GET-биндинг `<url>/<urlencoded base64>` с POST как fallback. В basics при наличии `tsaProfile` всегда используются Стрибог‑512 и политика `1.2.398.3.3.2.6.4` |
 | OCSP / CRL | `http://ocsp.pki.gov.kz`, только HTTP. Доверие — встроенный `cacerts.jks` (10 prod-корней и промежуточных; тестовые 6 автоматически не грузятся) |
-| XMLDSig | Inclusive C14N, трансформы enveloped и c14n‑with‑comments, сертификат в KeyInfo, подпись добавляется в корень. URI: `xmldsig-more#gost34310-gost34311`, `urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:gostr34102015-gostr34112015-512` и др. Модули возвращают документ без объявления XML, подпись — без переводов строк, base64 — одной строкой |
+| XMLDSig | Inclusive C14N, трансформы enveloped и c14n‑with‑comments, сертификат в KeyInfo, подпись добавляется в корень. URI: `xmldsig-more#gost34310-gost34311`, `urn:ietf:params:xml:ns:pkigovkz:xmlsec:algorithms:gostr34102015-gostr34112015-512` и др. basics и commonUtils возвращают документ без объявления XML, Applet — с `<?xml version="1.0" encoding="UTF-8" standalone="no"?>` вместо объявления из запроса; подпись — без переводов строк, base64 — одной строкой |
 | Токены | **Только PC/SC APDU, без PKCS#11.** Тип токена определяется по точному ATR. Драйверы: Kaztoken, удостоверение личности РК (ГОСТ‑512 + RSA‑2048), eToken 72K, eToken 5110, JaCarta, AKey |
 | AdES (0.9.x) | CAdES/XAdES/PAdES уровней B/T/LT/LTA, видимый штамп в PDF. Используется в UI-инструментах, **в WebSocket API не входит** |
 

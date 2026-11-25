@@ -11,8 +11,8 @@ use oncl_pdk::orgjson::{self, JObject, JValue};
 use oncl_pdk::serde_json::{Map, Value};
 use oncl_pdk::{AddInfo, Request, host, keys};
 use oncl_port_legacy::{
-    CertProblem, Select, Storage, cades, cades_args, check_cert, file_filters, file_info,
-    into_text, ok, response, select, split_path, storage,
+    CertProblem, Select, Storage, cades, cades_args, check_cert_issuer_first, file_filters,
+    file_info, into_text, ok, response, select, split_path, storage,
 };
 use std::cell::Cell;
 
@@ -203,7 +203,8 @@ fn sign(file_path: &str, file_dir: &str, storage_name: &str) -> Result<String, S
         return Err(text(Text::Required).to_owned());
     }
     let key = choose(storage_name)?;
-    if let Some(problem) = check_cert(key.certificate()).map_err(|_| internal())? {
+    // `CMSSignUtil.verifyCert`: the issuer (PKIX path building) before the validity.
+    if let Some(problem) = check_cert_issuer_first(key.certificate()).map_err(|_| internal())? {
         return Err(text(problem_text(problem)).to_owned());
     }
     let args = cades_args(key.handle(), &data, true, CoSign::Auto, true);

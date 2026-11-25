@@ -451,7 +451,7 @@ Host-функция получает аргумент `(ptr, len)` в памят
 | `data_decode` | `DataDecodeArgs { data, form }`: `form` — `java_base64` (`Base64.getDecoder()` с его сообщениями) | `DataDecoded`: `data(маркер)` декодированных данных или `invalid(сообщение декодера)` |
 | `data_encode` | `DataEncodeArgs { data, form: base64 }` | `String`: маркер base64 данных |
 | `data_sign_cms` | `SignCmsExArgs` (`content`, `cosign = into(…)` — данные или маркер) | `CmsOutcome`: как `keys_sign_cms_ex`, в `signed` — маркер CMS в форме `output` |
-| `data_sign_xml` | `SignXmlArgs` (`xml` — документ или маркер) | `String`: маркер подписанного документа; ошибки и `cause` — как у `keys_sign_xml` |
+| `data_sign_xml` | `DataSignXmlArgs { handle, xml, element, parent, output }`: поля `SignXmlArgs` (`xml` — документ или маркер) и необязательный `output` в форме `keys_sign_xml_ex`; без `output` форма как у `keys_sign_xml`, и вызов совпадает с вызовом прежних модулей. Applet просит `serialize { declaration: true, standalone_no: true, trim: true }`, как пишет оригинал | `String`: маркер подписанного документа; ошибки и `cause` — как у `keys_sign_xml` |
 | `data_sign_raw` | `SignRawArgs` (`data` — данные или маркер) | `Bytes`: подпись, как у `keys_sign_raw`; документ не возвращается в модуль |
 | `data_stamp` | `StampArgs` (`cms` — CMS или маркер) | `StampOutcome`: как `tsp_stamp`, в `stamped` — маркер |
 | `data_page_read` | `PagePathArgs { path }` | `PageRead`: как `page_file_read`, в `data` — маркер содержимого |

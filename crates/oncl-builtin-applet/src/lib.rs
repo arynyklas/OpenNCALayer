@@ -96,7 +96,9 @@ pub trait Core {
     /// The key's alias.
     fn alias<'k>(&self, key: &'k Self::Key) -> &'k str;
     /// The enveloped signature of the whole document `xml` (the request's text, or the
-    /// marker of the text the core keeps): the signed document, or its marker.
+    /// marker of the text the core keeps): the signed document, or its marker, written as
+    /// the original's applet writes it (`<?xml version="1.0" encoding="UTF-8"
+    /// standalone="no"?>` right before the document, no whitespace around).
     fn sign_xml(&self, key: &Self::Key, xml: &str) -> HostResult<String>;
 }
 

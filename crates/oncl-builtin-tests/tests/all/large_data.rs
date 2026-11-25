@@ -251,7 +251,7 @@ fn applet_signs_long_documents_as_oncl_pki() {
         reply(&a, request),
         json!({
             "errorCode": "NONE",
-            "result": String::from_utf8(signed).unwrap(),
+            "result": format!("{APPLET_DECLARATION}{}", String::from_utf8(signed).unwrap()),
             "secondResult": key.alias,
             "uuid": "u",
         })
@@ -272,6 +272,9 @@ fn applet_signs_long_documents_as_oncl_pki() {
     );
     assert_eq!(r, json!({"errorCode": "EMPTY_SLOT", "uuid": uuid}));
 }
+
+/// The declaration the Applet writes before every signed document, as the original's.
+const APPLET_DECLARATION: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="no"?>"#;
 
 /// `text` as org.json's `JSONObject.quote` writes it, for text with no character it
 /// escapes beyond `serde_json`'s: `/` escaped after `<`.
@@ -308,10 +311,14 @@ fn signed_xml_replies_escape_as_org_json() {
         let applet = Applet::new(Arc::new(ScriptedPrompter::new(steps(1))));
         let request =
             json!({"method": "signXml", "args": ["PKCS12", "", "SIGN", xml], "uuid": "u-1"});
+        let applet_quoted = org_json_quoted(&format!(
+            "{APPLET_DECLARATION}{}",
+            std::str::from_utf8(&signed).unwrap()
+        ));
         assert_eq!(
             reply_text(&applet, &request.to_string()),
             format!(
-                r#"{{"result":{quoted},"errorCode":"NONE","secondResult":"{}","uuid":"u-1"}}"#,
+                r#"{{"result":{applet_quoted},"errorCode":"NONE","secondResult":"{}","uuid":"u-1"}}"#,
                 key.alias
             )
         );
