@@ -557,20 +557,6 @@ fn no_token_is_connected() {
     let dir = tempfile::tempdir().unwrap();
     let token = "AKKaztokenStore";
     for (method, args) in [
-        (
-            "genKeyPairAndGetPKCS10",
-            json!([
-                token,
-                "c",
-                "p",
-                ["a"],
-                [GOST2004],
-                [256],
-                "2.5.4.3",
-                "CN",
-                ""
-            ]),
-        ),
         ("setX509CertToKeyStore", json!([token, "c", "p", "pem"])),
         (
             "setX509CertToKeyStoreAndChangePassword",
@@ -629,6 +615,39 @@ fn no_token_is_connected() {
     }
     assert!(files(dir.path()).is_empty());
     assert!(prompter.storage_prompts().is_empty());
+    assert!(prompter.password_prompts().is_empty());
+}
+
+// --- genKeyPairAndGetPKCS10 on a token with none connected -----------------------------------
+
+#[test]
+fn gen_key_pair_on_a_missing_token_asks_the_pin_first() {
+    // As the original: the PIN window («Ввод пароля»), then the login to the missing token
+    // fails; cancelling the window is GENKEY_CANCEL.
+    let args = |storage: &str| json!([storage, "", "Qwerty12", [], [], [], "CN=TEST", "", "GOST"]);
+    for storage in ["AKKaztokenStore", "AKEToken72KStore", "AKKZIDCardStore"] {
+        let (a, prompter) = setup(vec![Step::CancelPassword]);
+        assert_eq!(
+            call(&a, "genKeyPairAndGetPKCS10", args(storage)),
+            json!({"errorCode": "GENKEY_CANCEL"}),
+            "{storage}"
+        );
+        assert_eq!(prompter.password_prompts().len(), 1, "{storage}");
+        let (a, prompter) = setup(vec![Step::Password("123456".to_owned())]);
+        assert_eq!(
+            call(&a, "genKeyPairAndGetPKCS10", args(storage)),
+            json!({"errorCode": "GENKEY_WRONG_PASSWORD"}),
+            "{storage}"
+        );
+        assert_eq!(prompter.password_prompts().len(), 1, "{storage}");
+        assert!(prompter.storage_prompts().is_empty());
+    }
+    // The cloud storage keeps EMPTY_SLOT, without a window.
+    let (a, prompter) = setup(vec![]);
+    assert_code(
+        &call(&a, "genKeyPairAndGetPKCS10", args("ABCloudServiceStore")),
+        "EMPTY_SLOT",
+    );
     assert!(prompter.password_prompts().is_empty());
 }
 
