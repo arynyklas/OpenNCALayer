@@ -77,75 +77,99 @@ enum Seen {
     Refused,
     /// The stream ended without a terminal record.
     Aborted,
-    /// The stream ended with its terminal record.
+    /// The stream ended with its terminal record, in which the item failed.
+    ItemFailed,
+    /// The stream ended with its terminal record, in which the item completed.
     Completed,
 }
 fn seen(response: &[u8]) -> Seen {
+    let text = String::from_utf8_lossy(response);
     if response.starts_with(b"HTTP/1.1 413") {
         Seen::Refused
-    } else if String::from_utf8_lossy(response).contains("name=\"final\"") {
+    } else if !text.contains("name=\"final\"") {
+        Seen::Aborted
+    } else if text.contains(r#""status":"completed""#) {
         Seen::Completed
     } else {
-        Seen::Aborted
+        Seen::ItemFailed
     }
 }
 
-/// A `metadata_bytes` value at which the hash batch is admitted and then aborted by the
-/// metadata budget (the D10 cause). The window is narrow and its place moves with every
-/// fixed reservation of the service, so it is found, not hard-coded: bisect the smallest
-/// value that completes, then stand `MARGIN` bytes below it.
+/// The smallest `metadata_bytes` at which the hash batch is admitted: below it a
+/// reservation made before the 200 head (the captured plan, mostly) fails and the request
+/// is refused. Its place moves with every fixed reservation of the service and with the
+/// size of the plan's types on the target, so it is found, not hard-coded.
 ///
-/// Not the value next to the edge, and not the middle of the window. The frames of the
-/// stream hold metadata until the socket has taken them, so how much of the budget is
-/// held at a given moment depends on how fast the client and the server run:
-/// - the smallest budget that completes moves by some tens of bytes under load, in both
-///   directions, so a value a few bytes below the edge found by one run completes in
-///   the next;
-/// - the budget can also run out earlier, before the first item (`item=none`), and under
-///   load that was seen across the lower part of the window, down to ~450 bytes below
-///   the edge. The window is over a thousand bytes wide, but the band that is free of
-///   both is about 350 bytes wide, from ~70 to ~420 bytes below the edge.
-///
-/// `MARGIN` is the middle of that band.
-///
-/// The bisect has the same jitter: one stray abort of a value above the edge (seen under
-/// load, about one run in forty a few dozen bytes above it) would send it up to the next
-/// value that completes, hundreds of bytes too high. A value therefore completes if any
-/// of `TRIES` runs completes; the runs that complete are cheap, as the first one ends it.
-const MARGIN: u64 = 224;
-const TRIES: usize = 3;
-fn completes(metadata_bytes: u64) -> bool {
-    (0..TRIES).any(|_| seen(&run(metadata_bytes).0) == Seen::Completed)
-}
-static ABORTING: LazyLock<u64> = LazyLock::new(|| {
-    let (mut refused, mut completed) = (1_000_000u64, 4_000_000u64);
-    assert!(completes(completed));
-    while completed - refused > 64 {
-        let middle = refused + (completed - refused) / 2;
-        if completes(middle) {
-            completed = middle;
-        } else {
+/// It does not move between runs: up to the head, one thread does the request's work in
+/// one order, and the response stream does not exist yet. The smallest budget that
+/// completes, which these tests used to aim below, moves by up to a whole progress part
+/// with how the stream and the native work interleave (see below).
+static ADMITTED: LazyLock<u64> = LazyLock::new(|| {
+    let (mut refused, mut admitted) = (1_000_000u64, 4_000_000u64);
+    assert_eq!(
+        seen(&run(refused).0),
+        Seen::Refused,
+        "admitted at {refused}"
+    );
+    assert_ne!(
+        seen(&run(admitted).0),
+        Seen::Refused,
+        "refused at {admitted}"
+    );
+    while admitted - refused > 1 {
+        let middle = refused + (admitted - refused) / 2;
+        if seen(&run(middle).0) == Seen::Refused {
             refused = middle;
+        } else {
+            admitted = middle;
         }
     }
-    completed - MARGIN
+    admitted
 });
 
-/// One request at the aborting budget: its response and the server's stderr.
-///
-/// The budget is aimed at a band, not at a point (see `MARGIN`), and some runs under load
-/// still land on the other side of the moving edge: the stream then completed, with its
-/// terminal record, and there is no abort to look at. That run is not an answer to the
-/// question of these tests and is made again, a few times. Any other outcome is the
-/// answer: an abort is judged by what it logged, a refusal or a lost log line is a
-/// failure, never made again.
-fn aborted_run() -> (Vec<u8>, String) {
-    let mut last = run(*ABORTING);
+// At the head the request holds `ADMITTED` (the plan's last reservations are its peak),
+// and the native work keeps all of it until the item's record is made. From the head on,
+// two threads draw on the rest of the budget at once:
+// - the native work runs the hash item, holding its source reader and digest state (416
+//   bytes on 64-bit targets) while it reads: when they do not fit, the item fails, a typed
+//   failure in the terminal record. It then keeps the item's record and its terminal copy
+//   (512 + 1024 bytes): when they do not fit, the stream is aborted at item 0 with
+//   `MetadataLimit` (the D10 cause);
+// - the response stream sends its first progress part as soon as the head is out, and
+//   again at most every 500 ms: a JSON buffer of at least 1024 bytes, its part header and
+//   CRLF (1180 bytes in all), held until the socket has taken them. When it does not fit,
+//   the stream is aborted at whatever item the work has begun, if any.
+//
+// Which thread reserves first is a race. From `ADMITTED + 1536` on, the record fits
+// unless a progress part is held at that moment, so one run completes and the next one
+// aborts: the old search for the smallest budget that completes, which counted a probe
+// as aborting when its few runs all aborted, could stop that far too high, and the
+// budget it aimed below then completed in every run. Below `ADMITTED + 1536` no run
+// completes cleanly; the offsets below choose what the race can still decide.
+
+/// Every run aborts. The progress part's 1024-byte JSON buffer never fits next to what
+/// the work holds, so the stream sends nothing while the work runs; the work alone runs
+/// the item (416 bytes) and never keeps its record (1536 bytes). The stream is aborted
+/// either by the progress part, or by the work's error once the work has let go and the
+/// progress part has been sent. Which of the two, and so whether the line names the item
+/// (`item=none` when the progress part failed before the item began), is still the race.
+const ALWAYS_ABORTS: u64 = 720;
+
+/// Every abort is at item 0: the first progress part always fits next to what the work
+/// holds before the item (1180 bytes), and the record never does (1536 bytes). Only one
+/// race is left, and it cannot be closed by a budget: a progress part held at the moment
+/// the item takes its digest state (1180 + 416 > 1536) makes the item fail, a typed
+/// failure in a completed stream. That run is not an answer to the question of the test
+/// and is made again, a few times; any other outcome is the answer, and a stream that
+/// completes the item is a failure.
+const ABORTS_AT_ITEM: u64 = 1358;
+fn aborted_at_item() -> (Vec<u8>, String) {
+    let mut last = run(*ADMITTED + ABORTS_AT_ITEM);
     for _ in 1..ATTEMPTS {
-        if seen(&last.0) != Seen::Completed {
+        if seen(&last.0) != Seen::ItemFailed {
             break;
         }
-        last = run(*ABORTING);
+        last = run(*ADMITTED + ABORTS_AT_ITEM);
     }
     last
 }
@@ -162,7 +186,7 @@ fn fields(line: &str) -> std::collections::BTreeMap<&str, &str> {
 /// and no cause.
 #[test]
 fn an_aborted_stream_is_logged_with_its_typed_cause() {
-    let (response, stderr) = aborted_run();
+    let (response, stderr) = aborted_at_item();
     assert_eq!(seen(&response), Seen::Aborted, "{response:?}");
     let lines: Vec<&str> = stderr.lines().collect();
     assert_eq!(
@@ -196,7 +220,7 @@ fn an_aborted_stream_is_logged_with_its_typed_cause() {
 /// never reaches the log.
 #[test]
 fn the_abort_log_line_carries_no_user_data() {
-    let (response, stderr) = aborted_run();
+    let (response, stderr) = run(*ADMITTED + ALWAYS_ABORTS);
     assert_eq!(seen(&response), Seen::Aborted, "{response:?}");
     assert!(!stderr.is_empty(), "the abort must be logged at all");
     for canary in [
