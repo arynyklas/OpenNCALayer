@@ -21,7 +21,7 @@
 - `kz.gov.pki.knca.basics`:
   - `sign` с форматами `cms`, `raw` и `xml`. Для входа на eGov (`format:"xml"`) ответ `{"body":{"result":["<подписанный XML>"]},"status":true}`, как у оригинала. Ключи ответа идут в порядке `HashMap` Java: `body,status` и `code,details,message,status`; в `details` ошибок самого диспетчера пишется `java.lang.IllegalArgumentException: …`;
   - `PKIEssentials` (запрос с `"class":"PKIEssentials"`): `generateCsr` создаёт ключи в папке, которую выбирает пользователь, и возвращает запросы на сертификат (`{"pems":[…]}`); `importCertificate` записывает к этим ключам сертификаты, выданные НУЦ, и меняет пароль файлов ключей с `defaultPassword` на введённый пользователем (`{"result":true}`). При отмене ответ `{}`.
-- `kz.gov.pki.knca.commonUtils`: `getActiveTokens`, `getKeyInfo`, `signXml`, `signXmls`, `createCMSSignatureFromBase64`, `createCMSSignatureFromFile`, `createCAdESFromBase64`, `createCAdESFromFile`, `createCAdESFromBase64Hash`, `applyCAdEST`, `showFileChooser`, `changeLocale`. Ответ имеет вид `{"responseObject"?,"code":"200"|"500","message"?,"uuid"?}`, ключи в порядке `HashMap` Java, как у оригинала (у объекта `getKeyInfo` тоже). `uuid` запроса есть только в ответе метода, в ошибках диспетчера его нет. Отмена окна даёт `{"code":"500","message":"action.canceled"}`, с `uuid` или без него. Окна модуля показываются на русском, пока страница не вызовет `changeLocale` (`ru`, `kk`, `en`); выбранный язык действует для всех страниц.
+- `kz.gov.pki.knca.commonUtils`: `getActiveTokens`, `getKeyInfo`, `signXml`, `signXmls`, `createCMSSignatureFromBase64`, `createCMSSignatureFromFile`, `createCAdESFromBase64`, `createCAdESFromFile`, `createCAdESFromBase64Hash`, `applyCAdEST`, `showFileChooser`, `changeLocale`. Ответ имеет вид `{"responseObject"?,"code":"200"|"500","message"?,"uuid"?}`, ключи в порядке `HashMap` Java, как у оригинала (у объекта `getKeyInfo` тоже). Исключение — свойства, которые попадают в одну корзину `HashMap`, например `pem`, `keyId` и `alias` у `getKeyInfo`: у оригинала их порядок выбирает JVM, и он меняется от запуска к запуску, а у нас он всегда один. `uuid` запроса есть только в ответе метода, в ошибках диспетчера его нет. Отмена окна даёт `{"code":"500","message":"action.canceled"}`, с `uuid` или без него. Окна модуля показываются на русском, пока страница не вызовет `changeLocale` (`ru`, `kk`, `en`); выбранный язык действует для всех страниц.
 - `kz.gov.pki.knca.applet.Applet`: устаревший модуль, реализовано подмножество для файловых хранилищ (раздел [«Applet»](#applet)). Как и оригинал, отвечает на запросы без `module`.
 - `kz.gov.pki.ncalayerservices.accessory`: `getBundles`, `getServices` (модули демона), `installBundle`, `showBundleManager`, `showSettings`, `showKeystoreExplorer`, `showAdesSigning`, `showAdesValidation`.
 
@@ -123,6 +123,8 @@ XPath в `signXml` и `signXmls` модуля commonUtils поддерживае
 - Поддерживаются TLS 1.2 и 1.3, у оригинала только 1.2.
 - base64 в `data` при `decode` проверяется до показа окна, у оригинала после. Код ошибки тот же.
 - Даты действия ключа в окне выбора показываются в UTC, а не в местном времени.
+- Страницы `/basics/` нет, на неё приходит 404. Оригинал отдаёт по этому адресу свою тестовую страницу; у OpenNCALayer вместо неё демо-страница `/demo/`.
+- Если страница закрывает соединение с нестандартным кодом (например, 4000), OpenNCALayer отвечает close-фреймом с тем же кодом. Оригинал на такой код отвечает пустым close-фреймом. На стандартный код (например, 1000) оба отвечают тем же кодом.
 
 ## commonUtils
 
