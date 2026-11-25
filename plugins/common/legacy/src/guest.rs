@@ -102,16 +102,36 @@ pub enum CertProblem {
 /// The refused extended key usages.
 const BLOCKED_EKUS: [&str; 2] = ["1.2.398.5.19.1.2.2.1", "1.2.398.5.19.1.2.2.1.2"];
 
-/// `checkCert` of ezSigner and uchet: the type SIGNATURE, the validity now, an issuer among
-/// the core's CAs (which stand for the original's CA list), no refused extended key usage,
-/// then an OCSP check at the certificate's responder (SHA-1 `CertID`, GET, no nonce),
-/// checked as the core checks its own; a responder that cannot be reached, and a
-/// certificate without one, pass.
+/// `checkCert` of uchet: the type SIGNATURE, the validity now, an issuer among the core's
+/// CAs (which stand for the original's CA list), no refused extended key usage, then an
+/// OCSP check at the certificate's responder (SHA-1 `CertID`, GET, no nonce), checked as
+/// the core checks its own; a responder that cannot be reached, and a certificate without
+/// one, pass.
+///
+/// The order of the validity and issuer checks is the port's, not confirmed against
+/// uchet's own code; ezSigner's is [`check_cert_issuer_first`].
 ///
 /// # Errors
 ///
 /// The host's message.
 pub fn check_cert(der: &[u8]) -> Result<Option<CertProblem>, String> {
+    check_cert_in(der, false)
+}
+
+/// `CMSSignUtil.verifyCert` of ezSigner: [`check_cert`] with the issuer checked before the
+/// validity, as the original's PKIX path building finds the issuer (`ISSUER_CERT_NOT_FOUND`)
+/// before it validates the dates. A certificate both expired and of an unknown CA is
+/// [`CertProblem::UnknownCa`].
+///
+/// # Errors
+///
+/// The host's message.
+pub fn check_cert_issuer_first(der: &[u8]) -> Result<Option<CertProblem>, String> {
+    check_cert_in(der, true)
+}
+
+/// [`check_cert`], the issuer checked before the validity if `issuer_first`.
+fn check_cert_in(der: &[u8], issuer_first: bool) -> Result<Option<CertProblem>, String> {
     use oncl_pdk::pki::{
         CertStatusAbi, IssuerSel, Nonce, OcspArgs, OcspOutcome, PkiMethod, PkiUrl, Problem,
     };
@@ -120,6 +140,11 @@ pub fn check_cert(der: &[u8]) -> Result<Option<CertProblem>, String> {
     if !details.knca_types.iter().any(|t| t == "SIGNATURE") {
         return Ok(Some(CertProblem::NotSigning));
     }
+    let unknown_ca =
+        || -> Result<bool, String> { Ok(host::ca_issuer(der).map_err(|e| e.message)?.is_none()) };
+    if issuer_first && unknown_ca()? {
+        return Ok(Some(CertProblem::UnknownCa));
+    }
     let now = host::now().map_err(|e| e.message)?;
     if now > info.not_after {
         return Ok(Some(CertProblem::Expired));
@@ -127,7 +152,7 @@ pub fn check_cert(der: &[u8]) -> Result<Option<CertProblem>, String> {
     if now < info.not_before {
         return Ok(Some(CertProblem::NotYetValid));
     }
-    if host::ca_issuer(der).map_err(|e| e.message)?.is_none() {
+    if !issuer_first && unknown_ca()? {
         return Ok(Some(CertProblem::UnknownCa));
     }
     if info

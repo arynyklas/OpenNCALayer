@@ -1228,7 +1228,7 @@ fn ezsigner_sign_file_path_writes_cms() {
         )),
         r#"{"code":"500","message":"Не заполнены обязательные входные параметры"}"#
     );
-    // A certificate the core's CAs do not chain: refused before signing.
+    // An expired certificate the core's CAs chain: refused before signing.
     let mut steps = vec![yes()];
     steps.extend(key("expired-gost2015-sign"));
     let h = Harness::new(steps, vec![]);
@@ -1239,6 +1239,44 @@ fn ezsigner_sign_file_path_writes_cms() {
             None
         )),
         r#"{"code":"500","message":"Срок действия сертфиката истек"}"#
+    );
+}
+
+/// ezSigner's `verifyCert` builds the certification path (finds the issuer) before it
+/// checks the dates: a key both expired and of an unknown CA gets the unknown CA's text.
+/// uchet keeps the validity first (its original's order is not confirmed).
+#[cfg(windows)]
+#[test]
+fn ezsigner_unknown_ca_before_expiry() {
+    let (_docs, file, folder) = folder_with_document();
+    let keys = tempfile::tempdir().unwrap();
+    let mut steps = vec![yes()];
+    steps.extend(unchained_key(keys.path(), "expired-gost2015-sign"));
+    let h = Harness::new(steps, vec![]);
+    assert_eq!(
+        text(h.call(
+            EZ,
+            &ez_request("signFilePath", json!([file, folder, "PKCS12"]), None),
+            None
+        )),
+        r#"{"code":"500","message":"Неизвестный удостоверяющий центр. Проверка цепочки сертификатов прошла неуспешно"}"#
+    );
+    let Step::Storage { path, password } =
+        unchained_key(keys.path(), "expired-gost2015-sign").remove(0)
+    else {
+        unreachable!("the store comes first")
+    };
+    let h = Harness::new(
+        vec![yes(), Step::Path(path), Step::Password(password)],
+        vec![],
+    );
+    assert_eq!(
+        text(h.call(
+            UCHET,
+            &call("signFilePath", json!([file, folder, "PKCS12"])),
+            None
+        )),
+        r#"{"code":"500","message":"Срок действия сертфиката истек "}"#
     );
 }
 
