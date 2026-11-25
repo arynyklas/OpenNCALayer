@@ -19,7 +19,7 @@ cargo xtask plugin-ports-manual [--wasm-dir <каталог>] [--no-build] [фи
 
 | Переменная | Что |
 |---|---|
-| `ONCL_PLUGIN_WASM_DIR` | Каталог с `oncl_port_<порт>.wasm` (`-` → `_`). Если не задана, тесты собирают `plugins/` сами (`oncl_testkit::plugin::ports_built`). |
+| `ONCL_PLUGIN_WASM_DIR` | Каталог с `oncl_port_<порт>.wasm` (`-` → `_`). Если не задана, тесты собирают `plugins/` сами (`oncl_testkit::plugin::port_wasm`). |
 | `ONCL_OPENSSL` | OpenSSL 3 с `cms` (иначе `openssl` в `PATH`, на Windows ещё Git for Windows). Независимая проверка CMS и сырой подписи. |
 | `ONCL_PYHANKO_PYTHON` | Python с `lxml` и `cryptography` (иначе `python3`/`python`). Независимая проверка XML-DSig (`tests/support/oracle/xmldsig_verify.py`). Без нужного окружения тест падает. |
 

@@ -1688,7 +1688,7 @@ kind = "raw"
 content = "param:f"
 "#
     );
-    let wasm = oncl_testkit::read(oncl_testkit::plugin::example_wasm());
+    let wasm = oncl_testkit::plugin::example_wasm();
     let permission = PluginPermission::new(
         EXAMPLE,
         "sign",
@@ -1716,8 +1716,8 @@ content = "param:f"
     registry
         .install(
             oncl_plugin::Manifest::from_toml(&manifest).unwrap(),
-            oncl_core::plugins::loose_package_hash(manifest.as_bytes(), &wasm),
-            &wasm,
+            oncl_core::plugins::loose_package_hash(manifest.as_bytes(), wasm),
+            wasm,
             limits.instance,
             vec![permission.clone()],
         )

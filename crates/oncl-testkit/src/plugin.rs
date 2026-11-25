@@ -1,7 +1,16 @@
 //! The example plugin of `crates/oncl-pdk/example` (in `release`) and the plugin ports of
 //! `plugins/` (in the profile [`ports_profile`] names), built for the tests.
+//!
+//! Nextest runs every test in its own process, so several processes build into the same
+//! target directory. Cargo serialises the builds, but every build, a fresh one too, uplifts
+//! the module out of `deps/` again: on macOS it copies it, removing the previous copy while
+//! another process may be reading it (cargo-util `paths::link_or_copy`; elsewhere a hard
+//! link it leaves alone). A process therefore builds and reads the modules holding a lock on
+//! the target directory (`lock_target_dir`), and they are handed out as bytes, not as paths
+//! to read later.
 
 use crate::workspace_root;
+use std::fs::{File, OpenOptions};
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -41,29 +50,50 @@ fn example_dir() -> PathBuf {
     workspace_root().join("crates/oncl-pdk/example")
 }
 
-/// The example's module, built once per process: `cargo build --release --locked` for
-/// `wasm32-unknown-unknown`, into `plugin-example` of the target directory
+/// The example's module, built and read once per process: `cargo build --release --locked`
+/// for `wasm32-unknown-unknown`, into `plugin-example` of the target directory
 /// (`CARGO_TARGET_DIR`, else `target`).
 ///
 /// # Panics
 ///
 /// If the build fails (the `wasm32-unknown-unknown` target of `rust-toolchain.toml` must be
 /// installed).
-pub fn example_wasm() -> &'static Path {
-    static WASM: LazyLock<PathBuf> = LazyLock::new(build_example);
+pub fn example_wasm() -> &'static [u8] {
+    static WASM: LazyLock<Vec<u8>> = LazyLock::new(|| {
+        let target_dir = target_dir("plugin-example");
+        let _lock = lock_target_dir(&target_dir);
+        build_wasm(
+            &example_dir().join("Cargo.toml"),
+            &target_dir,
+            "release",
+            &[],
+        );
+        crate::read(target_dir.join("wasm32-unknown-unknown/release/oncl_plugin_example.wasm"))
+    });
     &WASM
 }
 
-/// Builds the example: the path of its module.
-fn build_example() -> PathBuf {
-    let target_dir = target_dir("plugin-example");
-    build_wasm(
-        &example_dir().join("Cargo.toml"),
-        &target_dir,
-        "release",
-        &[],
-    );
-    target_dir.join("wasm32-unknown-unknown/release/oncl_plugin_example.wasm")
+/// Locks `target_dir` (creating it) against the other processes of the tests until the
+/// returned file is dropped: an exclusive lock on its `oncl-testkit.lock`. The builds of
+/// these helpers and their reads of the modules take it; a `cargo build` run by hand into
+/// the same directory does not.
+///
+/// # Panics
+///
+/// If the directory or the lock file cannot be created or locked.
+fn lock_target_dir(target_dir: &Path) -> File {
+    std::fs::create_dir_all(target_dir)
+        .unwrap_or_else(|e| panic!("cannot create {}: {e}", target_dir.display()));
+    let path = target_dir.join("oncl-testkit.lock");
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&path)
+        .unwrap_or_else(|e| panic!("cannot open {}: {e}", path.display()));
+    file.lock()
+        .unwrap_or_else(|e| panic!("cannot lock {}: {e}", path.display()));
+    file
 }
 
 /// `name` in the target directory (`CARGO_TARGET_DIR`, else `target`).
@@ -130,14 +160,15 @@ pub fn port_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// The directory of the plugin ports' modules
-/// (`<target>/plugin-ports/wasm32-unknown-unknown/<profile>`, [`ports_profile`]), the whole
+/// The module of the port in `plugins/<short>`: `oncl_port_<short>.wasm` (`-` as `_`) of
+/// `<target>/plugin-ports/wasm32-unknown-unknown/<profile>` ([`ports_profile`]), the whole
 /// `plugins/` workspace built once per process.
 ///
 /// # Panics
 ///
-/// If the build fails.
-pub fn ports_built() -> &'static Path {
+/// If the build fails or the port has no module.
+pub fn port_wasm(short: &str) -> Vec<u8> {
+    // Forced only under the lock below, which the build and every read hold.
     static BUILT: LazyLock<PathBuf> = LazyLock::new(|| {
         let target_dir = target_dir("plugin-ports");
         let profile = ports_profile();
@@ -149,13 +180,8 @@ pub fn ports_built() -> &'static Path {
         );
         target_dir.join("wasm32-unknown-unknown").join(profile)
     });
-    &BUILT
-}
-
-/// The module of the port in `plugins/<short>`: `oncl_port_<short>.wasm` (`-` as `_`) of
-/// [`ports_built`].
-pub fn port_wasm(short: &str) -> PathBuf {
-    ports_built().join(format!("oncl_port_{}.wasm", short.replace('-', "_")))
+    let _lock = lock_target_dir(&target_dir("plugin-ports"));
+    crate::read(BUILT.join(format!("oncl_port_{}.wasm", short.replace('-', "_"))))
 }
 
 /// The example's `plugin.toml`.
@@ -178,6 +204,6 @@ pub fn example_package_with(edit: impl FnOnce(String) -> String) -> Vec<u8> {
     zip.start_file("plugin.toml", options).unwrap();
     zip.write_all(edit(example_manifest()).as_bytes()).unwrap();
     zip.start_file("plugin.wasm", options).unwrap();
-    zip.write_all(&crate::read(example_wasm())).unwrap();
+    zip.write_all(example_wasm()).unwrap();
     zip.finish().unwrap().into_inner()
 }

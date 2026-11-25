@@ -14,9 +14,8 @@ fn example_manifest() -> Manifest {
 }
 
 fn example_with(engine: &Engine) -> Instance {
-    let wasm = oncl_testkit::read(example_wasm());
     engine
-        .compile(&example_manifest(), &wasm)
+        .compile(&example_manifest(), example_wasm())
         .unwrap()
         .instantiate(&services(), session(1))
         .unwrap()

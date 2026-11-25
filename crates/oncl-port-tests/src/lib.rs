@@ -37,7 +37,7 @@ pub fn port_dir(short: &str) -> PathBuf {
 /// If the port does not build or its files are missing.
 pub fn port_package(short: &str) -> Vec<u8> {
     let manifest = oncl_testkit::read(port_dir(short).join("plugin.toml"));
-    let wasm = oncl_testkit::read(oncl_testkit::plugin::port_wasm(short));
+    let wasm = oncl_testkit::plugin::port_wasm(short);
     oncl_plugin::archive(&manifest, &wasm).expect("in memory")
 }
 
